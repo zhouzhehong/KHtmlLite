@@ -176,6 +176,24 @@ public:
     bool isCrashed() const { return m_crashed; }
     bool isRunning() const { return m_process && m_process->state() != QProcess::NotRunning; }
 
+    // Renderer process WorkingSet in KB. Returns 0 if not running or
+    // the process handle cannot be opened. Used by the browser memory
+    // budget so per-tab renderer memory is counted alongside the UI process.
+    qint64 memoryKB() const {
+        if (!m_process || m_process->state() == QProcess::NotRunning)
+            return 0;
+        const qint64 pid = m_process->processId();
+        if (pid <= 0)
+            return 0;
+        HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, (DWORD)pid);
+        if (!h)
+            return 0;
+        PROCESS_MEMORY_COUNTERS pmc;
+        BOOL ok = GetProcessMemoryInfo(h, &pmc, sizeof(pmc));
+        CloseHandle(h);
+        return ok ? (qint64)(pmc.WorkingSetSize / 1024) : 0;
+    }
+
 Q_SIGNALS:
     void titleChanged(const QString &title);
     void urlChanged(const QUrl &url);
@@ -635,10 +653,21 @@ protected:
     }
 
     void checkMemoryBudget() {
-        const qint64 memKB = currentMemKB();
+        // Measure browser UI process + every active renderer process.
+        // Previously only the browser process was counted, which made the
+        // 400 MB threshold meaningless since KHTML/JS memory lives in the
+        // out-of-process renderer.
+        const qint64 browserKB = currentMemKB();
+        qint64 rendererKB = 0;
+        for (TabPage *pg : m_pages) {
+            if (pg && pg->render && !pg->suspended)
+                rendererKB += pg->render->memoryKB();
+        }
+        const qint64 memKB = browserKB + rendererKB;
         const qint64 limitKB = 400 * 1024;
         if (m_memLabel)
-            m_memLabel->setText(QStringLiteral("内存 %1 MB").arg(memKB / 1024));
+            m_memLabel->setText(QStringLiteral("内存 %1 MB (UI %2 / 渲染 %3)")
+                .arg(memKB / 1024).arg(browserKB / 1024).arg(rendererKB / 1024));
         if (memKB > limitKB) {
             for (TabPage *pg : m_pages) {
                 if (pg != currentPage() && !pg->suspended) { suspendTab(pg); break; }
