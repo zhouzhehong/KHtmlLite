@@ -376,7 +376,7 @@ public:
         ccSetUrl(url.toString().toUtf8().constData());
         const QString s = url.scheme().toLower();
         if (s == QLatin1String("about")) {
-            showHomePage();
+            loadBlankPage();
         } else if (s == QLatin1String("file")) {
             m_view->loadUrl(url);
         } else {
@@ -384,41 +384,18 @@ public:
         }
     }
 
-    void showHomePage()
+    // Load a truly blank page for about:blank and other about: URLs.
+    // Writes a minimal empty document to a temp file because KHTMLPart has
+    // no setHtml() and does not route about: through KIO on this platform.
+    void loadBlankPage()
     {
-        static const char *kHomeHtml =
+        static const char *kBlankHtml =
             "<!DOCTYPE html><html><head><meta charset='utf-8'>"
-            "<style>"
-            "body{margin:0;padding:0;background:#f5f7fa;font-family:'Segoe UI',Arial,sans-serif;}"
-            ".wrap{max-width:600px;margin:120px auto 0;text-align:center;}"
-            ".logo{font-size:42px;font-weight:300;color:#2563eb;margin-bottom:8px;letter-spacing:2px;}"
-            ".sub{color:#6b7280;font-size:14px;margin-bottom:36px;}"
-            ".box{display:flex;background:#fff;border:1px solid #d1d5db;border-radius:24px;"
-            "  overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.06);}"
-            ".box input{flex:1;border:none;outline:none;padding:14px 20px;font-size:16px;}"
-            ".box button{background:#2563eb;color:#fff;border:none;padding:0 28px;font-size:15px;cursor:pointer;}"
-            ".box button:hover{background:#1d4ed8;}"
-            ".engines{margin-top:20px;}"
-            ".engines a{display:inline-block;margin:0 12px;color:#2563eb;text-decoration:none;font-size:14px;}"
-            ".engines a:hover{text-decoration:underline;}"
-            "</style></head><body>"
-            "<div class='wrap'>"
-            "<div class='logo'>KHtmlLite</div>"
-            "<div class='sub'>纯净轻量浏览器内核 · 内置必应与 Yandex</div>"
-            "<form class='box' action='https://cn.bing.com/search' method='get'>"
-            "<input type='text' name='q' placeholder='搜索或输入网址' autofocus>"
-            "<button type='submit'>搜索</button>"
-            "</form>"
-            "<div class='engines'>"
-            "<a href='https://cn.bing.com'>必应国内版</a>"
-            "<a href='https://yandex.com'>Yandex</a>"
-            "</div>"
-            "</div></body></html>";
-        // Write to a temp file and load via file:// (KHTMLPart has no setHtml).
-        const QString path = QDir::tempPath() + QStringLiteral("/khtmllite_home.html");
+            "<title></title></head><body></body></html>";
+        const QString path = QDir::tempPath() + QStringLiteral("/khtmllite_blank.html");
         QFile f(path);
         if (f.open(QIODevice::WriteOnly)) {
-            f.write(kHomeHtml);
+            f.write(kBlankHtml);
             f.close();
             m_view->loadUrl(QUrl::fromLocalFile(path));
         }
@@ -465,7 +442,7 @@ private slots:
                     PERF_BEGIN(u.toString().toUtf8().constData());
                     m_pendingUrl = u;
                     const QString sc = u.scheme().toLower();
-                    if (sc == QLatin1String("about")) { PERF_MARK("khtmlpart_load_start"); showHomePage(); }
+                    if (sc == QLatin1String("about")) { PERF_MARK("khtmlpart_load_start"); loadBlankPage(); }
                     else if (sc == QLatin1String("file")) { PERF_MARK("khtmlpart_load_start"); m_view->loadUrl(u); }
                     else m_loader->load(u);
                 }
