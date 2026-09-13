@@ -57,6 +57,14 @@ public:
         m_container->setAttribute(Qt::WA_NativeWindow, true);
     }
 
+    ~RenderTab() {
+        // Ensure the renderer process and socket are torn down non-blockingly.
+        // Without this, the compiler-generated destructor deletes the QProcess
+        // child, whose destructor blocks until the process fully exits — which
+        // can freeze the browser UI thread for several seconds.
+        terminate();
+    }
+
     void start(const QUrl &url, int w, int h, bool disableJs = false)
     {
         m_current = url;
@@ -594,8 +602,34 @@ protected:
     }
 
     void purgeCache() {
+        // Non-blocking cache purge: delete a small batch per timer tick so the
+        // GUI thread never stalls on a large cache directory.  Previously this
+        // called QDir::removeRecursively() synchronously inside checkMemoryBudget(),
+        // which could freeze the window for several seconds.
+        if (m_purgingCache) return;
+        m_purgingCache = true;
+        purgeCacheStep();
+    }
+
+    void purgeCacheStep() {
         QDir d(QDir::tempPath() + QStringLiteral("/khtml_cache"));
-        if (d.exists()) d.removeRecursively();
+        if (!d.exists()) { m_purgingCache = false; return; }
+        QFileInfoList entries = d.entryInfoList(QDir::AllEntries | QDir::NoDotAndDotDot);
+        const int batch = 25;
+        int count = 0;
+        for (const QFileInfo &fi : entries) {
+            if (fi.isDir())
+                QDir(fi.absoluteFilePath()).removeRecursively();
+            else
+                QFile::remove(fi.absoluteFilePath());
+            if (++count >= batch) break;
+        }
+        if (entries.size() > batch) {
+            QTimer::singleShot(0, this, &KHtmlLiteWindow::purgeCacheStep);
+        } else {
+            d.rmdir(d.absolutePath());
+            m_purgingCache = false;
+        }
     }
 
     void checkMemoryBudget() {
@@ -620,6 +654,7 @@ protected:
 
     QTimer *m_memTimer = nullptr;
     QLabel *m_memLabel = nullptr;
+    bool m_purgingCache = false;
     QTabWidget *m_tabs = nullptr;
     QList<TabPage *> m_pages;
     QLineEdit *m_addr = nullptr;
