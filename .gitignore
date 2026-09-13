@@ -59,6 +59,11 @@ qrc_*.cpp
 __pycache__/
 .cache/
 *.stackdump
+*_err.txt
+test262*_errors.txt
+perf.log
+khtml_qjs.log
+khtml_hwnd_*.txt
 
 # IDE
 .vscode/
