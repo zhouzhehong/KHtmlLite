@@ -1,4 +1,4 @@
-/*
+﻿/*
     This file is part of the KDE libraries
 
     Copyright (C) 1997 Martin Jones (mjones@kde.org)
@@ -1485,8 +1485,16 @@ void KHTMLParser::processCloseTag(Token *t)
     }
 #endif
 
-    generateImpliedEndTags(t->tid - ID_CLOSE_TAG);
-    popBlock(t->tid - ID_CLOSE_TAG);
+    // SVG elements are stored on blockStack with namespace-qualified IDs
+    // (makeId(svgNamespace, localId)), but the tokenizer produces unqualified
+    // HTML IDs. Use the qualified ID when closing SVG elements so popBlock
+    // can find and remove the correct block.
+    int closeId = t->tid - ID_CLOSE_TAG;
+    if (closeId > ID_LAST_TAG && m_svgDepth > 0) {
+        closeId = makeId(svgNamespace, closeId);
+    }
+    generateImpliedEndTags(closeId);
+    popBlock(closeId);
 
 #ifdef PARSER_DEBUG
     qCDebug(KHTML_LOG) << "closeTag --> current = " << current->nodeName().string();
