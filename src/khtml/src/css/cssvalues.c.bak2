@@ -1,0 +1,1613 @@
+/* ANSI-C code produced by gperf version 3.3 */
+/* Command-line: gperf -L ANSI-C -E -c -C -n -o -t -k '*' -NfindValue -Hhash_val -Wwordlist_value -D cssvalues.gperf  */
+
+#if !((' ' == 32) && ('!' == 33) && ('"' == 34) && ('#' == 35) \
+      && ('%' == 37) && ('&' == 38) && ('\'' == 39) && ('(' == 40) \
+      && (')' == 41) && ('*' == 42) && ('+' == 43) && (',' == 44) \
+      && ('-' == 45) && ('.' == 46) && ('/' == 47) && ('0' == 48) \
+      && ('1' == 49) && ('2' == 50) && ('3' == 51) && ('4' == 52) \
+      && ('5' == 53) && ('6' == 54) && ('7' == 55) && ('8' == 56) \
+      && ('9' == 57) && (':' == 58) && (';' == 59) && ('<' == 60) \
+      && ('=' == 61) && ('>' == 62) && ('?' == 63) && ('A' == 65) \
+      && ('B' == 66) && ('C' == 67) && ('D' == 68) && ('E' == 69) \
+      && ('F' == 70) && ('G' == 71) && ('H' == 72) && ('I' == 73) \
+      && ('J' == 74) && ('K' == 75) && ('L' == 76) && ('M' == 77) \
+      && ('N' == 78) && ('O' == 79) && ('P' == 80) && ('Q' == 81) \
+      && ('R' == 82) && ('S' == 83) && ('T' == 84) && ('U' == 85) \
+      && ('V' == 86) && ('W' == 87) && ('X' == 88) && ('Y' == 89) \
+      && ('Z' == 90) && ('[' == 91) && ('\\' == 92) && (']' == 93) \
+      && ('^' == 94) && ('_' == 95) && ('a' == 97) && ('b' == 98) \
+      && ('c' == 99) && ('d' == 100) && ('e' == 101) && ('f' == 102) \
+      && ('g' == 103) && ('h' == 104) && ('i' == 105) && ('j' == 106) \
+      && ('k' == 107) && ('l' == 108) && ('m' == 109) && ('n' == 110) \
+      && ('o' == 111) && ('p' == 112) && ('q' == 113) && ('r' == 114) \
+      && ('s' == 115) && ('t' == 116) && ('u' == 117) && ('v' == 118) \
+      && ('w' == 119) && ('x' == 120) && ('y' == 121) && ('z' == 122) \
+      && ('{' == 123) && ('|' == 124) && ('}' == 125) && ('~' == 126))
+/* The character set is not based on ISO-646.  */
+#error "gperf generated tables don't work with this execution character set. Please report a bug to <bug-gperf@gnu.org>."
+#endif
+
+#line 1 "cssvalues.gperf"
+
+#include "cssvalues.h"
+struct css_value { const char *name; int id; };
+#line 5 "cssvalues.gperf"
+struct css_value;
+/* maximum key range = 2341, duplicates = 0 */
+
+#ifdef __GNUC__
+__inline
+#else
+#ifdef __cplusplus
+inline
+#endif
+#endif
+static unsigned int
+hash_val (register const char *str, register size_t len)
+{
+  static const unsigned short asso_values[] =
+    {
+      2341, 2341, 2341, 2341, 2341, 2341, 2341, 2341, 2341, 2341,
+      2341, 2341, 2341, 2341, 2341, 2341, 2341, 2341, 2341, 2341,
+      2341, 2341, 2341, 2341, 2341, 2341, 2341, 2341, 2341, 2341,
+      2341, 2341,   10, 2341, 2341, 2341, 2341, 2341, 2341, 2341,
+      2341, 2341, 2341, 2341, 2341,   80,  483,   55, 2341,    0,
+        95,   90,   80,   65,   60,   55,   15,    5, 2341, 2341,
+      2341, 2341, 2341, 2341, 2341, 2341,    0, 2341, 2341,    5,
+         0,    0,    0, 2341, 2341, 2341,    0, 2341, 2341, 2341,
+         5,    0,    0,    5, 2341, 2341, 2341, 2341, 2341, 2341,
+      2341, 2341, 2341, 2341, 2341, 2341, 2341,  140,   45,   10,
+       135,    5,    3,  205,  235,    5,  448,  410,   55,   15,
+         0,   15,    0,  298,  110,   65,    0,   60,  103,  203,
+       485,   53,  455,    5, 2341, 2341, 2341, 2341, 2341, 2341,
+      2341, 2341, 2341, 2341, 2341, 2341, 2341, 2341, 2341, 2341,
+      2341, 2341, 2341, 2341, 2341, 2341, 2341, 2341, 2341, 2341,
+      2341, 2341, 2341, 2341, 2341, 2341, 2341, 2341, 2341, 2341,
+      2341, 2341, 2341, 2341, 2341, 2341, 2341, 2341, 2341, 2341,
+      2341, 2341, 2341, 2341, 2341, 2341, 2341, 2341, 2341, 2341,
+      2341, 2341, 2341, 2341, 2341, 2341, 2341, 2341, 2341, 2341,
+      2341, 2341, 2341, 2341, 2341, 2341, 2341, 2341, 2341, 2341,
+      2341, 2341, 2341, 2341, 2341, 2341, 2341, 2341, 2341, 2341,
+      2341, 2341, 2341, 2341, 2341, 2341, 2341, 2341, 2341, 2341,
+      2341, 2341, 2341, 2341, 2341, 2341, 2341, 2341, 2341, 2341,
+      2341, 2341, 2341, 2341, 2341, 2341, 2341, 2341, 2341, 2341,
+      2341, 2341, 2341, 2341, 2341, 2341, 2341, 2341, 2341, 2341,
+      2341, 2341, 2341, 2341, 2341, 2341, 2341, 2341
+    };
+  register unsigned int hval = 0;
+
+  switch (len)
+    {
+      default:
+        hval += asso_values[(unsigned char)str[27]];
+#if (defined __cplusplus && (__cplusplus >= 201703L || (__cplusplus >= 201103L && defined __clang__ && __clang_major__ + (__clang_minor__ >= 9) > 3))) || (defined __STDC_VERSION__ && __STDC_VERSION__ >= 202000L && ((defined __GNUC__ && __GNUC__ >= 10) || (defined __clang__ && __clang_major__ >= 9)))
+      [[fallthrough]];
+#elif (defined __GNUC__ && __GNUC__ >= 7) || (defined __clang__ && __clang_major__ >= 10)
+      __attribute__ ((__fallthrough__));
+#endif
+      /*FALLTHROUGH*/
+      case 27:
+        hval += asso_values[(unsigned char)str[26]];
+#if (defined __cplusplus && (__cplusplus >= 201703L || (__cplusplus >= 201103L && defined __clang__ && __clang_major__ + (__clang_minor__ >= 9) > 3))) || (defined __STDC_VERSION__ && __STDC_VERSION__ >= 202000L && ((defined __GNUC__ && __GNUC__ >= 10) || (defined __clang__ && __clang_major__ >= 9)))
+      [[fallthrough]];
+#elif (defined __GNUC__ && __GNUC__ >= 7) || (defined __clang__ && __clang_major__ >= 10)
+      __attribute__ ((__fallthrough__));
+#endif
+      /*FALLTHROUGH*/
+      case 26:
+        hval += asso_values[(unsigned char)str[25]];
+#if (defined __cplusplus && (__cplusplus >= 201703L || (__cplusplus >= 201103L && defined __clang__ && __clang_major__ + (__clang_minor__ >= 9) > 3))) || (defined __STDC_VERSION__ && __STDC_VERSION__ >= 202000L && ((defined __GNUC__ && __GNUC__ >= 10) || (defined __clang__ && __clang_major__ >= 9)))
+      [[fallthrough]];
+#elif (defined __GNUC__ && __GNUC__ >= 7) || (defined __clang__ && __clang_major__ >= 10)
+      __attribute__ ((__fallthrough__));
+#endif
+      /*FALLTHROUGH*/
+      case 25:
+        hval += asso_values[(unsigned char)str[24]];
+#if (defined __cplusplus && (__cplusplus >= 201703L || (__cplusplus >= 201103L && defined __clang__ && __clang_major__ + (__clang_minor__ >= 9) > 3))) || (defined __STDC_VERSION__ && __STDC_VERSION__ >= 202000L && ((defined __GNUC__ && __GNUC__ >= 10) || (defined __clang__ && __clang_major__ >= 9)))
+      [[fallthrough]];
+#elif (defined __GNUC__ && __GNUC__ >= 7) || (defined __clang__ && __clang_major__ >= 10)
+      __attribute__ ((__fallthrough__));
+#endif
+      /*FALLTHROUGH*/
+      case 24:
+        hval += asso_values[(unsigned char)str[23]];
+#if (defined __cplusplus && (__cplusplus >= 201703L || (__cplusplus >= 201103L && defined __clang__ && __clang_major__ + (__clang_minor__ >= 9) > 3))) || (defined __STDC_VERSION__ && __STDC_VERSION__ >= 202000L && ((defined __GNUC__ && __GNUC__ >= 10) || (defined __clang__ && __clang_major__ >= 9)))
+      [[fallthrough]];
+#elif (defined __GNUC__ && __GNUC__ >= 7) || (defined __clang__ && __clang_major__ >= 10)
+      __attribute__ ((__fallthrough__));
+#endif
+      /*FALLTHROUGH*/
+      case 23:
+        hval += asso_values[(unsigned char)str[22]];
+#if (defined __cplusplus && (__cplusplus >= 201703L || (__cplusplus >= 201103L && defined __clang__ && __clang_major__ + (__clang_minor__ >= 9) > 3))) || (defined __STDC_VERSION__ && __STDC_VERSION__ >= 202000L && ((defined __GNUC__ && __GNUC__ >= 10) || (defined __clang__ && __clang_major__ >= 9)))
+      [[fallthrough]];
+#elif (defined __GNUC__ && __GNUC__ >= 7) || (defined __clang__ && __clang_major__ >= 10)
+      __attribute__ ((__fallthrough__));
+#endif
+      /*FALLTHROUGH*/
+      case 22:
+        hval += asso_values[(unsigned char)str[21]];
+#if (defined __cplusplus && (__cplusplus >= 201703L || (__cplusplus >= 201103L && defined __clang__ && __clang_major__ + (__clang_minor__ >= 9) > 3))) || (defined __STDC_VERSION__ && __STDC_VERSION__ >= 202000L && ((defined __GNUC__ && __GNUC__ >= 10) || (defined __clang__ && __clang_major__ >= 9)))
+      [[fallthrough]];
+#elif (defined __GNUC__ && __GNUC__ >= 7) || (defined __clang__ && __clang_major__ >= 10)
+      __attribute__ ((__fallthrough__));
+#endif
+      /*FALLTHROUGH*/
+      case 21:
+        hval += asso_values[(unsigned char)str[20]];
+#if (defined __cplusplus && (__cplusplus >= 201703L || (__cplusplus >= 201103L && defined __clang__ && __clang_major__ + (__clang_minor__ >= 9) > 3))) || (defined __STDC_VERSION__ && __STDC_VERSION__ >= 202000L && ((defined __GNUC__ && __GNUC__ >= 10) || (defined __clang__ && __clang_major__ >= 9)))
+      [[fallthrough]];
+#elif (defined __GNUC__ && __GNUC__ >= 7) || (defined __clang__ && __clang_major__ >= 10)
+      __attribute__ ((__fallthrough__));
+#endif
+      /*FALLTHROUGH*/
+      case 20:
+        hval += asso_values[(unsigned char)str[19]];
+#if (defined __cplusplus && (__cplusplus >= 201703L || (__cplusplus >= 201103L && defined __clang__ && __clang_major__ + (__clang_minor__ >= 9) > 3))) || (defined __STDC_VERSION__ && __STDC_VERSION__ >= 202000L && ((defined __GNUC__ && __GNUC__ >= 10) || (defined __clang__ && __clang_major__ >= 9)))
+      [[fallthrough]];
+#elif (defined __GNUC__ && __GNUC__ >= 7) || (defined __clang__ && __clang_major__ >= 10)
+      __attribute__ ((__fallthrough__));
+#endif
+      /*FALLTHROUGH*/
+      case 19:
+        hval += asso_values[(unsigned char)str[18]];
+#if (defined __cplusplus && (__cplusplus >= 201703L || (__cplusplus >= 201103L && defined __clang__ && __clang_major__ + (__clang_minor__ >= 9) > 3))) || (defined __STDC_VERSION__ && __STDC_VERSION__ >= 202000L && ((defined __GNUC__ && __GNUC__ >= 10) || (defined __clang__ && __clang_major__ >= 9)))
+      [[fallthrough]];
+#elif (defined __GNUC__ && __GNUC__ >= 7) || (defined __clang__ && __clang_major__ >= 10)
+      __attribute__ ((__fallthrough__));
+#endif
+      /*FALLTHROUGH*/
+      case 18:
+        hval += asso_values[(unsigned char)str[17]];
+#if (defined __cplusplus && (__cplusplus >= 201703L || (__cplusplus >= 201103L && defined __clang__ && __clang_major__ + (__clang_minor__ >= 9) > 3))) || (defined __STDC_VERSION__ && __STDC_VERSION__ >= 202000L && ((defined __GNUC__ && __GNUC__ >= 10) || (defined __clang__ && __clang_major__ >= 9)))
+      [[fallthrough]];
+#elif (defined __GNUC__ && __GNUC__ >= 7) || (defined __clang__ && __clang_major__ >= 10)
+      __attribute__ ((__fallthrough__));
+#endif
+      /*FALLTHROUGH*/
+      case 17:
+        hval += asso_values[(unsigned char)str[16]];
+#if (defined __cplusplus && (__cplusplus >= 201703L || (__cplusplus >= 201103L && defined __clang__ && __clang_major__ + (__clang_minor__ >= 9) > 3))) || (defined __STDC_VERSION__ && __STDC_VERSION__ >= 202000L && ((defined __GNUC__ && __GNUC__ >= 10) || (defined __clang__ && __clang_major__ >= 9)))
+      [[fallthrough]];
+#elif (defined __GNUC__ && __GNUC__ >= 7) || (defined __clang__ && __clang_major__ >= 10)
+      __attribute__ ((__fallthrough__));
+#endif
+      /*FALLTHROUGH*/
+      case 16:
+        hval += asso_values[(unsigned char)str[15]];
+#if (defined __cplusplus && (__cplusplus >= 201703L || (__cplusplus >= 201103L && defined __clang__ && __clang_major__ + (__clang_minor__ >= 9) > 3))) || (defined __STDC_VERSION__ && __STDC_VERSION__ >= 202000L && ((defined __GNUC__ && __GNUC__ >= 10) || (defined __clang__ && __clang_major__ >= 9)))
+      [[fallthrough]];
+#elif (defined __GNUC__ && __GNUC__ >= 7) || (defined __clang__ && __clang_major__ >= 10)
+      __attribute__ ((__fallthrough__));
+#endif
+      /*FALLTHROUGH*/
+      case 15:
+        hval += asso_values[(unsigned char)str[14]];
+#if (defined __cplusplus && (__cplusplus >= 201703L || (__cplusplus >= 201103L && defined __clang__ && __clang_major__ + (__clang_minor__ >= 9) > 3))) || (defined __STDC_VERSION__ && __STDC_VERSION__ >= 202000L && ((defined __GNUC__ && __GNUC__ >= 10) || (defined __clang__ && __clang_major__ >= 9)))
+      [[fallthrough]];
+#elif (defined __GNUC__ && __GNUC__ >= 7) || (defined __clang__ && __clang_major__ >= 10)
+      __attribute__ ((__fallthrough__));
+#endif
+      /*FALLTHROUGH*/
+      case 14:
+        hval += asso_values[(unsigned char)str[13]];
+#if (defined __cplusplus && (__cplusplus >= 201703L || (__cplusplus >= 201103L && defined __clang__ && __clang_major__ + (__clang_minor__ >= 9) > 3))) || (defined __STDC_VERSION__ && __STDC_VERSION__ >= 202000L && ((defined __GNUC__ && __GNUC__ >= 10) || (defined __clang__ && __clang_major__ >= 9)))
+      [[fallthrough]];
+#elif (defined __GNUC__ && __GNUC__ >= 7) || (defined __clang__ && __clang_major__ >= 10)
+      __attribute__ ((__fallthrough__));
+#endif
+      /*FALLTHROUGH*/
+      case 13:
+        hval += asso_values[(unsigned char)str[12]];
+#if (defined __cplusplus && (__cplusplus >= 201703L || (__cplusplus >= 201103L && defined __clang__ && __clang_major__ + (__clang_minor__ >= 9) > 3))) || (defined __STDC_VERSION__ && __STDC_VERSION__ >= 202000L && ((defined __GNUC__ && __GNUC__ >= 10) || (defined __clang__ && __clang_major__ >= 9)))
+      [[fallthrough]];
+#elif (defined __GNUC__ && __GNUC__ >= 7) || (defined __clang__ && __clang_major__ >= 10)
+      __attribute__ ((__fallthrough__));
+#endif
+      /*FALLTHROUGH*/
+      case 12:
+        hval += asso_values[(unsigned char)str[11]];
+#if (defined __cplusplus && (__cplusplus >= 201703L || (__cplusplus >= 201103L && defined __clang__ && __clang_major__ + (__clang_minor__ >= 9) > 3))) || (defined __STDC_VERSION__ && __STDC_VERSION__ >= 202000L && ((defined __GNUC__ && __GNUC__ >= 10) || (defined __clang__ && __clang_major__ >= 9)))
+      [[fallthrough]];
+#elif (defined __GNUC__ && __GNUC__ >= 7) || (defined __clang__ && __clang_major__ >= 10)
+      __attribute__ ((__fallthrough__));
+#endif
+      /*FALLTHROUGH*/
+      case 11:
+        hval += asso_values[(unsigned char)str[10]];
+#if (defined __cplusplus && (__cplusplus >= 201703L || (__cplusplus >= 201103L && defined __clang__ && __clang_major__ + (__clang_minor__ >= 9) > 3))) || (defined __STDC_VERSION__ && __STDC_VERSION__ >= 202000L && ((defined __GNUC__ && __GNUC__ >= 10) || (defined __clang__ && __clang_major__ >= 9)))
+      [[fallthrough]];
+#elif (defined __GNUC__ && __GNUC__ >= 7) || (defined __clang__ && __clang_major__ >= 10)
+      __attribute__ ((__fallthrough__));
+#endif
+      /*FALLTHROUGH*/
+      case 10:
+        hval += asso_values[(unsigned char)str[9]];
+#if (defined __cplusplus && (__cplusplus >= 201703L || (__cplusplus >= 201103L && defined __clang__ && __clang_major__ + (__clang_minor__ >= 9) > 3))) || (defined __STDC_VERSION__ && __STDC_VERSION__ >= 202000L && ((defined __GNUC__ && __GNUC__ >= 10) || (defined __clang__ && __clang_major__ >= 9)))
+      [[fallthrough]];
+#elif (defined __GNUC__ && __GNUC__ >= 7) || (defined __clang__ && __clang_major__ >= 10)
+      __attribute__ ((__fallthrough__));
+#endif
+      /*FALLTHROUGH*/
+      case 9:
+        hval += asso_values[(unsigned char)str[8]];
+#if (defined __cplusplus && (__cplusplus >= 201703L || (__cplusplus >= 201103L && defined __clang__ && __clang_major__ + (__clang_minor__ >= 9) > 3))) || (defined __STDC_VERSION__ && __STDC_VERSION__ >= 202000L && ((defined __GNUC__ && __GNUC__ >= 10) || (defined __clang__ && __clang_major__ >= 9)))
+      [[fallthrough]];
+#elif (defined __GNUC__ && __GNUC__ >= 7) || (defined __clang__ && __clang_major__ >= 10)
+      __attribute__ ((__fallthrough__));
+#endif
+      /*FALLTHROUGH*/
+      case 8:
+        hval += asso_values[(unsigned char)str[7]];
+#if (defined __cplusplus && (__cplusplus >= 201703L || (__cplusplus >= 201103L && defined __clang__ && __clang_major__ + (__clang_minor__ >= 9) > 3))) || (defined __STDC_VERSION__ && __STDC_VERSION__ >= 202000L && ((defined __GNUC__ && __GNUC__ >= 10) || (defined __clang__ && __clang_major__ >= 9)))
+      [[fallthrough]];
+#elif (defined __GNUC__ && __GNUC__ >= 7) || (defined __clang__ && __clang_major__ >= 10)
+      __attribute__ ((__fallthrough__));
+#endif
+      /*FALLTHROUGH*/
+      case 7:
+        hval += asso_values[(unsigned char)str[6]];
+#if (defined __cplusplus && (__cplusplus >= 201703L || (__cplusplus >= 201103L && defined __clang__ && __clang_major__ + (__clang_minor__ >= 9) > 3))) || (defined __STDC_VERSION__ && __STDC_VERSION__ >= 202000L && ((defined __GNUC__ && __GNUC__ >= 10) || (defined __clang__ && __clang_major__ >= 9)))
+      [[fallthrough]];
+#elif (defined __GNUC__ && __GNUC__ >= 7) || (defined __clang__ && __clang_major__ >= 10)
+      __attribute__ ((__fallthrough__));
+#endif
+      /*FALLTHROUGH*/
+      case 6:
+        hval += asso_values[(unsigned char)str[5]];
+#if (defined __cplusplus && (__cplusplus >= 201703L || (__cplusplus >= 201103L && defined __clang__ && __clang_major__ + (__clang_minor__ >= 9) > 3))) || (defined __STDC_VERSION__ && __STDC_VERSION__ >= 202000L && ((defined __GNUC__ && __GNUC__ >= 10) || (defined __clang__ && __clang_major__ >= 9)))
+      [[fallthrough]];
+#elif (defined __GNUC__ && __GNUC__ >= 7) || (defined __clang__ && __clang_major__ >= 10)
+      __attribute__ ((__fallthrough__));
+#endif
+      /*FALLTHROUGH*/
+      case 5:
+        hval += asso_values[(unsigned char)str[4]+2];
+#if (defined __cplusplus && (__cplusplus >= 201703L || (__cplusplus >= 201103L && defined __clang__ && __clang_major__ + (__clang_minor__ >= 9) > 3))) || (defined __STDC_VERSION__ && __STDC_VERSION__ >= 202000L && ((defined __GNUC__ && __GNUC__ >= 10) || (defined __clang__ && __clang_major__ >= 9)))
+      [[fallthrough]];
+#elif (defined __GNUC__ && __GNUC__ >= 7) || (defined __clang__ && __clang_major__ >= 10)
+      __attribute__ ((__fallthrough__));
+#endif
+      /*FALLTHROUGH*/
+      case 4:
+        hval += asso_values[(unsigned char)str[3]];
+#if (defined __cplusplus && (__cplusplus >= 201703L || (__cplusplus >= 201103L && defined __clang__ && __clang_major__ + (__clang_minor__ >= 9) > 3))) || (defined __STDC_VERSION__ && __STDC_VERSION__ >= 202000L && ((defined __GNUC__ && __GNUC__ >= 10) || (defined __clang__ && __clang_major__ >= 9)))
+      [[fallthrough]];
+#elif (defined __GNUC__ && __GNUC__ >= 7) || (defined __clang__ && __clang_major__ >= 10)
+      __attribute__ ((__fallthrough__));
+#endif
+      /*FALLTHROUGH*/
+      case 3:
+        hval += asso_values[(unsigned char)str[2]+1];
+#if (defined __cplusplus && (__cplusplus >= 201703L || (__cplusplus >= 201103L && defined __clang__ && __clang_major__ + (__clang_minor__ >= 9) > 3))) || (defined __STDC_VERSION__ && __STDC_VERSION__ >= 202000L && ((defined __GNUC__ && __GNUC__ >= 10) || (defined __clang__ && __clang_major__ >= 9)))
+      [[fallthrough]];
+#elif (defined __GNUC__ && __GNUC__ >= 7) || (defined __clang__ && __clang_major__ >= 10)
+      __attribute__ ((__fallthrough__));
+#endif
+      /*FALLTHROUGH*/
+      case 2:
+        hval += asso_values[(unsigned char)str[1]+1];
+#if (defined __cplusplus && (__cplusplus >= 201703L || (__cplusplus >= 201103L && defined __clang__ && __clang_major__ + (__clang_minor__ >= 9) > 3))) || (defined __STDC_VERSION__ && __STDC_VERSION__ >= 202000L && ((defined __GNUC__ && __GNUC__ >= 10) || (defined __clang__ && __clang_major__ >= 9)))
+      [[fallthrough]];
+#elif (defined __GNUC__ && __GNUC__ >= 7) || (defined __clang__ && __clang_major__ >= 10)
+      __attribute__ ((__fallthrough__));
+#endif
+      /*FALLTHROUGH*/
+      case 1:
+        hval += asso_values[(unsigned char)str[0]];
+        break;
+    }
+  return hval;
+}
+
+const struct css_value *
+findValue (register const char *str, register size_t len)
+{
+  /* Hardcoded fallback for values added after gperf codegen */
+  if (len == 4 && !strncmp(str, "flex", 4)) {
+    static const struct css_value v_flex = {"flex", 334};
+    return &v_flex;
+  }
+  if (len == 11 && !strncmp(str, "inline-flex", 11)) {
+    static const struct css_value v_iflex = {"inline-flex", 335};
+    return &v_iflex;
+  }
+  enum
+    {
+      TOTAL_KEYWORDS = 335,
+      MIN_WORD_LENGTH = 2,
+      MAX_WORD_LENGTH = 28,
+      MIN_HASH_VALUE = 0,
+      MAX_HASH_VALUE = 2340
+    };
+
+#if (defined __GNUC__ && __GNUC__ + (__GNUC_MINOR__ >= 6) > 4) || (defined __clang__ && __clang_major__ >= 3)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmissing-field-initializers"
+#endif
+  static const struct css_value wordlist_value[] =
+    {
+#line 33 "cssvalues.gperf"
+      {"100", 27},
+#line 41 "cssvalues.gperf"
+      {"900", 35},
+#line 339 "cssvalues.gperf"
+      {"tb", 333},
+#line 40 "cssvalues.gperf"
+      {"800", 34},
+#line 10 "cssvalues.gperf"
+      {"none", 4},
+#line 254 "cssvalues.gperf"
+      {"embed", 248},
+#line 321 "cssvalues.gperf"
+      {"end", 315},
+#line 184 "cssvalues.gperf"
+      {"compact", 178},
+#line 142 "cssvalues.gperf"
+      {"inside", 136},
+#line 7 "cssvalues.gperf"
+      {"inherit", 1},
+#line 296 "cssvalues.gperf"
+      {"contain", 290},
+#line 180 "cssvalues.gperf"
+      {"inline", 174},
+#line 288 "cssvalues.gperf"
+      {"fast", 282},
+#line 78 "cssvalues.gperf"
+      {"indigo", 72},
+#line 39 "cssvalues.gperf"
+      {"700", 33},
+#line 205 "cssvalues.gperf"
+      {"text", 199},
+#line 38 "cssvalues.gperf"
+      {"600", 32},
+#line 37 "cssvalues.gperf"
+      {"500", 31},
+#line 239 "cssvalues.gperf"
+      {"pre", 233},
+#line 324 "cssvalues.gperf"
+      {"sRGB", 318},
+#line 252 "cssvalues.gperf"
+      {"crop", 246},
+#line 36 "cssvalues.gperf"
+      {"400", 30},
+#line 203 "cssvalues.gperf"
+      {"cell", 197},
+#line 181 "cssvalues.gperf"
+      {"block", 175},
+#line 18 "cssvalues.gperf"
+      {"solid", 12},
+#line 35 "cssvalues.gperf"
+      {"300", 29},
+#line 22 "cssvalues.gperf"
+      {"menu", 16},
+#line 34 "cssvalues.gperf"
+      {"200", 28},
+#line 146 "cssvalues.gperf"
+      {"box", 140},
+#line 87 "cssvalues.gperf"
+      {"teal", 81},
+#line 124 "cssvalues.gperf"
+      {"baseline", 118},
+#line 85 "cssvalues.gperf"
+      {"red", 79},
+#line 337 "cssvalues.gperf"
+      {"lr", 331},
+#line 338 "cssvalues.gperf"
+      {"rl", 332},
+#line 128 "cssvalues.gperf"
+      {"text-top", 122},
+#line 12 "cssvalues.gperf"
+      {"inset", 6},
+#line 72 "cssvalues.gperf"
+      {"black", 66},
+#line 248 "cssvalues.gperf"
+      {"below", 242},
+#line 83 "cssvalues.gperf"
+      {"orange", 77},
+#line 21 "cssvalues.gperf"
+      {"icon", 15},
+#line 29 "cssvalues.gperf"
+      {"normal", 23},
+#line 274 "cssvalues.gperf"
+      {"underline", 268},
+#line 241 "cssvalues.gperf"
+      {"pre-line", 235},
+#line 233 "cssvalues.gperf"
+      {"collapse", 227},
+#line 44 "cssvalues.gperf"
+      {"small", 38},
+#line 73 "cssvalues.gperf"
+      {"blue", 67},
+#line 332 "cssvalues.gperf"
+      {"all", 326},
+#line 84 "cssvalues.gperf"
+      {"purple", 78},
+#line 27 "cssvalues.gperf"
+      {"oblique", 21},
+#line 126 "cssvalues.gperf"
+      {"sub", 120},
+#line 227 "cssvalues.gperf"
+      {"ltr", 221},
+#line 228 "cssvalues.gperf"
+      {"rtl", 222},
+#line 65 "cssvalues.gperf"
+      {"fantasy", 59},
+#line 30 "cssvalues.gperf"
+      {"bold", 24},
+#line 253 "cssvalues.gperf"
+      {"cross", 247},
+#line 129 "cssvalues.gperf"
+      {"text-bottom", 123},
+#line 315 "cssvalues.gperf"
+      {"butt", 309},
+#line 267 "cssvalues.gperf"
+      {"portrait", 261},
+#line 313 "cssvalues.gperf"
+      {"round", 307},
+#line 297 "cssvalues.gperf"
+      {"cover", 291},
+#line 209 "cssvalues.gperf"
+      {"move", 203},
+#line 331 "cssvalues.gperf"
+      {"stroke", 325},
+#line 258 "cssvalues.gperf"
+      {"invert", 252},
+#line 245 "cssvalues.gperf"
+      {"absolute", 239},
+#line 302 "cssvalues.gperf"
+      {"central ", 296},
+#line 289 "cssvalues.gperf"
+      {"infinite", 283},
+#line 45 "cssvalues.gperf"
+      {"medium", 39},
+#line 279 "cssvalues.gperf"
+      {"enabled", 273},
+#line 199 "cssvalues.gperf"
+      {"help", 193},
+#line 314 "cssvalues.gperf"
+      {"bevel", 308},
+#line 66 "cssvalues.gperf"
+      {"monospace", 60},
+#line 134 "cssvalues.gperf"
+      {"left", 128},
+#line 260 "cssvalues.gperf"
+      {"level", 254},
+#line 270 "cssvalues.gperf"
+      {"show", 264},
+#line 77 "cssvalues.gperf"
+      {"green", 71},
+#line 50 "cssvalues.gperf"
+      {"smaller", 44},
+#line 287 "cssvalues.gperf"
+      {"slow", 281},
+#line 294 "cssvalues.gperf"
+      {"ellipsis", 288},
+#line 19 "cssvalues.gperf"
+      {"double", 13},
+#line 283 "cssvalues.gperf"
+      {"ahead", 277},
+#line 262 "cssvalues.gperf"
+      {"loud", 256},
+#line 130 "cssvalues.gperf"
+      {"top", 124},
+#line 81 "cssvalues.gperf"
+      {"navy", 75},
+#line 186 "cssvalues.gperf"
+      {"table", 180},
+#line 196 "cssvalues.gperf"
+      {"auto", 190},
+#line 118 "cssvalues.gperf"
+      {"grey", 112},
+#line 309 "cssvalues.gperf"
+      {"use-script", 303},
+#line 69 "cssvalues.gperf"
+      {"local", 63},
+#line 67 "cssvalues.gperf"
+      {"scroll", 61},
+#line 251 "cssvalues.gperf"
+      {"both", 245},
+#line 266 "cssvalues.gperf"
+      {"overline", 260},
+#line 136 "cssvalues.gperf"
+      {"center", 130},
+#line 247 "cssvalues.gperf"
+      {"avoid", 241},
+#line 138 "cssvalues.gperf"
+      {"-khtml-left", 132},
+#line 159 "cssvalues.gperf"
+      {"armenian", 153},
+#line 285 "cssvalues.gperf"
+      {"up", 279},
+#line 208 "cssvalues.gperf"
+      {"copy", 202},
+#line 291 "cssvalues.gperf"
+      {"alternate", 285},
+#line 76 "cssvalues.gperf"
+      {"gray", 70},
+#line 187 "cssvalues.gperf"
+      {"inline-table", 181},
+#line 62 "cssvalues.gperf"
+      {"serif", 56},
+#line 320 "cssvalues.gperf"
+      {"start", 314},
+#line 284 "cssvalues.gperf"
+      {"reverse", 278},
+#line 292 "cssvalues.gperf"
+      {"unfurl", 286},
+#line 201 "cssvalues.gperf"
+      {"progress", 195},
+#line 24 "cssvalues.gperf"
+      {"small-caption", 18},
+#line 131 "cssvalues.gperf"
+      {"bottom", 125},
+#line 140 "cssvalues.gperf"
+      {"-khtml-center", 134},
+#line 145 "cssvalues.gperf"
+      {"square", 139},
+#line 70 "cssvalues.gperf"
+      {"transparent", 64},
+#line 120 "cssvalues.gperf"
+      {"repeat", 114},
+#line 255 "cssvalues.gperf"
+      {"hand", 249},
+#line 63 "cssvalues.gperf"
+      {"sans-serif", 57},
+#line 80 "cssvalues.gperf"
+      {"maroon", 74},
+#line 15 "cssvalues.gperf"
+      {"outset", 9},
+#line 240 "cssvalues.gperf"
+      {"pre-wrap", 234},
+#line 273 "cssvalues.gperf"
+      {"thin", 267},
+#line 244 "cssvalues.gperf"
+      {"above", 238},
+#line 28 "cssvalues.gperf"
+      {"small-caps", 22},
+#line 103 "cssvalues.gperf"
+      {"inactivecaption", 97},
+#line 259 "cssvalues.gperf"
+      {"landscape", 253},
+#line 160 "cssvalues.gperf"
+      {"georgian", 154},
+#line 127 "cssvalues.gperf"
+      {"super", 121},
+#line 293 "cssvalues.gperf"
+      {"clip", 287},
+#line 272 "cssvalues.gperf"
+      {"thick", 266},
+#line 268 "cssvalues.gperf"
+      {"relative", 262},
+#line 155 "cssvalues.gperf"
+      {"-khtml-tibetan", 149},
+#line 148 "cssvalues.gperf"
+      {"decimal", 142},
+#line 71 "cssvalues.gperf"
+      {"aqua", 65},
+#line 57 "cssvalues.gperf"
+      {"semi-condensed", 51},
+#line 151 "cssvalues.gperf"
+      {"-khtml-lao", 145},
+#line 133 "cssvalues.gperf"
+      {"-khtml-auto", 127},
+#line 340 "cssvalues.gperf"
+      {"flex", 334},
+#line 79 "cssvalues.gperf"
+      {"lime", 73},
+#line 31 "cssvalues.gperf"
+      {"bolder", 25},
+#line 68 "cssvalues.gperf"
+      {"fixed", 62},
+#line 265 "cssvalues.gperf"
+      {"mix", 259},
+#line 194 "cssvalues.gperf"
+      {"table-cell", 188},
+#line 330 "cssvalues.gperf"
+      {"fill", 324},
+#line 250 "cssvalues.gperf"
+      {"blink", 244},
+#line 312 "cssvalues.gperf"
+      {"miter", 306},
+#line 305 "cssvalues.gperf"
+      {"ideographic", 299},
+#line 16 "cssvalues.gperf"
+      {"dotted", 10},
+#line 144 "cssvalues.gperf"
+      {"circle", 138},
+#line 9 "cssvalues.gperf"
+      {"-khtml-native", 3},
+#line 263 "cssvalues.gperf"
+      {"lower", 257},
+#line 336 "cssvalues.gperf"
+      {"tb-lr", 330},
+#line 193 "cssvalues.gperf"
+      {"table-column", 187},
+#line 226 "cssvalues.gperf"
+      {"all-scroll", 220},
+#line 122 "cssvalues.gperf"
+      {"repeat-y", 116},
+#line 195 "cssvalues.gperf"
+      {"table-caption", 189},
+#line 56 "cssvalues.gperf"
+      {"condensed", 50},
+#line 110 "cssvalues.gperf"
+      {"threedface", 104},
+#line 46 "cssvalues.gperf"
+      {"large", 40},
+#line 182 "cssvalues.gperf"
+      {"list-item", 176},
+#line 26 "cssvalues.gperf"
+      {"italic", 20},
+#line 271 "cssvalues.gperf"
+      {"static", 265},
+#line 281 "cssvalues.gperf"
+      {"forwards", 275},
+#line 143 "cssvalues.gperf"
+      {"disc", 137},
+#line 335 "cssvalues.gperf"
+      {"tb-rl", 329},
+#line 238 "cssvalues.gperf"
+      {"nowrap", 232},
+#line 125 "cssvalues.gperf"
+      {"middle", 119},
+#line 74 "cssvalues.gperf"
+      {"crimson", 68},
+#line 152 "cssvalues.gperf"
+      {"-khtml-persian", 146},
+#line 211 "cssvalues.gperf"
+      {"not-allowed", 205},
+#line 286 "cssvalues.gperf"
+      {"down", 280},
+#line 275 "cssvalues.gperf"
+      {"-khtml-normal", 269},
+#line 89 "cssvalues.gperf"
+      {"yellow", 83},
+#line 108 "cssvalues.gperf"
+      {"scrollbar", 102},
+#line 210 "cssvalues.gperf"
+      {"no-drop", 204},
+#line 264 "cssvalues.gperf"
+      {"marquee", 258},
+#line 224 "cssvalues.gperf"
+      {"col-resize", 218},
+#line 325 "cssvalues.gperf"
+      {"linearRGB", 319},
+#line 269 "cssvalues.gperf"
+      {"separate", 263},
+#line 153 "cssvalues.gperf"
+      {"-khtml-urdu", 147},
+#line 185 "cssvalues.gperf"
+      {"inline-block", 179},
+#line 52 "cssvalues.gperf"
+      {"wider", 46},
+#line 94 "cssvalues.gperf"
+      {"buttonface", 88},
+#line 200 "cssvalues.gperf"
+      {"pointer", 194},
+#line 154 "cssvalues.gperf"
+      {"-khtml-thai", 148},
+#line 341 "cssvalues.gperf"
+      {"inline-flex", 335},
+#line 75 "cssvalues.gperf"
+      {"fuchsia", 69},
+#line 51 "cssvalues.gperf"
+      {"larger", 45},
+#line 107 "cssvalues.gperf"
+      {"menutext", 101},
+#line 55 "cssvalues.gperf"
+      {"extra-condensed", 49},
+#line 204 "cssvalues.gperf"
+      {"crosshair", 198},
+#line 256 "cssvalues.gperf"
+      {"hide", 250},
+#line 202 "cssvalues.gperf"
+      {"wait", 196},
+#line 117 "cssvalues.gperf"
+      {"currentcolor", 111},
+#line 300 "cssvalues.gperf"
+      {"before-edge", 294},
+#line 54 "cssvalues.gperf"
+      {"ultra-condensed", 48},
+#line 102 "cssvalues.gperf"
+      {"inactiveborder", 96},
+#line 183 "cssvalues.gperf"
+      {"run-in", 177},
+#line 191 "cssvalues.gperf"
+      {"table-row", 185},
+#line 301 "cssvalues.gperf"
+      {"text-before-edge", 295},
+#line 147 "cssvalues.gperf"
+      {"-khtml-diamond", 141},
+#line 329 "cssvalues.gperf"
+      {"painted", 323},
+#line 333 "cssvalues.gperf"
+      {"lr-tb", 327},
+#line 197 "cssvalues.gperf"
+      {"default", 191},
+#line 334 "cssvalues.gperf"
+      {"rl-tb", 328},
+#line 316 "cssvalues.gperf"
+      {"accumulate", 310},
+#line 237 "cssvalues.gperf"
+      {"open-quote", 231},
+#line 232 "cssvalues.gperf"
+      {"visible", 226},
+#line 234 "cssvalues.gperf"
+      {"close-quote", 228},
+#line 17 "cssvalues.gperf"
+      {"dashed", 11},
+#line 242 "cssvalues.gperf"
+      {"-khtml-nowrap", 236},
+#line 64 "cssvalues.gperf"
+      {"cursive", 58},
+#line 306 "cssvalues.gperf"
+      {"alphabetic", 300},
+#line 231 "cssvalues.gperf"
+      {"lowercase", 225},
+#line 158 "cssvalues.gperf"
+      {"hebrew", 152},
+#line 178 "cssvalues.gperf"
+      {"-khtml-open-quote", 172},
+#line 59 "cssvalues.gperf"
+      {"expanded", 53},
+#line 319 "cssvalues.gperf"
+      {"geometricPrecision", 313},
+#line 13 "cssvalues.gperf"
+      {"groove", 7},
+#line 20 "cssvalues.gperf"
+      {"caption", 14},
+#line 298 "cssvalues.gperf"
+      {"evenodd", 292},
+#line 119 "cssvalues.gperf"
+      {"-khtml-text", 113},
+#line 82 "cssvalues.gperf"
+      {"olive", 76},
+#line 141 "cssvalues.gperf"
+      {"outside", 135},
+#line 304 "cssvalues.gperf"
+      {"text-after-edge", 298},
+#line 299 "cssvalues.gperf"
+      {"nonzero", 293},
+#line 207 "cssvalues.gperf"
+      {"alias", 201},
+#line 243 "cssvalues.gperf"
+      {"break-word", 237},
+#line 25 "cssvalues.gperf"
+      {"status-bar", 19},
+#line 171 "cssvalues.gperf"
+      {"lower-latin", 165},
+#line 311 "cssvalues.gperf"
+      {"reset-size", 305},
+#line 106 "cssvalues.gperf"
+      {"infotext", 100},
+#line 53 "cssvalues.gperf"
+      {"narrower", 47},
+#line 303 "cssvalues.gperf"
+      {"after-edge", 297},
+#line 139 "cssvalues.gperf"
+      {"-khtml-right", 133},
+#line 246 "cssvalues.gperf"
+      {"always", 240},
+#line 278 "cssvalues.gperf"
+      {"content-box", 272},
+#line 88 "cssvalues.gperf"
+      {"white", 82},
+#line 327 "cssvalues.gperf"
+      {"visibleFill", 321},
+#line 290 "cssvalues.gperf"
+      {"slide", 284},
+#line 198 "cssvalues.gperf"
+      {"context-menu", 192},
+#line 230 "cssvalues.gperf"
+      {"uppercase", 224},
+#line 179 "cssvalues.gperf"
+      {"-khtml-close-quote", 173},
+#line 156 "cssvalues.gperf"
+      {"lower-roman", 150},
+#line 222 "cssvalues.gperf"
+      {"nesw-resize", 216},
+#line 23 "cssvalues.gperf"
+      {"message-box", 17},
+#line 308 "cssvalues.gperf"
+      {"mathematical ", 302},
+#line 173 "cssvalues.gperf"
+      {"upper-latin", 167},
+#line 123 "cssvalues.gperf"
+      {"no-repeat", 117},
+#line 86 "cssvalues.gperf"
+      {"silver", 80},
+#line 175 "cssvalues.gperf"
+      {"katakana", 169},
+#line 104 "cssvalues.gperf"
+      {"inactivecaptiontext", 98},
+#line 93 "cssvalues.gperf"
+      {"background", 87},
+#line 99 "cssvalues.gperf"
+      {"graytext", 93},
+#line 14 "cssvalues.gperf"
+      {"ridge", 8},
+#line 150 "cssvalues.gperf"
+      {"-khtml-arabic-indic", 144},
+#line 121 "cssvalues.gperf"
+      {"repeat-x", 115},
+#line 97 "cssvalues.gperf"
+      {"buttontext", 91},
+#line 91 "cssvalues.gperf"
+      {"activecaption", 85},
+#line 317 "cssvalues.gperf"
+      {"optimizeSpeed", 311},
+#line 190 "cssvalues.gperf"
+      {"table-footer-group", 184},
+#line 137 "cssvalues.gperf"
+      {"justify", 131},
+#line 192 "cssvalues.gperf"
+      {"table-column-group", 186},
+#line 157 "cssvalues.gperf"
+      {"upper-roman", 151},
+#line 11 "cssvalues.gperf"
+      {"hidden", 5},
+#line 58 "cssvalues.gperf"
+      {"semi-expanded", 52},
+#line 235 "cssvalues.gperf"
+      {"no-close-quote", 229},
+#line 132 "cssvalues.gperf"
+      {"-khtml-baseline-middle", 126},
+#line 326 "cssvalues.gperf"
+      {"visiblePainted", 320},
+#line 249 "cssvalues.gperf"
+      {"bidi-override", 243},
+#line 280 "cssvalues.gperf"
+      {"disabled", 274},
+#line 236 "cssvalues.gperf"
+      {"no-open-quote", 230},
+#line 8 "cssvalues.gperf"
+      {"initial", 2},
+#line 213 "cssvalues.gperf"
+      {"n-resize", 207},
+#line 212 "cssvalues.gperf"
+      {"e-resize", 206},
+#line 43 "cssvalues.gperf"
+      {"x-small", 37},
+#line 276 "cssvalues.gperf"
+      {"-khtml-around-floats", 270},
+#line 318 "cssvalues.gperf"
+      {"crispEdges", 312},
+#line 307 "cssvalues.gperf"
+      {"hanging", 301},
+#line 229 "cssvalues.gperf"
+      {"capitalize", 223},
+#line 135 "cssvalues.gperf"
+      {"right", 129},
+#line 282 "cssvalues.gperf"
+      {"backwards", 276},
+#line 216 "cssvalues.gperf"
+      {"s-resize", 210},
+#line 323 "cssvalues.gperf"
+      {"optimizeQuality", 317},
+#line 174 "cssvalues.gperf"
+      {"hiragana", 168},
+#line 277 "cssvalues.gperf"
+      {"border-box", 271},
+#line 223 "cssvalues.gperf"
+      {"nwse-resize", 217},
+#line 32 "cssvalues.gperf"
+      {"lighter", 26},
+#line 188 "cssvalues.gperf"
+      {"table-row-group", 182},
+#line 170 "cssvalues.gperf"
+      {"lower-alpha", 164},
+#line 164 "cssvalues.gperf"
+      {"-khtml-simp-chinese-formal", 158},
+#line 165 "cssvalues.gperf"
+      {"-khtml-simp-chinese-informal", 159},
+#line 113 "cssvalues.gperf"
+      {"threedshadow", 107},
+#line 225 "cssvalues.gperf"
+      {"row-resize", 219},
+#line 60 "cssvalues.gperf"
+      {"extra-expanded", 54},
+#line 322 "cssvalues.gperf"
+      {"optimizeLegibility", 316},
+#line 61 "cssvalues.gperf"
+      {"ultra-expanded", 55},
+#line 90 "cssvalues.gperf"
+      {"activeborder", 84},
+#line 98 "cssvalues.gperf"
+      {"captiontext", 92},
+#line 169 "cssvalues.gperf"
+      {"-khtml-upper-greek", 163},
+#line 219 "cssvalues.gperf"
+      {"w-resize", 213},
+#line 310 "cssvalues.gperf"
+      {"no-change", 304},
+#line 328 "cssvalues.gperf"
+      {"visibleStroke", 322},
+#line 96 "cssvalues.gperf"
+      {"buttonshadow", 90},
+#line 114 "cssvalues.gperf"
+      {"window", 108},
+#line 172 "cssvalues.gperf"
+      {"upper-alpha", 166},
+#line 221 "cssvalues.gperf"
+      {"ns-resize", 215},
+#line 214 "cssvalues.gperf"
+      {"ne-resize", 208},
+#line 47 "cssvalues.gperf"
+      {"x-large", 41},
+#line 42 "cssvalues.gperf"
+      {"xx-small", 36},
+#line 206 "cssvalues.gperf"
+      {"vertical-text", 200},
+#line 168 "cssvalues.gperf"
+      {"lower-greek", 162},
+#line 217 "cssvalues.gperf"
+      {"se-resize", 211},
+#line 48 "cssvalues.gperf"
+      {"xx-large", 42},
+#line 295 "cssvalues.gperf"
+      {"padding-box", 289},
+#line 261 "cssvalues.gperf"
+      {"line-through", 255},
+#line 105 "cssvalues.gperf"
+      {"infobackground", 99},
+#line 257 "cssvalues.gperf"
+      {"higher", 251},
+#line 189 "cssvalues.gperf"
+      {"table-header-group", 183},
+#line 166 "cssvalues.gperf"
+      {"-khtml-trad-chinese-formal", 160},
+#line 167 "cssvalues.gperf"
+      {"-khtml-trad-chinese-informal", 161},
+#line 162 "cssvalues.gperf"
+      {"-khtml-japanese-formal", 156},
+#line 163 "cssvalues.gperf"
+      {"-khtml-japanese-informal", 157},
+#line 177 "cssvalues.gperf"
+      {"katakana-iroha", 171},
+#line 115 "cssvalues.gperf"
+      {"windowframe", 109},
+#line 111 "cssvalues.gperf"
+      {"threedhighlight", 105},
+#line 100 "cssvalues.gperf"
+      {"highlight", 94},
+#line 95 "cssvalues.gperf"
+      {"buttonhighlight", 89},
+#line 112 "cssvalues.gperf"
+      {"threedlightshadow", 106},
+#line 176 "cssvalues.gperf"
+      {"hiragana-iroha", 170},
+#line 149 "cssvalues.gperf"
+      {"decimal-leading-zero", 143},
+#line 116 "cssvalues.gperf"
+      {"windowtext", 110},
+#line 215 "cssvalues.gperf"
+      {"nw-resize", 209},
+#line 220 "cssvalues.gperf"
+      {"ew-resize", 214},
+#line 161 "cssvalues.gperf"
+      {"cjk-ideographic", 155},
+#line 218 "cssvalues.gperf"
+      {"sw-resize", 212},
+#line 92 "cssvalues.gperf"
+      {"appworkspace", 86},
+#line 109 "cssvalues.gperf"
+      {"threeddarkshadow", 103},
+#line 101 "cssvalues.gperf"
+      {"highlighttext", 95},
+#line 49 "cssvalues.gperf"
+      {"-khtml-xxx-large", 43}
+    };
+#if (defined __GNUC__ && __GNUC__ + (__GNUC_MINOR__ >= 6) > 4) || (defined __clang__ && __clang_major__ >= 3)
+#pragma GCC diagnostic pop
+#endif
+
+  static const short lookup[] =
+    {
+        0,  -1,  -1,  -1,  -1,   1,  -1,  -1,  -1,  -1,
+        2,  -1,  -1,  -1,  -1,   3,  -1,  -1,  -1,  -1,
+        4,  -1,  -1,   5,  -1,   6,  -1,  -1,  -1,  -1,
+        7,  -1,  -1,   8,  -1,   9,  -1,  -1,  -1,  -1,
+       10,  -1,  -1,  -1,  -1,  11,  -1,  -1,  12,  -1,
+       13,  -1,  -1,  -1,  -1,  14,  15,  -1,  -1,  -1,
+       16,  -1,  -1,  -1,  -1,  17,  -1,  -1,  18,  -1,
+       19,  -1,  -1,  -1,  -1,  20,  -1,  -1,  -1,  -1,
+       21,  -1,  -1,  22,  -1,  23,  -1,  -1,  24,  -1,
+       25,  -1,  -1,  26,  -1,  27,  -1,  -1,  28,  -1,
+       -1,  -1,  -1,  29,  -1,  30,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  31,  -1,
+       32,  -1,  -1,  -1,  -1,  33,  34,  -1,  35,  -1,
+       36,  37,  -1,  -1,  -1,  38,  -1,  -1,  -1,  -1,
+       39,  -1,  -1,  -1,  -1,  40,  -1,  -1,  -1,  -1,
+       41,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  42,  -1,
+       43,  -1,  -1,  -1,  -1,  44,  -1,  -1,  45,  -1,
+       46,  -1,  -1,  47,  -1,  48,  -1,  -1,  49,  -1,
+       50,  -1,  -1,  -1,  -1,  51,  -1,  -1,  -1,  -1,
+       -1,  52,  -1,  -1,  -1,  53,  -1,  -1,  -1,  -1,
+       54,  55,  -1,  -1,  -1,  -1,  -1,  -1,  56,  -1,
+       57,  -1,  -1,  -1,  -1,  -1,  58,  -1,  59,  -1,
+       -1,  -1,  -1,  60,  -1,  61,  -1,  -1,  62,  -1,
+       63,  -1,  -1,  64,  -1,  -1,  -1,  -1,  -1,  -1,
+       65,  -1,  -1,  -1,  -1,  -1,  66,  -1,  -1,  -1,
+       67,  -1,  -1,  68,  -1,  -1,  69,  -1,  -1,  -1,
+       70,  -1,  -1,  71,  -1,  -1,  72,  -1,  -1,  -1,
+       -1,  -1,  -1,  73,  -1,  -1,  -1,  -1,  74,  -1,
+       75,  -1,  -1,  76,  -1,  77,  -1,  -1,  78,  -1,
+       -1,  79,  -1,  80,  -1,  -1,  -1,  -1,  81,  -1,
+       -1,  82,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  83,  -1,  -1,  84,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  85,  -1,  86,  -1,
+       87,  -1,  -1,  -1,  -1,  88,  -1,  -1,  -1,  -1,
+       89,  90,  -1,  91,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  92,  -1,  93,  -1,  94,  -1,  -1,  95,  -1,
+       -1,  96,  -1,  -1,  -1,  97,  -1,  -1,  98,  -1,
+       99,  -1,  -1, 100,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1, 101,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1, 102,  -1,  -1,  -1, 103,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1, 104,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1, 105,  -1,  -1, 106,  -1,
+      107,  -1,  -1, 108,  -1, 109, 110,  -1,  -1,  -1,
+      111,  -1,  -1, 112,  -1,  -1,  -1,  -1, 113,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1, 114,  -1,
+       -1, 115,  -1, 116,  -1,  -1,  -1,  -1, 117,  -1,
+      118, 119,  -1,  -1,  -1, 120,  -1,  -1, 121,  -1,
+       -1, 122,  -1, 123,  -1,  -1,  -1,  -1, 124,  -1,
+       -1,  -1,  -1,  -1, 125, 126,  -1,  -1, 127,  -1,
+       -1,  -1,  -1, 128,  -1,  -1,  -1,  -1, 129,  -1,
+      130,  -1,  -1,  -1,  -1, 131, 132,  -1, 133,  -1,
+      134,  -1, 135,  -1,  -1,  -1, 136,  -1,  -1,  -1,
+      137, 138,  -1, 139,  -1,  -1,  -1,  -1, 140,  -1,
+       -1,  -1,  -1, 141,  -1, 142,  -1,  -1, 143,  -1,
+       -1,  -1,  -1, 144,  -1, 145,  -1,  -1, 146,  -1,
+      147,  -1,  -1,  -1,  -1, 148,  -1,  -1,  -1, 149,
+       -1,  -1,  -1,  -1,  -1, 150,  -1,  -1,  -1,  -1,
+      151,  -1,  -1, 152,  -1, 153,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1, 154,  -1, 155,  -1,  -1,  -1,  -1,
+      156, 157,  -1, 158,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1, 159,  -1, 160,  -1,  -1, 161,  -1,
+       -1,  -1,  -1, 162,  -1, 163,  -1,  -1, 164,  -1,
+      165,  -1,  -1,  -1,  -1, 166,  -1, 167,  -1,  -1,
+      168,  -1,  -1, 169,  -1,  -1, 170,  -1,  -1,  -1,
+      171,  -1,  -1, 172,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1, 173,  -1,  -1,  -1, 174,  -1,  -1,  -1,  -1,
+      175, 176,  -1,  -1, 177,  -1, 178,  -1,  -1,  -1,
+      179,  -1,  -1, 180,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1, 181,  -1,  -1,  -1, 182, 183,  -1, 184,  -1,
+      185,  -1,  -1, 186,  -1,  -1, 187,  -1, 188,  -1,
+       -1,  -1,  -1, 189,  -1, 190,  -1,  -1,  -1,  -1,
+       -1, 191,  -1,  -1,  -1,  -1,  -1,  -1, 192,  -1,
+       -1,  -1,  -1, 193, 194,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1, 195, 196,  -1, 197,  -1,
+       -1, 198,  -1, 199,  -1, 200,  -1,  -1,  -1, 201,
+       -1, 202,  -1, 203,  -1, 204,  -1,  -1, 205,  -1,
+       -1, 206,  -1, 207,  -1, 208, 209,  -1, 210,  -1,
+       -1, 211,  -1, 212,  -1, 213,  -1,  -1, 214, 215,
+      216,  -1,  -1,  -1,  -1,  -1, 217,  -1,  -1,  -1,
+       -1,  -1,  -1, 218,  -1,  -1,  -1,  -1,  -1, 219,
+      220,  -1,  -1, 221,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1, 222,  -1, 223,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1, 224,  -1,  -1,  -1,  -1,
+       -1, 225,  -1, 226,  -1,  -1, 227,  -1,  -1,  -1,
+      228,  -1,  -1,  -1,  -1, 229,  -1,  -1,  -1,  -1,
+      230,  -1,  -1,  -1,  -1, 231,  -1,  -1,  -1,  -1,
+       -1, 232,  -1,  -1,  -1,  -1, 233,  -1, 234,  -1,
+       -1,  -1,  -1,  -1,  -1, 235,  -1,  -1,  -1,  -1,
+       -1, 236,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1, 237,  -1,
+       -1,  -1,  -1,  -1,  -1, 238, 239,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1, 240,  -1,
+       -1,  -1,  -1,  -1,  -1, 241,  -1,  -1,  -1,  -1,
+       -1, 242,  -1, 243,  -1,  -1, 244,  -1,  -1,  -1,
+      245, 246,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+      247, 248,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1, 249,  -1, 250,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1, 251,  -1,  -1,  -1,  -1, 252,  -1,  -1,  -1,
+      253,  -1,  -1,  -1,  -1,  -1,  -1,  -1, 254,  -1,
+       -1,  -1,  -1, 255,  -1,  -1,  -1, 256,  -1,  -1,
+      257, 258,  -1,  -1,  -1,  -1,  -1,  -1, 259,  -1,
+       -1,  -1,  -1, 260,  -1,  -1, 261,  -1,  -1,  -1,
+      262, 263,  -1,  -1,  -1,  -1, 264,  -1,  -1,  -1,
+       -1,  -1,  -1, 265,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1, 266,  -1, 267,  -1,  -1,  -1,  -1, 268,  -1,
+       -1,  -1,  -1, 269,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1, 270,  -1,  -1,  -1,  -1, 271,  -1,
+       -1,  -1,  -1, 272,  -1, 273,  -1,  -1,  -1,  -1,
+       -1, 274,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1, 275,  -1,  -1,  -1,  -1,  -1,  -1, 276,  -1,
+       -1,  -1,  -1, 277,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1, 278,  -1, 279,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1, 280,  -1,  -1,  -1,  -1,
+      281, 282,  -1, 283,  -1, 284,  -1,  -1, 285,  -1,
+       -1,  -1,  -1, 286,  -1,  -1,  -1,  -1, 287,  -1,
+      288,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1, 289,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1, 290,  -1,  -1,  -1,
+      291,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+      292,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1, 293,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+      294, 295,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1, 296,  -1,  -1,  -1,  -1, 297,  -1,  -1, 298,
+       -1,  -1, 299,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1, 300,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1, 301,  -1,
+       -1, 302,  -1, 303,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1, 304,  -1,  -1,  -1,  -1, 305,  -1,  -1,  -1,
+      306,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1, 307,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1, 308,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1, 309,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1, 310,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+      311,  -1,  -1,  -1,  -1,  -1,  -1,  -1, 312,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1, 313,  -1,  -1, 314,  -1,
+       -1,  -1,  -1, 315,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1, 316,  -1,  -1,  -1,  -1, 317,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1, 318,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1, 319,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1, 320,  -1,  -1, 321,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1, 322,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1, 323,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1, 324,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1, 325,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1, 326,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1, 327,  -1,  -1,  -1,  -1, 328,  -1,
+       -1,  -1,  -1,  -1,  -1, 329,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1, 330,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1, 331,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1, 332,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1, 333,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+       -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,  -1,
+      334
+    };
+
+  if (len <= MAX_WORD_LENGTH && len >= MIN_WORD_LENGTH)
+    {
+      register unsigned int key = hash_val (str, len);
+
+      if (key <= MAX_HASH_VALUE)
+        {
+          register int index = lookup[key];
+
+          if (index >= 0)
+            {
+              register const char *s = wordlist_value[index].name;
+
+              if (*str == *s && !strncmp (str + 1, s + 1, len - 1) && s[len] == '\0')
+                return &wordlist_value[index];
+            }
+        }
+    }
+  return (struct css_value *) 0;
+}
+#line 342 "cssvalues.gperf"
+
+
+static const char * const valueList[] = {
+    nullptr,
+    "inherit",
+    "initial",
+    "-khtml-native",
+    "none",
+    "hidden",
+    "inset",
+    "groove",
+    "ridge",
+    "outset",
+    "dotted",
+    "dashed",
+    "solid",
+    "double",
+    "caption",
+    "icon",
+    "menu",
+    "message-box",
+    "small-caption",
+    "status-bar",
+    "italic",
+    "oblique",
+    "small-caps",
+    "normal",
+    "bold",
+    "bolder",
+    "lighter",
+    "100",
+    "200",
+    "300",
+    "400",
+    "500",
+    "600",
+    "700",
+    "800",
+    "900",
+    "xx-small",
+    "x-small",
+    "small",
+    "medium",
+    "large",
+    "x-large",
+    "xx-large",
+    "-khtml-xxx-large",
+    "smaller",
+    "larger",
+    "wider",
+    "narrower",
+    "ultra-condensed",
+    "extra-condensed",
+    "condensed",
+    "semi-condensed",
+    "semi-expanded",
+    "expanded",
+    "extra-expanded",
+    "ultra-expanded",
+    "serif",
+    "sans-serif",
+    "cursive",
+    "fantasy",
+    "monospace",
+    "scroll",
+    "fixed",
+    "local",
+    "transparent",
+    "aqua",
+    "black",
+    "blue",
+    "crimson",
+    "fuchsia",
+    "gray",
+    "green",
+    "indigo",
+    "lime",
+    "maroon",
+    "navy",
+    "olive",
+    "orange",
+    "purple",
+    "red",
+    "silver",
+    "teal",
+    "white",
+    "yellow",
+    "activeborder",
+    "activecaption",
+    "appworkspace",
+    "background",
+    "buttonface",
+    "buttonhighlight",
+    "buttonshadow",
+    "buttontext",
+    "captiontext",
+    "graytext",
+    "highlight",
+    "highlighttext",
+    "inactiveborder",
+    "inactivecaption",
+    "inactivecaptiontext",
+    "infobackground",
+    "infotext",
+    "menutext",
+    "scrollbar",
+    "threeddarkshadow",
+    "threedface",
+    "threedhighlight",
+    "threedlightshadow",
+    "threedshadow",
+    "window",
+    "windowframe",
+    "windowtext",
+    "currentcolor",
+    "grey",
+    "-khtml-text",
+    "repeat",
+    "repeat-x",
+    "repeat-y",
+    "no-repeat",
+    "baseline",
+    "middle",
+    "sub",
+    "super",
+    "text-top",
+    "text-bottom",
+    "top",
+    "bottom",
+    "-khtml-baseline-middle",
+    "-khtml-auto",
+    "left",
+    "right",
+    "center",
+    "justify",
+    "-khtml-left",
+    "-khtml-right",
+    "-khtml-center",
+    "outside",
+    "inside",
+    "disc",
+    "circle",
+    "square",
+    "box",
+    "-khtml-diamond",
+    "decimal",
+    "decimal-leading-zero",
+    "-khtml-arabic-indic",
+    "-khtml-lao",
+    "-khtml-persian",
+    "-khtml-urdu",
+    "-khtml-thai",
+    "-khtml-tibetan",
+    "lower-roman",
+    "upper-roman",
+    "hebrew",
+    "armenian",
+    "georgian",
+    "cjk-ideographic",
+    "-khtml-japanese-formal",
+    "-khtml-japanese-informal",
+    "-khtml-simp-chinese-formal",
+    "-khtml-simp-chinese-informal",
+    "-khtml-trad-chinese-formal",
+    "-khtml-trad-chinese-informal",
+    "lower-greek",
+    "-khtml-upper-greek",
+    "lower-alpha",
+    "lower-latin",
+    "upper-alpha",
+    "upper-latin",
+    "hiragana",
+    "katakana",
+    "hiragana-iroha",
+    "katakana-iroha",
+    "-khtml-open-quote",
+    "-khtml-close-quote",
+    "inline",
+    "block",
+    "list-item",
+    "run-in",
+    "compact",
+    "inline-block",
+    "table",
+    "inline-table",
+    "table-row-group",
+    "table-header-group",
+    "table-footer-group",
+    "table-row",
+    "table-column-group",
+    "table-column",
+    "table-cell",
+    "table-caption",
+    "auto",
+    "default",
+    "context-menu",
+    "help",
+    "pointer",
+    "progress",
+    "wait",
+    "cell",
+    "crosshair",
+    "text",
+    "vertical-text",
+    "alias",
+    "copy",
+    "move",
+    "no-drop",
+    "not-allowed",
+    "e-resize",
+    "n-resize",
+    "ne-resize",
+    "nw-resize",
+    "s-resize",
+    "se-resize",
+    "sw-resize",
+    "w-resize",
+    "ew-resize",
+    "ns-resize",
+    "nesw-resize",
+    "nwse-resize",
+    "col-resize",
+    "row-resize",
+    "all-scroll",
+    "ltr",
+    "rtl",
+    "capitalize",
+    "uppercase",
+    "lowercase",
+    "visible",
+    "collapse",
+    "close-quote",
+    "no-close-quote",
+    "no-open-quote",
+    "open-quote",
+    "nowrap",
+    "pre",
+    "pre-wrap",
+    "pre-line",
+    "-khtml-nowrap",
+    "break-word",
+    "above",
+    "absolute",
+    "always",
+    "avoid",
+    "below",
+    "bidi-override",
+    "blink",
+    "both",
+    "crop",
+    "cross",
+    "embed",
+    "hand",
+    "hide",
+    "higher",
+    "invert",
+    "landscape",
+    "level",
+    "line-through",
+    "loud",
+    "lower",
+    "marquee",
+    "mix",
+    "overline",
+    "portrait",
+    "relative",
+    "separate",
+    "show",
+    "static",
+    "thick",
+    "thin",
+    "underline",
+    "-khtml-normal",
+    "-khtml-around-floats",
+    "border-box",
+    "content-box",
+    "enabled",
+    "disabled",
+    "forwards",
+    "backwards",
+    "ahead",
+    "reverse",
+    "up",
+    "down",
+    "slow",
+    "fast",
+    "infinite",
+    "slide",
+    "alternate",
+    "unfurl",
+    "clip",
+    "ellipsis",
+    "padding-box",
+    "contain",
+    "cover",
+    "evenodd",
+    "nonzero",
+    "before-edge",
+    "text-before-edge",
+    "central ",
+    "after-edge",
+    "text-after-edge",
+    "ideographic",
+    "alphabetic",
+    "hanging",
+    "mathematical ",
+    "use-script",
+    "no-change",
+    "reset-size",
+    "miter",
+    "round",
+    "bevel",
+    "butt",
+    "accumulate",
+    "optimizeSpeed",
+    "crispEdges",
+    "geometricPrecision",
+    "start",
+    "end",
+    "optimizeLegibility",
+    "optimizeQuality",
+    "sRGB",
+    "linearRGB",
+    "visiblePainted",
+    "visibleFill",
+    "visibleStroke",
+    "painted",
+    "fill",
+    "stroke",
+    "all",
+    "lr-tb",
+    "rl-tb",
+    "tb-rl",
+    "tb-lr",
+    "lr",
+    "rl",
+    "tb",
+    "flex",
+    "inline-flex",
+    nullptr
+};
+DOMString getValueName(unsigned short id)
+{
+    if(id >= CSS_VAL_TOTAL || id == 0)
+      return DOMString();
+    else
+      return DOMString(valueList[id]);
+}

@@ -1,0 +1,4788 @@
+State 12 conflicts: 1 shift/reduce
+State 32 conflicts: 1 shift/reduce
+State 55 conflicts: 1 shift/reduce
+State 146 conflicts: 1 shift/reduce
+State 147 conflicts: 1 shift/reduce
+State 160 conflicts: 1 shift/reduce
+State 161 conflicts: 1 shift/reduce
+State 162 conflicts: 1 shift/reduce
+State 163 conflicts: 1 shift/reduce
+State 164 conflicts: 1 shift/reduce
+State 165 conflicts: 1 shift/reduce
+State 166 conflicts: 1 shift/reduce
+State 167 conflicts: 1 shift/reduce
+State 168 conflicts: 1 shift/reduce
+State 169 conflicts: 1 shift/reduce
+State 170 conflicts: 1 shift/reduce
+State 171 conflicts: 1 shift/reduce
+State 172 conflicts: 1 shift/reduce
+State 173 conflicts: 1 shift/reduce
+State 174 conflicts: 1 shift/reduce
+State 175 conflicts: 1 shift/reduce
+State 176 conflicts: 1 shift/reduce
+State 177 conflicts: 1 shift/reduce
+State 178 conflicts: 1 shift/reduce
+State 179 conflicts: 1 shift/reduce
+State 180 conflicts: 1 shift/reduce
+State 181 conflicts: 1 shift/reduce
+State 182 conflicts: 1 shift/reduce
+State 183 conflicts: 1 shift/reduce
+State 184 conflicts: 1 shift/reduce
+State 185 conflicts: 1 shift/reduce
+State 186 conflicts: 1 shift/reduce
+State 187 conflicts: 1 shift/reduce
+State 188 conflicts: 1 shift/reduce
+State 189 conflicts: 1 shift/reduce
+State 190 conflicts: 1 shift/reduce
+State 191 conflicts: 1 shift/reduce
+State 193 conflicts: 1 shift/reduce
+State 229 conflicts: 1 shift/reduce
+State 276 conflicts: 1 shift/reduce
+State 284 conflicts: 1 shift/reduce
+State 322 conflicts: 1 shift/reduce
+State 334 conflicts: 1 shift/reduce
+State 368 conflicts: 1 shift/reduce
+State 370 conflicts: 1 shift/reduce
+
+
+Grammar
+
+    0 $accept: stylesheet $end
+
+    1 stylesheet: maybe_space maybe_charset maybe_sgml import_list namespace_list rule_list
+    2           | khtml_rule maybe_space
+    3           | khtml_decls maybe_space
+    4           | khtml_value maybe_space
+    5           | khtml_mediaquery maybe_space
+    6           | khtml_selectors maybe_space
+
+    7 ruleset_or_import_or_namespace: ruleset
+    8                               | import
+    9                               | namespace_rule
+
+   10 khtml_rule: KHTML_RULE_SYM '{' maybe_space ruleset_or_import_or_namespace maybe_space '}'
+
+   11 khtml_decls: KHTML_DECLS_SYM declaration_block
+
+   12 khtml_value: KHTML_VALUE_SYM '{' maybe_space expr '}'
+
+   13 khtml_selectors: KHTML_SELECTORS_SYM '{' maybe_space selector_list '}'
+
+   14 khtml_mediaquery: KHTML_MEDIAQUERY_SYM S maybe_space media_query '}'
+
+   15 maybe_plus: %empty
+   16           | '+'
+
+   17 maybe_space: %empty
+   18            | maybe_space S
+
+   19 maybe_sgml: %empty
+   20           | maybe_sgml SGML_CD
+   21           | maybe_sgml S
+
+   22 maybe_charset: %empty
+   23              | charset
+
+   24 charset: CHARSET_SYM maybe_space STRING maybe_space ';'
+   25        | CHARSET_SYM error invalid_block
+   26        | CHARSET_SYM error ';'
+
+   27 import_list: %empty
+   28            | import_list import maybe_sgml
+
+   29 import: IMPORT_SYM maybe_space string_or_uri maybe_space maybe_media_list ';'
+   30       | IMPORT_SYM error invalid_block
+   31       | IMPORT_SYM error ';'
+
+   32 namespace_list: %empty
+   33               | namespace_list namespace maybe_sgml
+
+   34 namespace_rule: NAMESPACE_SYM maybe_space maybe_ns_prefix string_or_uri
+
+   35 namespace: namespace_rule maybe_space ';'
+   36          | NAMESPACE_SYM error invalid_block
+   37          | NAMESPACE_SYM error ';'
+
+   38 maybe_ns_prefix: %empty
+   39                | IDENT S
+
+   40 rule_list: %empty
+   41          | rule_list rule maybe_sgml
+
+   42 rule: ruleset
+   43     | media
+   44     | page
+   45     | font_face
+   46     | invalid_rule
+   47     | invalid_at
+   48     | import error
+
+   49 safe_ruleset: ruleset
+   50             | invalid_rule
+   51             | invalid_at
+   52             | import error
+
+   53 string_or_uri: STRING
+   54              | URI
+
+   55 media_feature: IDENT maybe_space
+
+   56 maybe_media_value: %empty
+   57                  | ':' maybe_space expr maybe_space
+
+   58 media_query_exp: '(' maybe_space media_feature maybe_space maybe_media_value ')' maybe_space
+
+   59 media_query_exp_list: media_query_exp
+   60                     | media_query_exp_list maybe_space MEDIA_AND maybe_space media_query_exp
+
+   61 maybe_and_media_query_exp_list: %empty
+   62                               | MEDIA_AND maybe_space media_query_exp_list
+
+   63 maybe_media_restrictor: %empty
+   64                       | MEDIA_ONLY
+   65                       | MEDIA_NOT
+
+   66 media_query: media_query_exp_list
+   67            | maybe_media_restrictor maybe_space medium maybe_and_media_query_exp_list
+
+   68 maybe_media_list: %empty
+   69                 | media_list
+
+   70 media_list: media_query
+   71           | media_list ',' maybe_space media_query
+   72           | media_list error
+
+   73 media: MEDIA_SYM maybe_space media_list '{' maybe_space ruleset_list '}'
+   74      | MEDIA_SYM maybe_space '{' maybe_space ruleset_list '}'
+
+   75 ruleset_list: %empty
+   76             | ruleset_list safe_ruleset maybe_space
+
+   77 medium: IDENT maybe_space
+
+   78 page: PAGE_SYM error invalid_block
+   79     | PAGE_SYM error ';'
+
+   80 font_face: FONT_FACE_SYM maybe_space declaration_block
+   81          | FONT_FACE_SYM error invalid_block
+   82          | FONT_FACE_SYM error ';'
+
+   83 combinator: '+' maybe_space
+   84           | '~' maybe_space
+   85           | '>' maybe_space
+
+   86 unary_operator: '-'
+   87               | '+'
+
+   88 ruleset: selector_list declaration_block
+
+   89 selector_list: selector
+   90              | selector_list ',' maybe_space selector
+   91              | selector_list error
+
+   92 selector: simple_selector
+   93         | selector S
+   94         | selector S simple_selector
+   95         | selector combinator simple_selector
+   96         | selector error
+
+   97 namespace_selector: '|'
+   98                   | '*' '|'
+   99                   | IDENT '|'
+
+  100 simple_selector: element_name
+  101                | element_name specifier_list
+  102                | specifier_list
+  103                | namespace_selector element_name
+  104                | namespace_selector element_name specifier_list
+  105                | namespace_selector specifier_list
+
+  106 simple_css3_selector: element_name
+  107                     | specifier
+  108                     | namespace_selector element_name
+  109                     | namespace_selector specifier
+
+  110 element_name: IDENT
+  111             | '*'
+
+  112 specifier_list: specifier
+  113               | specifier_list specifier
+  114               | specifier_list error
+
+  115 specifier: HASH
+  116          | class
+  117          | attrib
+  118          | pseudo
+
+  119 class: '.' IDENT
+
+  120 attrib_id: IDENT maybe_space
+
+  121 attrib: '[' maybe_space attrib_id ']'
+  122       | '[' maybe_space attrib_id match maybe_space ident_or_string maybe_space ']'
+  123       | '[' maybe_space namespace_selector attrib_id ']'
+  124       | '[' maybe_space namespace_selector attrib_id match maybe_space ident_or_string maybe_space ']'
+
+  125 match: '='
+  126      | INCLUDES
+  127      | DASHMATCH
+  128      | BEGINSWITH
+  129      | ENDSWITH
+  130      | CONTAINS
+
+  131 ident_or_string: IDENT
+  132                | STRING
+
+  133 pseudo: ':' IDENT
+  134       | ':' ':' IDENT
+  135       | ':' FUNCTION maybe_space NTH maybe_space ')'
+  136       | ':' FUNCTION maybe_space maybe_plus INTEGER maybe_space ')'
+  137       | ':' FUNCTION maybe_space IDENT maybe_space ')'
+  138       | ':' FUNCTION maybe_space STRING maybe_space ')'
+  139       | ':' NOTFUNCTION maybe_space simple_css3_selector maybe_space ')'
+
+  140 declaration_block: '{' maybe_space declaration '}'
+  141                  | '{' maybe_space error '}'
+  142                  | '{' maybe_space declaration_list '}'
+  143                  | '{' maybe_space declaration_list declaration '}'
+  144                  | '{' maybe_space declaration_list error '}'
+
+  145 declaration_list: declaration ';' maybe_space
+  146                 | error ';' maybe_space
+  147                 | declaration_list declaration ';' maybe_space
+  148                 | declaration_list error ';' maybe_space
+
+  149 declaration: property ':' maybe_space expr prio
+  150            | error invalid_block
+
+  151 property: IDENT maybe_space
+
+  152 prio: IMPORTANT_SYM maybe_space
+  153     | %empty
+
+  154 expr: term
+  155     | expr operator term
+
+  156 operator: '/' maybe_space
+  157         | ',' maybe_space
+  158         | %empty
+
+  159 term: unary_term
+  160     | unary_operator unary_term
+  161     | DIMEN maybe_space
+  162     | STRING maybe_space
+  163     | IDENT maybe_space
+  164     | URI maybe_space
+  165     | UNICODERANGE maybe_space
+  166     | hexcolor
+  167     | function
+
+  168 unary_term: INTEGER maybe_space
+  169           | FLOAT maybe_space
+  170           | PERCENTAGE maybe_space
+  171           | PXS maybe_space
+  172           | CMS maybe_space
+  173           | MMS maybe_space
+  174           | INS maybe_space
+  175           | PTS maybe_space
+  176           | PCS maybe_space
+  177           | DEGS maybe_space
+  178           | RADS maybe_space
+  179           | GRADS maybe_space
+  180           | MSECS maybe_space
+  181           | SECS maybe_space
+  182           | HERZ maybe_space
+  183           | KHERZ maybe_space
+  184           | EMS maybe_space
+  185           | QEMS maybe_space
+  186           | EXS maybe_space
+  187           | CHS maybe_space
+  188           | REMS maybe_space
+  189           | DPI maybe_space
+  190           | DPCM maybe_space
+  191           | VH maybe_space
+  192           | VW maybe_space
+  193           | VMIN maybe_space
+  194           | VMAX maybe_space
+
+  195 function: FUNCTION maybe_space expr ')' maybe_space
+  196         | FUNCTION maybe_space error
+
+  197 hexcolor: HEXCOLOR maybe_space
+
+  198 invalid_at: '@' error invalid_block
+  199           | '@' error ';'
+
+  200 invalid_rule: error invalid_block
+
+  201 invalid_block: '{' error invalid_block_list error '}'
+  202              | '{' error '}'
+
+  203 invalid_block_list: invalid_block
+  204                   | invalid_block_list error invalid_block
+
+
+Terminals, with rules where they appear
+
+    $end (0) 0
+    '(' (40) 58
+    ')' (41) 58 135 136 137 138 139 195
+    '*' (42) 98 111
+    '+' (43) 16 83 87
+    ',' (44) 71 90 157
+    '-' (45) 86
+    '.' (46) 119
+    '/' (47) 156
+    ':' (58) 57 133 134 135 136 137 138 139 149
+    ';' (59) 24 26 29 31 35 37 79 82 145 146 147 148 199
+    '=' (61) 125
+    '>' (62) 85
+    '@' (64) 198 199
+    '[' (91) 121 122 123 124
+    ']' (93) 121 122 123 124
+    '{' (123) 10 12 13 73 74 140 141 142 143 144 201 202
+    '|' (124) 97 98 99
+    '}' (125) 10 12 13 14 73 74 140 141 142 143 144 201 202
+    '~' (126) 84
+    error (256) 25 26 30 31 36 37 48 52 72 78 79 81 82 91 96 114 141 144 146 148 150 196 198 199 200 201 202 204
+    REDUCE (258)
+    S (259) 14 18 21 39 93 94
+    SGML_CD (260) 20
+    INCLUDES (261) 126
+    DASHMATCH (262) 127
+    BEGINSWITH (263) 128
+    ENDSWITH (264) 129
+    CONTAINS (265) 130
+    STRING <string> (266) 24 53 132 138 162
+    IDENT <string> (267) 39 55 77 99 110 119 120 131 133 134 137 151 163
+    NTH <string> (268) 135
+    HASH <string> (269) 115
+    HEXCOLOR <string> (270) 197
+    IMPORT_SYM (271) 29 30 31
+    PAGE_SYM (272) 78 79
+    MEDIA_SYM (273) 73 74
+    FONT_FACE_SYM (274) 80 81 82
+    CHARSET_SYM (275) 24 25 26
+    NAMESPACE_SYM (276) 34 36 37
+    KHTML_RULE_SYM (277) 10
+    KHTML_DECLS_SYM (278) 11
+    KHTML_VALUE_SYM (279) 12
+    KHTML_MEDIAQUERY_SYM (280) 14
+    KHTML_SELECTORS_SYM (281) 13
+    IMPORTANT_SYM (282) 152
+    MEDIA_ONLY (283) 64
+    MEDIA_NOT (284) 65
+    MEDIA_AND (285) 60 62
+    QEMS <val> (286) 185
+    EMS <val> (287) 184
+    EXS <val> (288) 186
+    CHS <val> (289) 187
+    REMS <val> (290) 188
+    PXS <val> (291) 171
+    CMS <val> (292) 172
+    MMS <val> (293) 173
+    INS <val> (294) 174
+    PTS <val> (295) 175
+    PCS <val> (296) 176
+    DEGS <val> (297) 177
+    RADS <val> (298) 178
+    GRADS <val> (299) 179
+    MSECS <val> (300) 180
+    SECS <val> (301) 181
+    HERZ <val> (302) 182
+    KHERZ <val> (303) 183
+    DPI <val> (304) 189
+    DPCM <val> (305) 190
+    VH <val> (306) 191
+    VW <val> (307) 192
+    VMIN <val> (308) 193
+    VMAX <val> (309) 194
+    DIMEN <string> (310) 161
+    PERCENTAGE <val> (311) 170
+    FLOAT <val> (312) 169
+    INTEGER <val> (313) 136 168
+    URI <string> (314) 54 164
+    FUNCTION <string> (315) 135 136 137 138 195 196
+    NOTFUNCTION <string> (316) 139
+    UNICODERANGE <string> (317) 165
+
+
+Nonterminals, with rules where they appear
+
+    $accept (82)
+        on left: 0
+    stylesheet (83)
+        on left: 1 2 3 4 5 6
+        on right: 0
+    ruleset_or_import_or_namespace <rule> (84)
+        on left: 7 8 9
+        on right: 10
+    khtml_rule (85)
+        on left: 10
+        on right: 2
+    khtml_decls (86)
+        on left: 11
+        on right: 3
+    khtml_value (87)
+        on left: 12
+        on right: 4
+    khtml_selectors (88)
+        on left: 13
+        on right: 6
+    khtml_mediaquery (89)
+        on left: 14
+        on right: 5
+    maybe_plus (90)
+        on left: 15 16
+        on right: 136
+    maybe_space (91)
+        on left: 17 18
+        on right: 1 2 3 4 5 6 10 12 13 14 18 24 29 34 35 55 57 58 60 62 67 71 73 74 76 77 80 83 84 85 90 120 121 122 123 124 135 136 137 138 139 140 141 142 143 144 145 146 147 148 149 151 152 156 157 161 162 163 164 165 168 169 170 171 172 173 174 175 176 177 178 179 180 181 182 183 184 185 186 187 188 189 190 191 192 193 194 195 196 197
+    maybe_sgml (92)
+        on left: 19 20 21
+        on right: 1 20 21 28 33 41
+    maybe_charset (93)
+        on left: 22 23
+        on right: 1
+    charset <rule> (94)
+        on left: 24 25 26
+        on right: 23
+    import_list (95)
+        on left: 27 28
+        on right: 1 28
+    import <rule> (96)
+        on left: 29 30 31
+        on right: 8 28 48 52
+    namespace_list (97)
+        on left: 32 33
+        on right: 1 33
+    namespace_rule <rule> (98)
+        on left: 34
+        on right: 9 35
+    namespace (99)
+        on left: 35 36 37
+        on right: 33
+    maybe_ns_prefix <string> (100)
+        on left: 38 39
+        on right: 34
+    rule_list (101)
+        on left: 40 41
+        on right: 1 41
+    rule <rule> (102)
+        on left: 42 43 44 45 46 47 48
+        on right: 41
+    safe_ruleset <rule> (103)
+        on left: 49 50 51 52
+        on right: 76
+    string_or_uri <string> (104)
+        on left: 53 54
+        on right: 29 34
+    media_feature <string> (105)
+        on left: 55
+        on right: 58
+    maybe_media_value <valueList> (106)
+        on left: 56 57
+        on right: 58
+    media_query_exp <mediaQueryExp> (107)
+        on left: 58
+        on right: 59 60
+    media_query_exp_list <mediaQueryExpList> (108)
+        on left: 59 60
+        on right: 60 62 66
+    maybe_and_media_query_exp_list <mediaQueryExpList> (109)
+        on left: 61 62
+        on right: 67
+    maybe_media_restrictor <mediaQueryRestrictor> (110)
+        on left: 63 64 65
+        on right: 67
+    media_query <mediaQuery> (111)
+        on left: 66 67
+        on right: 14 70 71
+    maybe_media_list <mediaList> (112)
+        on left: 68 69
+        on right: 29
+    media_list <mediaList> (113)
+        on left: 70 71 72
+        on right: 69 71 72 73
+    media <rule> (114)
+        on left: 73 74
+        on right: 43
+    ruleset_list <ruleList> (115)
+        on left: 75 76
+        on right: 73 74 76
+    medium <string> (116)
+        on left: 77
+        on right: 67
+    page <rule> (117)
+        on left: 78 79
+        on right: 44
+    font_face <rule> (118)
+        on left: 80 81 82
+        on right: 45
+    combinator <relation> (119)
+        on left: 83 84 85
+        on right: 95
+    unary_operator <val> (120)
+        on left: 86 87
+        on right: 160
+    ruleset <rule> (121)
+        on left: 88
+        on right: 7 42 49
+    selector_list <selectorList> (122)
+        on left: 89 90 91
+        on right: 13 88 90 91
+    selector <selector> (123)
+        on left: 92 93 94 95 96
+        on right: 89 90 93 94 95 96
+    namespace_selector <string> (124)
+        on left: 97 98 99
+        on right: 103 104 105 108 109 123 124
+    simple_selector <selector> (125)
+        on left: 100 101 102 103 104 105
+        on right: 92 94 95
+    simple_css3_selector <selector> (126)
+        on left: 106 107 108 109
+        on right: 139
+    element_name <element> (127)
+        on left: 110 111
+        on right: 100 101 103 104 106 108
+    specifier_list <selector> (128)
+        on left: 112 113 114
+        on right: 101 102 104 105 113 114
+    specifier <selector> (129)
+        on left: 115 116 117 118
+        on right: 107 109 112 113
+    class <selector> (130)
+        on left: 119
+        on right: 116
+    attrib_id <attribute> (131)
+        on left: 120
+        on right: 121 122 123 124
+    attrib <selector> (132)
+        on left: 121 122 123 124
+        on right: 117
+    match <match> (133)
+        on left: 125 126 127 128 129 130
+        on right: 122 124
+    ident_or_string <string> (134)
+        on left: 131 132
+        on right: 122 124
+    pseudo <selector> (135)
+        on left: 133 134 135 136 137 138 139
+        on right: 118
+    declaration_block <ok> (136)
+        on left: 140 141 142 143 144
+        on right: 11 80 88
+    declaration_list <ok> (137)
+        on left: 145 146 147 148
+        on right: 142 143 144 147 148
+    declaration <ok> (138)
+        on left: 149 150
+        on right: 140 143 145 147
+    property <prop_id> (139)
+        on left: 151
+        on right: 149
+    prio <b> (140)
+        on left: 152 153
+        on right: 149
+    expr <valueList> (141)
+        on left: 154 155
+        on right: 12 57 149 155 195
+    operator <tok> (142)
+        on left: 156 157 158
+        on right: 155
+    term <value> (143)
+        on left: 159 160 161 162 163 164 165 166 167
+        on right: 154 155
+    unary_term <value> (144)
+        on left: 168 169 170 171 172 173 174 175 176 177 178 179 180 181 182 183 184 185 186 187 188 189 190 191 192 193 194
+        on right: 159 160
+    function <value> (145)
+        on left: 195 196
+        on right: 167
+    hexcolor <string> (146)
+        on left: 197
+        on right: 166
+    invalid_at <rule> (147)
+        on left: 198 199
+        on right: 47 51
+    invalid_rule <rule> (148)
+        on left: 200
+        on right: 46 50
+    invalid_block (149)
+        on left: 201 202
+        on right: 25 30 36 78 81 150 198 200 203 204
+    invalid_block_list (150)
+        on left: 203 204
+        on right: 201 204
+
+
+State 0
+
+    0 $accept: . stylesheet $end
+
+    KHTML_RULE_SYM        shift, and go to state 1
+    KHTML_DECLS_SYM       shift, and go to state 2
+    KHTML_VALUE_SYM       shift, and go to state 3
+    KHTML_MEDIAQUERY_SYM  shift, and go to state 4
+    KHTML_SELECTORS_SYM   shift, and go to state 5
+
+    $default  reduce using rule 17 (maybe_space)
+
+    stylesheet        go to state 6
+    khtml_rule        go to state 7
+    khtml_decls       go to state 8
+    khtml_value       go to state 9
+    khtml_selectors   go to state 10
+    khtml_mediaquery  go to state 11
+    maybe_space       go to state 12
+
+
+State 1
+
+   10 khtml_rule: KHTML_RULE_SYM . '{' maybe_space ruleset_or_import_or_namespace maybe_space '}'
+
+    '{'  shift, and go to state 13
+
+
+State 2
+
+   11 khtml_decls: KHTML_DECLS_SYM . declaration_block
+
+    '{'  shift, and go to state 14
+
+    declaration_block  go to state 15
+
+
+State 3
+
+   12 khtml_value: KHTML_VALUE_SYM . '{' maybe_space expr '}'
+
+    '{'  shift, and go to state 16
+
+
+State 4
+
+   14 khtml_mediaquery: KHTML_MEDIAQUERY_SYM . S maybe_space media_query '}'
+
+    S  shift, and go to state 17
+
+
+State 5
+
+   13 khtml_selectors: KHTML_SELECTORS_SYM . '{' maybe_space selector_list '}'
+
+    '{'  shift, and go to state 18
+
+
+State 6
+
+    0 $accept: stylesheet . $end
+
+    $end  shift, and go to state 19
+
+
+State 7
+
+    2 stylesheet: khtml_rule . maybe_space
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 20
+
+
+State 8
+
+    3 stylesheet: khtml_decls . maybe_space
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 21
+
+
+State 9
+
+    4 stylesheet: khtml_value . maybe_space
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 22
+
+
+State 10
+
+    6 stylesheet: khtml_selectors . maybe_space
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 23
+
+
+State 11
+
+    5 stylesheet: khtml_mediaquery . maybe_space
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 24
+
+
+State 12
+
+    1 stylesheet: maybe_space . maybe_charset maybe_sgml import_list namespace_list rule_list
+   18 maybe_space: maybe_space . S
+
+    S            shift, and go to state 25
+    CHARSET_SYM  shift, and go to state 26
+
+    S         [reduce using rule 22 (maybe_charset)]
+    $default  reduce using rule 22 (maybe_charset)
+
+    maybe_charset  go to state 27
+    charset        go to state 28
+
+
+State 13
+
+   10 khtml_rule: KHTML_RULE_SYM '{' . maybe_space ruleset_or_import_or_namespace maybe_space '}'
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 29
+
+
+State 14
+
+  140 declaration_block: '{' . maybe_space declaration '}'
+  141                  | '{' . maybe_space error '}'
+  142                  | '{' . maybe_space declaration_list '}'
+  143                  | '{' . maybe_space declaration_list declaration '}'
+  144                  | '{' . maybe_space declaration_list error '}'
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 30
+
+
+State 15
+
+   11 khtml_decls: KHTML_DECLS_SYM declaration_block .
+
+    $default  reduce using rule 11 (khtml_decls)
+
+
+State 16
+
+   12 khtml_value: KHTML_VALUE_SYM '{' . maybe_space expr '}'
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 31
+
+
+State 17
+
+   14 khtml_mediaquery: KHTML_MEDIAQUERY_SYM S . maybe_space media_query '}'
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 32
+
+
+State 18
+
+   13 khtml_selectors: KHTML_SELECTORS_SYM '{' . maybe_space selector_list '}'
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 33
+
+
+State 19
+
+    0 $accept: stylesheet $end .
+
+    $default  accept
+
+
+State 20
+
+    2 stylesheet: khtml_rule maybe_space .
+   18 maybe_space: maybe_space . S
+
+    S  shift, and go to state 25
+
+    $default  reduce using rule 2 (stylesheet)
+
+
+State 21
+
+    3 stylesheet: khtml_decls maybe_space .
+   18 maybe_space: maybe_space . S
+
+    S  shift, and go to state 25
+
+    $default  reduce using rule 3 (stylesheet)
+
+
+State 22
+
+    4 stylesheet: khtml_value maybe_space .
+   18 maybe_space: maybe_space . S
+
+    S  shift, and go to state 25
+
+    $default  reduce using rule 4 (stylesheet)
+
+
+State 23
+
+    6 stylesheet: khtml_selectors maybe_space .
+   18 maybe_space: maybe_space . S
+
+    S  shift, and go to state 25
+
+    $default  reduce using rule 6 (stylesheet)
+
+
+State 24
+
+    5 stylesheet: khtml_mediaquery maybe_space .
+   18 maybe_space: maybe_space . S
+
+    S  shift, and go to state 25
+
+    $default  reduce using rule 5 (stylesheet)
+
+
+State 25
+
+   18 maybe_space: maybe_space S .
+
+    $default  reduce using rule 18 (maybe_space)
+
+
+State 26
+
+   24 charset: CHARSET_SYM . maybe_space STRING maybe_space ';'
+   25        | CHARSET_SYM . error invalid_block
+   26        | CHARSET_SYM . error ';'
+
+    error  shift, and go to state 34
+
+    S       reduce using rule 17 (maybe_space)
+    STRING  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 35
+
+
+State 27
+
+    1 stylesheet: maybe_space maybe_charset . maybe_sgml import_list namespace_list rule_list
+
+    $default  reduce using rule 19 (maybe_sgml)
+
+    maybe_sgml  go to state 36
+
+
+State 28
+
+   23 maybe_charset: charset .
+
+    $default  reduce using rule 23 (maybe_charset)
+
+
+State 29
+
+   10 khtml_rule: KHTML_RULE_SYM '{' maybe_space . ruleset_or_import_or_namespace maybe_space '}'
+   18 maybe_space: maybe_space . S
+
+    S              shift, and go to state 25
+    IDENT          shift, and go to state 37
+    HASH           shift, and go to state 38
+    ':'            shift, and go to state 39
+    '.'            shift, and go to state 40
+    '['            shift, and go to state 41
+    '*'            shift, and go to state 42
+    '|'            shift, and go to state 43
+    IMPORT_SYM     shift, and go to state 44
+    NAMESPACE_SYM  shift, and go to state 45
+
+    ruleset_or_import_or_namespace  go to state 46
+    import                          go to state 47
+    namespace_rule                  go to state 48
+    ruleset                         go to state 49
+    selector_list                   go to state 50
+    selector                        go to state 51
+    namespace_selector              go to state 52
+    simple_selector                 go to state 53
+    element_name                    go to state 54
+    specifier_list                  go to state 55
+    specifier                       go to state 56
+    class                           go to state 57
+    attrib                          go to state 58
+    pseudo                          go to state 59
+
+
+State 30
+
+   18 maybe_space: maybe_space . S
+  140 declaration_block: '{' maybe_space . declaration '}'
+  141                  | '{' maybe_space . error '}'
+  142                  | '{' maybe_space . declaration_list '}'
+  143                  | '{' maybe_space . declaration_list declaration '}'
+  144                  | '{' maybe_space . declaration_list error '}'
+
+    error  shift, and go to state 60
+    S      shift, and go to state 25
+    IDENT  shift, and go to state 61
+
+    declaration_list  go to state 62
+    declaration       go to state 63
+    property          go to state 64
+
+
+State 31
+
+   12 khtml_value: KHTML_VALUE_SYM '{' maybe_space . expr '}'
+   18 maybe_space: maybe_space . S
+
+    S             shift, and go to state 25
+    STRING        shift, and go to state 65
+    IDENT         shift, and go to state 66
+    HEXCOLOR      shift, and go to state 67
+    QEMS          shift, and go to state 68
+    EMS           shift, and go to state 69
+    EXS           shift, and go to state 70
+    CHS           shift, and go to state 71
+    REMS          shift, and go to state 72
+    PXS           shift, and go to state 73
+    CMS           shift, and go to state 74
+    MMS           shift, and go to state 75
+    INS           shift, and go to state 76
+    PTS           shift, and go to state 77
+    PCS           shift, and go to state 78
+    DEGS          shift, and go to state 79
+    RADS          shift, and go to state 80
+    GRADS         shift, and go to state 81
+    MSECS         shift, and go to state 82
+    SECS          shift, and go to state 83
+    HERZ          shift, and go to state 84
+    KHERZ         shift, and go to state 85
+    DPI           shift, and go to state 86
+    DPCM          shift, and go to state 87
+    VH            shift, and go to state 88
+    VW            shift, and go to state 89
+    VMIN          shift, and go to state 90
+    VMAX          shift, and go to state 91
+    DIMEN         shift, and go to state 92
+    PERCENTAGE    shift, and go to state 93
+    FLOAT         shift, and go to state 94
+    INTEGER       shift, and go to state 95
+    URI           shift, and go to state 96
+    FUNCTION      shift, and go to state 97
+    UNICODERANGE  shift, and go to state 98
+    '+'           shift, and go to state 99
+    '-'           shift, and go to state 100
+
+    unary_operator  go to state 101
+    expr            go to state 102
+    term            go to state 103
+    unary_term      go to state 104
+    function        go to state 105
+    hexcolor        go to state 106
+
+
+State 32
+
+   14 khtml_mediaquery: KHTML_MEDIAQUERY_SYM S maybe_space . media_query '}'
+   18 maybe_space: maybe_space . S
+
+    S           shift, and go to state 25
+    MEDIA_ONLY  shift, and go to state 107
+    MEDIA_NOT   shift, and go to state 108
+    '('         shift, and go to state 109
+
+    S         [reduce using rule 63 (maybe_media_restrictor)]
+    $default  reduce using rule 63 (maybe_media_restrictor)
+
+    media_query_exp         go to state 110
+    media_query_exp_list    go to state 111
+    maybe_media_restrictor  go to state 112
+    media_query             go to state 113
+
+
+State 33
+
+   13 khtml_selectors: KHTML_SELECTORS_SYM '{' maybe_space . selector_list '}'
+   18 maybe_space: maybe_space . S
+
+    S      shift, and go to state 25
+    IDENT  shift, and go to state 37
+    HASH   shift, and go to state 38
+    ':'    shift, and go to state 39
+    '.'    shift, and go to state 40
+    '['    shift, and go to state 41
+    '*'    shift, and go to state 42
+    '|'    shift, and go to state 43
+
+    selector_list       go to state 114
+    selector            go to state 51
+    namespace_selector  go to state 52
+    simple_selector     go to state 53
+    element_name        go to state 54
+    specifier_list      go to state 55
+    specifier           go to state 56
+    class               go to state 57
+    attrib              go to state 58
+    pseudo              go to state 59
+
+
+State 34
+
+   25 charset: CHARSET_SYM error . invalid_block
+   26        | CHARSET_SYM error . ';'
+
+    '{'  shift, and go to state 115
+    ';'  shift, and go to state 116
+
+    invalid_block  go to state 117
+
+
+State 35
+
+   18 maybe_space: maybe_space . S
+   24 charset: CHARSET_SYM maybe_space . STRING maybe_space ';'
+
+    S       shift, and go to state 25
+    STRING  shift, and go to state 118
+
+
+State 36
+
+    1 stylesheet: maybe_space maybe_charset maybe_sgml . import_list namespace_list rule_list
+   20 maybe_sgml: maybe_sgml . SGML_CD
+   21           | maybe_sgml . S
+
+    S        shift, and go to state 119
+    SGML_CD  shift, and go to state 120
+
+    $default  reduce using rule 27 (import_list)
+
+    import_list  go to state 121
+
+
+State 37
+
+   99 namespace_selector: IDENT . '|'
+  110 element_name: IDENT .
+
+    '|'  shift, and go to state 122
+
+    $default  reduce using rule 110 (element_name)
+
+
+State 38
+
+  115 specifier: HASH .
+
+    $default  reduce using rule 115 (specifier)
+
+
+State 39
+
+  133 pseudo: ':' . IDENT
+  134       | ':' . ':' IDENT
+  135       | ':' . FUNCTION maybe_space NTH maybe_space ')'
+  136       | ':' . FUNCTION maybe_space maybe_plus INTEGER maybe_space ')'
+  137       | ':' . FUNCTION maybe_space IDENT maybe_space ')'
+  138       | ':' . FUNCTION maybe_space STRING maybe_space ')'
+  139       | ':' . NOTFUNCTION maybe_space simple_css3_selector maybe_space ')'
+
+    IDENT        shift, and go to state 123
+    ':'          shift, and go to state 124
+    FUNCTION     shift, and go to state 125
+    NOTFUNCTION  shift, and go to state 126
+
+
+State 40
+
+  119 class: '.' . IDENT
+
+    IDENT  shift, and go to state 127
+
+
+State 41
+
+  121 attrib: '[' . maybe_space attrib_id ']'
+  122       | '[' . maybe_space attrib_id match maybe_space ident_or_string maybe_space ']'
+  123       | '[' . maybe_space namespace_selector attrib_id ']'
+  124       | '[' . maybe_space namespace_selector attrib_id match maybe_space ident_or_string maybe_space ']'
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 128
+
+
+State 42
+
+   98 namespace_selector: '*' . '|'
+  111 element_name: '*' .
+
+    '|'  shift, and go to state 129
+
+    $default  reduce using rule 111 (element_name)
+
+
+State 43
+
+   97 namespace_selector: '|' .
+
+    $default  reduce using rule 97 (namespace_selector)
+
+
+State 44
+
+   29 import: IMPORT_SYM . maybe_space string_or_uri maybe_space maybe_media_list ';'
+   30       | IMPORT_SYM . error invalid_block
+   31       | IMPORT_SYM . error ';'
+
+    error  shift, and go to state 130
+
+    S       reduce using rule 17 (maybe_space)
+    STRING  reduce using rule 17 (maybe_space)
+    URI     reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 131
+
+
+State 45
+
+   34 namespace_rule: NAMESPACE_SYM . maybe_space maybe_ns_prefix string_or_uri
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 132
+
+
+State 46
+
+   10 khtml_rule: KHTML_RULE_SYM '{' maybe_space ruleset_or_import_or_namespace . maybe_space '}'
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 133
+
+
+State 47
+
+    8 ruleset_or_import_or_namespace: import .
+
+    $default  reduce using rule 8 (ruleset_or_import_or_namespace)
+
+
+State 48
+
+    9 ruleset_or_import_or_namespace: namespace_rule .
+
+    $default  reduce using rule 9 (ruleset_or_import_or_namespace)
+
+
+State 49
+
+    7 ruleset_or_import_or_namespace: ruleset .
+
+    $default  reduce using rule 7 (ruleset_or_import_or_namespace)
+
+
+State 50
+
+   88 ruleset: selector_list . declaration_block
+   90 selector_list: selector_list . ',' maybe_space selector
+   91              | selector_list . error
+
+    error  shift, and go to state 134
+    '{'    shift, and go to state 14
+    ','    shift, and go to state 135
+
+    declaration_block  go to state 136
+
+
+State 51
+
+   89 selector_list: selector .
+   93 selector: selector . S
+   94         | selector . S simple_selector
+   95         | selector . combinator simple_selector
+   96         | selector . error
+
+    error  shift, and go to state 137
+    S      shift, and go to state 138
+    '+'    shift, and go to state 139
+    '~'    shift, and go to state 140
+    '>'    shift, and go to state 141
+
+    '{'  reduce using rule 89 (selector_list)
+    '}'  reduce using rule 89 (selector_list)
+    ','  reduce using rule 89 (selector_list)
+
+    combinator  go to state 142
+
+
+State 52
+
+  103 simple_selector: namespace_selector . element_name
+  104                | namespace_selector . element_name specifier_list
+  105                | namespace_selector . specifier_list
+
+    IDENT  shift, and go to state 143
+    HASH   shift, and go to state 38
+    ':'    shift, and go to state 39
+    '.'    shift, and go to state 40
+    '['    shift, and go to state 41
+    '*'    shift, and go to state 144
+
+    element_name    go to state 145
+    specifier_list  go to state 146
+    specifier       go to state 56
+    class           go to state 57
+    attrib          go to state 58
+    pseudo          go to state 59
+
+
+State 53
+
+   92 selector: simple_selector .
+
+    $default  reduce using rule 92 (selector)
+
+
+State 54
+
+  100 simple_selector: element_name .
+  101                | element_name . specifier_list
+
+    HASH  shift, and go to state 38
+    ':'   shift, and go to state 39
+    '.'   shift, and go to state 40
+    '['   shift, and go to state 41
+
+    $default  reduce using rule 100 (simple_selector)
+
+    specifier_list  go to state 147
+    specifier       go to state 56
+    class           go to state 57
+    attrib          go to state 58
+    pseudo          go to state 59
+
+
+State 55
+
+  102 simple_selector: specifier_list .
+  113 specifier_list: specifier_list . specifier
+  114               | specifier_list . error
+
+    error  shift, and go to state 148
+    HASH   shift, and go to state 38
+    ':'    shift, and go to state 39
+    '.'    shift, and go to state 40
+    '['    shift, and go to state 41
+
+    error  [reduce using rule 102 (simple_selector)]
+    S      reduce using rule 102 (simple_selector)
+    '{'    reduce using rule 102 (simple_selector)
+    '}'    reduce using rule 102 (simple_selector)
+    '+'    reduce using rule 102 (simple_selector)
+    ','    reduce using rule 102 (simple_selector)
+    '~'    reduce using rule 102 (simple_selector)
+    '>'    reduce using rule 102 (simple_selector)
+
+    specifier  go to state 149
+    class      go to state 57
+    attrib     go to state 58
+    pseudo     go to state 59
+
+
+State 56
+
+  112 specifier_list: specifier .
+
+    $default  reduce using rule 112 (specifier_list)
+
+
+State 57
+
+  116 specifier: class .
+
+    $default  reduce using rule 116 (specifier)
+
+
+State 58
+
+  117 specifier: attrib .
+
+    $default  reduce using rule 117 (specifier)
+
+
+State 59
+
+  118 specifier: pseudo .
+
+    $default  reduce using rule 118 (specifier)
+
+
+State 60
+
+  141 declaration_block: '{' maybe_space error . '}'
+  146 declaration_list: error . ';' maybe_space
+  150 declaration: error . invalid_block
+
+    '{'  shift, and go to state 115
+    '}'  shift, and go to state 150
+    ';'  shift, and go to state 151
+
+    invalid_block  go to state 152
+
+
+State 61
+
+  151 property: IDENT . maybe_space
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 153
+
+
+State 62
+
+  142 declaration_block: '{' maybe_space declaration_list . '}'
+  143                  | '{' maybe_space declaration_list . declaration '}'
+  144                  | '{' maybe_space declaration_list . error '}'
+  147 declaration_list: declaration_list . declaration ';' maybe_space
+  148                 | declaration_list . error ';' maybe_space
+
+    error  shift, and go to state 154
+    IDENT  shift, and go to state 61
+    '}'    shift, and go to state 155
+
+    declaration  go to state 156
+    property     go to state 64
+
+
+State 63
+
+  140 declaration_block: '{' maybe_space declaration . '}'
+  145 declaration_list: declaration . ';' maybe_space
+
+    '}'  shift, and go to state 157
+    ';'  shift, and go to state 158
+
+
+State 64
+
+  149 declaration: property . ':' maybe_space expr prio
+
+    ':'  shift, and go to state 159
+
+
+State 65
+
+  162 term: STRING . maybe_space
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 160
+
+
+State 66
+
+  163 term: IDENT . maybe_space
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 161
+
+
+State 67
+
+  197 hexcolor: HEXCOLOR . maybe_space
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 162
+
+
+State 68
+
+  185 unary_term: QEMS . maybe_space
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 163
+
+
+State 69
+
+  184 unary_term: EMS . maybe_space
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 164
+
+
+State 70
+
+  186 unary_term: EXS . maybe_space
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 165
+
+
+State 71
+
+  187 unary_term: CHS . maybe_space
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 166
+
+
+State 72
+
+  188 unary_term: REMS . maybe_space
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 167
+
+
+State 73
+
+  171 unary_term: PXS . maybe_space
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 168
+
+
+State 74
+
+  172 unary_term: CMS . maybe_space
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 169
+
+
+State 75
+
+  173 unary_term: MMS . maybe_space
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 170
+
+
+State 76
+
+  174 unary_term: INS . maybe_space
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 171
+
+
+State 77
+
+  175 unary_term: PTS . maybe_space
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 172
+
+
+State 78
+
+  176 unary_term: PCS . maybe_space
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 173
+
+
+State 79
+
+  177 unary_term: DEGS . maybe_space
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 174
+
+
+State 80
+
+  178 unary_term: RADS . maybe_space
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 175
+
+
+State 81
+
+  179 unary_term: GRADS . maybe_space
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 176
+
+
+State 82
+
+  180 unary_term: MSECS . maybe_space
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 177
+
+
+State 83
+
+  181 unary_term: SECS . maybe_space
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 178
+
+
+State 84
+
+  182 unary_term: HERZ . maybe_space
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 179
+
+
+State 85
+
+  183 unary_term: KHERZ . maybe_space
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 180
+
+
+State 86
+
+  189 unary_term: DPI . maybe_space
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 181
+
+
+State 87
+
+  190 unary_term: DPCM . maybe_space
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 182
+
+
+State 88
+
+  191 unary_term: VH . maybe_space
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 183
+
+
+State 89
+
+  192 unary_term: VW . maybe_space
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 184
+
+
+State 90
+
+  193 unary_term: VMIN . maybe_space
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 185
+
+
+State 91
+
+  194 unary_term: VMAX . maybe_space
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 186
+
+
+State 92
+
+  161 term: DIMEN . maybe_space
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 187
+
+
+State 93
+
+  170 unary_term: PERCENTAGE . maybe_space
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 188
+
+
+State 94
+
+  169 unary_term: FLOAT . maybe_space
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 189
+
+
+State 95
+
+  168 unary_term: INTEGER . maybe_space
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 190
+
+
+State 96
+
+  164 term: URI . maybe_space
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 191
+
+
+State 97
+
+  195 function: FUNCTION . maybe_space expr ')' maybe_space
+  196         | FUNCTION . maybe_space error
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 192
+
+
+State 98
+
+  165 term: UNICODERANGE . maybe_space
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 193
+
+
+State 99
+
+   87 unary_operator: '+' .
+
+    $default  reduce using rule 87 (unary_operator)
+
+
+State 100
+
+   86 unary_operator: '-' .
+
+    $default  reduce using rule 86 (unary_operator)
+
+
+State 101
+
+  160 term: unary_operator . unary_term
+
+    QEMS        shift, and go to state 68
+    EMS         shift, and go to state 69
+    EXS         shift, and go to state 70
+    CHS         shift, and go to state 71
+    REMS        shift, and go to state 72
+    PXS         shift, and go to state 73
+    CMS         shift, and go to state 74
+    MMS         shift, and go to state 75
+    INS         shift, and go to state 76
+    PTS         shift, and go to state 77
+    PCS         shift, and go to state 78
+    DEGS        shift, and go to state 79
+    RADS        shift, and go to state 80
+    GRADS       shift, and go to state 81
+    MSECS       shift, and go to state 82
+    SECS        shift, and go to state 83
+    HERZ        shift, and go to state 84
+    KHERZ       shift, and go to state 85
+    DPI         shift, and go to state 86
+    DPCM        shift, and go to state 87
+    VH          shift, and go to state 88
+    VW          shift, and go to state 89
+    VMIN        shift, and go to state 90
+    VMAX        shift, and go to state 91
+    PERCENTAGE  shift, and go to state 93
+    FLOAT       shift, and go to state 94
+    INTEGER     shift, and go to state 95
+
+    unary_term  go to state 194
+
+
+State 102
+
+   12 khtml_value: KHTML_VALUE_SYM '{' maybe_space expr . '}'
+  155 expr: expr . operator term
+
+    '}'  shift, and go to state 195
+    ','  shift, and go to state 196
+    '/'  shift, and go to state 197
+
+    $default  reduce using rule 158 (operator)
+
+    operator  go to state 198
+
+
+State 103
+
+  154 expr: term .
+
+    $default  reduce using rule 154 (expr)
+
+
+State 104
+
+  159 term: unary_term .
+
+    $default  reduce using rule 159 (term)
+
+
+State 105
+
+  167 term: function .
+
+    $default  reduce using rule 167 (term)
+
+
+State 106
+
+  166 term: hexcolor .
+
+    $default  reduce using rule 166 (term)
+
+
+State 107
+
+   64 maybe_media_restrictor: MEDIA_ONLY .
+
+    $default  reduce using rule 64 (maybe_media_restrictor)
+
+
+State 108
+
+   65 maybe_media_restrictor: MEDIA_NOT .
+
+    $default  reduce using rule 65 (maybe_media_restrictor)
+
+
+State 109
+
+   58 media_query_exp: '(' . maybe_space media_feature maybe_space maybe_media_value ')' maybe_space
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 199
+
+
+State 110
+
+   59 media_query_exp_list: media_query_exp .
+
+    $default  reduce using rule 59 (media_query_exp_list)
+
+
+State 111
+
+   60 media_query_exp_list: media_query_exp_list . maybe_space MEDIA_AND maybe_space media_query_exp
+   66 media_query: media_query_exp_list .
+
+    S          reduce using rule 17 (maybe_space)
+    MEDIA_AND  reduce using rule 17 (maybe_space)
+    $default   reduce using rule 66 (media_query)
+
+    maybe_space  go to state 200
+
+
+State 112
+
+   67 media_query: maybe_media_restrictor . maybe_space medium maybe_and_media_query_exp_list
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 201
+
+
+State 113
+
+   14 khtml_mediaquery: KHTML_MEDIAQUERY_SYM S maybe_space media_query . '}'
+
+    '}'  shift, and go to state 202
+
+
+State 114
+
+   13 khtml_selectors: KHTML_SELECTORS_SYM '{' maybe_space selector_list . '}'
+   90 selector_list: selector_list . ',' maybe_space selector
+   91              | selector_list . error
+
+    error  shift, and go to state 134
+    '}'    shift, and go to state 203
+    ','    shift, and go to state 135
+
+
+State 115
+
+  201 invalid_block: '{' . error invalid_block_list error '}'
+  202              | '{' . error '}'
+
+    error  shift, and go to state 204
+
+
+State 116
+
+   26 charset: CHARSET_SYM error ';' .
+
+    $default  reduce using rule 26 (charset)
+
+
+State 117
+
+   25 charset: CHARSET_SYM error invalid_block .
+
+    $default  reduce using rule 25 (charset)
+
+
+State 118
+
+   24 charset: CHARSET_SYM maybe_space STRING . maybe_space ';'
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 205
+
+
+State 119
+
+   21 maybe_sgml: maybe_sgml S .
+
+    $default  reduce using rule 21 (maybe_sgml)
+
+
+State 120
+
+   20 maybe_sgml: maybe_sgml SGML_CD .
+
+    $default  reduce using rule 20 (maybe_sgml)
+
+
+State 121
+
+    1 stylesheet: maybe_space maybe_charset maybe_sgml import_list . namespace_list rule_list
+   28 import_list: import_list . import maybe_sgml
+
+    IMPORT_SYM  shift, and go to state 44
+
+    $default  reduce using rule 32 (namespace_list)
+
+    import          go to state 206
+    namespace_list  go to state 207
+
+
+State 122
+
+   99 namespace_selector: IDENT '|' .
+
+    $default  reduce using rule 99 (namespace_selector)
+
+
+State 123
+
+  133 pseudo: ':' IDENT .
+
+    $default  reduce using rule 133 (pseudo)
+
+
+State 124
+
+  134 pseudo: ':' ':' . IDENT
+
+    IDENT  shift, and go to state 208
+
+
+State 125
+
+  135 pseudo: ':' FUNCTION . maybe_space NTH maybe_space ')'
+  136       | ':' FUNCTION . maybe_space maybe_plus INTEGER maybe_space ')'
+  137       | ':' FUNCTION . maybe_space IDENT maybe_space ')'
+  138       | ':' FUNCTION . maybe_space STRING maybe_space ')'
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 209
+
+
+State 126
+
+  139 pseudo: ':' NOTFUNCTION . maybe_space simple_css3_selector maybe_space ')'
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 210
+
+
+State 127
+
+  119 class: '.' IDENT .
+
+    $default  reduce using rule 119 (class)
+
+
+State 128
+
+   18 maybe_space: maybe_space . S
+  121 attrib: '[' maybe_space . attrib_id ']'
+  122       | '[' maybe_space . attrib_id match maybe_space ident_or_string maybe_space ']'
+  123       | '[' maybe_space . namespace_selector attrib_id ']'
+  124       | '[' maybe_space . namespace_selector attrib_id match maybe_space ident_or_string maybe_space ']'
+
+    S      shift, and go to state 25
+    IDENT  shift, and go to state 211
+    '*'    shift, and go to state 212
+    '|'    shift, and go to state 43
+
+    namespace_selector  go to state 213
+    attrib_id           go to state 214
+
+
+State 129
+
+   98 namespace_selector: '*' '|' .
+
+    $default  reduce using rule 98 (namespace_selector)
+
+
+State 130
+
+   30 import: IMPORT_SYM error . invalid_block
+   31       | IMPORT_SYM error . ';'
+
+    '{'  shift, and go to state 115
+    ';'  shift, and go to state 215
+
+    invalid_block  go to state 216
+
+
+State 131
+
+   18 maybe_space: maybe_space . S
+   29 import: IMPORT_SYM maybe_space . string_or_uri maybe_space maybe_media_list ';'
+
+    S       shift, and go to state 25
+    STRING  shift, and go to state 217
+    URI     shift, and go to state 218
+
+    string_or_uri  go to state 219
+
+
+State 132
+
+   18 maybe_space: maybe_space . S
+   34 namespace_rule: NAMESPACE_SYM maybe_space . maybe_ns_prefix string_or_uri
+
+    S      shift, and go to state 25
+    IDENT  shift, and go to state 220
+
+    $default  reduce using rule 38 (maybe_ns_prefix)
+
+    maybe_ns_prefix  go to state 221
+
+
+State 133
+
+   10 khtml_rule: KHTML_RULE_SYM '{' maybe_space ruleset_or_import_or_namespace maybe_space . '}'
+   18 maybe_space: maybe_space . S
+
+    S    shift, and go to state 25
+    '}'  shift, and go to state 222
+
+
+State 134
+
+   91 selector_list: selector_list error .
+
+    $default  reduce using rule 91 (selector_list)
+
+
+State 135
+
+   90 selector_list: selector_list ',' . maybe_space selector
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 223
+
+
+State 136
+
+   88 ruleset: selector_list declaration_block .
+
+    $default  reduce using rule 88 (ruleset)
+
+
+State 137
+
+   96 selector: selector error .
+
+    $default  reduce using rule 96 (selector)
+
+
+State 138
+
+   93 selector: selector S .
+   94         | selector S . simple_selector
+
+    IDENT  shift, and go to state 37
+    HASH   shift, and go to state 38
+    ':'    shift, and go to state 39
+    '.'    shift, and go to state 40
+    '['    shift, and go to state 41
+    '*'    shift, and go to state 42
+    '|'    shift, and go to state 43
+
+    $default  reduce using rule 93 (selector)
+
+    namespace_selector  go to state 52
+    simple_selector     go to state 224
+    element_name        go to state 54
+    specifier_list      go to state 55
+    specifier           go to state 56
+    class               go to state 57
+    attrib              go to state 58
+    pseudo              go to state 59
+
+
+State 139
+
+   83 combinator: '+' . maybe_space
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 225
+
+
+State 140
+
+   84 combinator: '~' . maybe_space
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 226
+
+
+State 141
+
+   85 combinator: '>' . maybe_space
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 227
+
+
+State 142
+
+   95 selector: selector combinator . simple_selector
+
+    IDENT  shift, and go to state 37
+    HASH   shift, and go to state 38
+    ':'    shift, and go to state 39
+    '.'    shift, and go to state 40
+    '['    shift, and go to state 41
+    '*'    shift, and go to state 42
+    '|'    shift, and go to state 43
+
+    namespace_selector  go to state 52
+    simple_selector     go to state 228
+    element_name        go to state 54
+    specifier_list      go to state 55
+    specifier           go to state 56
+    class               go to state 57
+    attrib              go to state 58
+    pseudo              go to state 59
+
+
+State 143
+
+  110 element_name: IDENT .
+
+    $default  reduce using rule 110 (element_name)
+
+
+State 144
+
+  111 element_name: '*' .
+
+    $default  reduce using rule 111 (element_name)
+
+
+State 145
+
+  103 simple_selector: namespace_selector element_name .
+  104                | namespace_selector element_name . specifier_list
+
+    HASH  shift, and go to state 38
+    ':'   shift, and go to state 39
+    '.'   shift, and go to state 40
+    '['   shift, and go to state 41
+
+    $default  reduce using rule 103 (simple_selector)
+
+    specifier_list  go to state 229
+    specifier       go to state 56
+    class           go to state 57
+    attrib          go to state 58
+    pseudo          go to state 59
+
+
+State 146
+
+  105 simple_selector: namespace_selector specifier_list .
+  113 specifier_list: specifier_list . specifier
+  114               | specifier_list . error
+
+    error  shift, and go to state 148
+    HASH   shift, and go to state 38
+    ':'    shift, and go to state 39
+    '.'    shift, and go to state 40
+    '['    shift, and go to state 41
+
+    error  [reduce using rule 105 (simple_selector)]
+    S      reduce using rule 105 (simple_selector)
+    '{'    reduce using rule 105 (simple_selector)
+    '}'    reduce using rule 105 (simple_selector)
+    '+'    reduce using rule 105 (simple_selector)
+    ','    reduce using rule 105 (simple_selector)
+    '~'    reduce using rule 105 (simple_selector)
+    '>'    reduce using rule 105 (simple_selector)
+
+    specifier  go to state 149
+    class      go to state 57
+    attrib     go to state 58
+    pseudo     go to state 59
+
+
+State 147
+
+  101 simple_selector: element_name specifier_list .
+  113 specifier_list: specifier_list . specifier
+  114               | specifier_list . error
+
+    error  shift, and go to state 148
+    HASH   shift, and go to state 38
+    ':'    shift, and go to state 39
+    '.'    shift, and go to state 40
+    '['    shift, and go to state 41
+
+    error  [reduce using rule 101 (simple_selector)]
+    S      reduce using rule 101 (simple_selector)
+    '{'    reduce using rule 101 (simple_selector)
+    '}'    reduce using rule 101 (simple_selector)
+    '+'    reduce using rule 101 (simple_selector)
+    ','    reduce using rule 101 (simple_selector)
+    '~'    reduce using rule 101 (simple_selector)
+    '>'    reduce using rule 101 (simple_selector)
+
+    specifier  go to state 149
+    class      go to state 57
+    attrib     go to state 58
+    pseudo     go to state 59
+
+
+State 148
+
+  114 specifier_list: specifier_list error .
+
+    $default  reduce using rule 114 (specifier_list)
+
+
+State 149
+
+  113 specifier_list: specifier_list specifier .
+
+    $default  reduce using rule 113 (specifier_list)
+
+
+State 150
+
+  141 declaration_block: '{' maybe_space error '}' .
+
+    $default  reduce using rule 141 (declaration_block)
+
+
+State 151
+
+  146 declaration_list: error ';' . maybe_space
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 230
+
+
+State 152
+
+  150 declaration: error invalid_block .
+
+    $default  reduce using rule 150 (declaration)
+
+
+State 153
+
+   18 maybe_space: maybe_space . S
+  151 property: IDENT maybe_space .
+
+    S  shift, and go to state 25
+
+    $default  reduce using rule 151 (property)
+
+
+State 154
+
+  144 declaration_block: '{' maybe_space declaration_list error . '}'
+  148 declaration_list: declaration_list error . ';' maybe_space
+  150 declaration: error . invalid_block
+
+    '{'  shift, and go to state 115
+    '}'  shift, and go to state 231
+    ';'  shift, and go to state 232
+
+    invalid_block  go to state 152
+
+
+State 155
+
+  142 declaration_block: '{' maybe_space declaration_list '}' .
+
+    $default  reduce using rule 142 (declaration_block)
+
+
+State 156
+
+  143 declaration_block: '{' maybe_space declaration_list declaration . '}'
+  147 declaration_list: declaration_list declaration . ';' maybe_space
+
+    '}'  shift, and go to state 233
+    ';'  shift, and go to state 234
+
+
+State 157
+
+  140 declaration_block: '{' maybe_space declaration '}' .
+
+    $default  reduce using rule 140 (declaration_block)
+
+
+State 158
+
+  145 declaration_list: declaration ';' . maybe_space
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 235
+
+
+State 159
+
+  149 declaration: property ':' . maybe_space expr prio
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 236
+
+
+State 160
+
+   18 maybe_space: maybe_space . S
+  162 term: STRING maybe_space .
+
+    S  shift, and go to state 25
+
+    S         [reduce using rule 162 (term)]
+    $default  reduce using rule 162 (term)
+
+
+State 161
+
+   18 maybe_space: maybe_space . S
+  163 term: IDENT maybe_space .
+
+    S  shift, and go to state 25
+
+    S         [reduce using rule 163 (term)]
+    $default  reduce using rule 163 (term)
+
+
+State 162
+
+   18 maybe_space: maybe_space . S
+  197 hexcolor: HEXCOLOR maybe_space .
+
+    S  shift, and go to state 25
+
+    S         [reduce using rule 197 (hexcolor)]
+    $default  reduce using rule 197 (hexcolor)
+
+
+State 163
+
+   18 maybe_space: maybe_space . S
+  185 unary_term: QEMS maybe_space .
+
+    S  shift, and go to state 25
+
+    S         [reduce using rule 185 (unary_term)]
+    $default  reduce using rule 185 (unary_term)
+
+
+State 164
+
+   18 maybe_space: maybe_space . S
+  184 unary_term: EMS maybe_space .
+
+    S  shift, and go to state 25
+
+    S         [reduce using rule 184 (unary_term)]
+    $default  reduce using rule 184 (unary_term)
+
+
+State 165
+
+   18 maybe_space: maybe_space . S
+  186 unary_term: EXS maybe_space .
+
+    S  shift, and go to state 25
+
+    S         [reduce using rule 186 (unary_term)]
+    $default  reduce using rule 186 (unary_term)
+
+
+State 166
+
+   18 maybe_space: maybe_space . S
+  187 unary_term: CHS maybe_space .
+
+    S  shift, and go to state 25
+
+    S         [reduce using rule 187 (unary_term)]
+    $default  reduce using rule 187 (unary_term)
+
+
+State 167
+
+   18 maybe_space: maybe_space . S
+  188 unary_term: REMS maybe_space .
+
+    S  shift, and go to state 25
+
+    S         [reduce using rule 188 (unary_term)]
+    $default  reduce using rule 188 (unary_term)
+
+
+State 168
+
+   18 maybe_space: maybe_space . S
+  171 unary_term: PXS maybe_space .
+
+    S  shift, and go to state 25
+
+    S         [reduce using rule 171 (unary_term)]
+    $default  reduce using rule 171 (unary_term)
+
+
+State 169
+
+   18 maybe_space: maybe_space . S
+  172 unary_term: CMS maybe_space .
+
+    S  shift, and go to state 25
+
+    S         [reduce using rule 172 (unary_term)]
+    $default  reduce using rule 172 (unary_term)
+
+
+State 170
+
+   18 maybe_space: maybe_space . S
+  173 unary_term: MMS maybe_space .
+
+    S  shift, and go to state 25
+
+    S         [reduce using rule 173 (unary_term)]
+    $default  reduce using rule 173 (unary_term)
+
+
+State 171
+
+   18 maybe_space: maybe_space . S
+  174 unary_term: INS maybe_space .
+
+    S  shift, and go to state 25
+
+    S         [reduce using rule 174 (unary_term)]
+    $default  reduce using rule 174 (unary_term)
+
+
+State 172
+
+   18 maybe_space: maybe_space . S
+  175 unary_term: PTS maybe_space .
+
+    S  shift, and go to state 25
+
+    S         [reduce using rule 175 (unary_term)]
+    $default  reduce using rule 175 (unary_term)
+
+
+State 173
+
+   18 maybe_space: maybe_space . S
+  176 unary_term: PCS maybe_space .
+
+    S  shift, and go to state 25
+
+    S         [reduce using rule 176 (unary_term)]
+    $default  reduce using rule 176 (unary_term)
+
+
+State 174
+
+   18 maybe_space: maybe_space . S
+  177 unary_term: DEGS maybe_space .
+
+    S  shift, and go to state 25
+
+    S         [reduce using rule 177 (unary_term)]
+    $default  reduce using rule 177 (unary_term)
+
+
+State 175
+
+   18 maybe_space: maybe_space . S
+  178 unary_term: RADS maybe_space .
+
+    S  shift, and go to state 25
+
+    S         [reduce using rule 178 (unary_term)]
+    $default  reduce using rule 178 (unary_term)
+
+
+State 176
+
+   18 maybe_space: maybe_space . S
+  179 unary_term: GRADS maybe_space .
+
+    S  shift, and go to state 25
+
+    S         [reduce using rule 179 (unary_term)]
+    $default  reduce using rule 179 (unary_term)
+
+
+State 177
+
+   18 maybe_space: maybe_space . S
+  180 unary_term: MSECS maybe_space .
+
+    S  shift, and go to state 25
+
+    S         [reduce using rule 180 (unary_term)]
+    $default  reduce using rule 180 (unary_term)
+
+
+State 178
+
+   18 maybe_space: maybe_space . S
+  181 unary_term: SECS maybe_space .
+
+    S  shift, and go to state 25
+
+    S         [reduce using rule 181 (unary_term)]
+    $default  reduce using rule 181 (unary_term)
+
+
+State 179
+
+   18 maybe_space: maybe_space . S
+  182 unary_term: HERZ maybe_space .
+
+    S  shift, and go to state 25
+
+    S         [reduce using rule 182 (unary_term)]
+    $default  reduce using rule 182 (unary_term)
+
+
+State 180
+
+   18 maybe_space: maybe_space . S
+  183 unary_term: KHERZ maybe_space .
+
+    S  shift, and go to state 25
+
+    S         [reduce using rule 183 (unary_term)]
+    $default  reduce using rule 183 (unary_term)
+
+
+State 181
+
+   18 maybe_space: maybe_space . S
+  189 unary_term: DPI maybe_space .
+
+    S  shift, and go to state 25
+
+    S         [reduce using rule 189 (unary_term)]
+    $default  reduce using rule 189 (unary_term)
+
+
+State 182
+
+   18 maybe_space: maybe_space . S
+  190 unary_term: DPCM maybe_space .
+
+    S  shift, and go to state 25
+
+    S         [reduce using rule 190 (unary_term)]
+    $default  reduce using rule 190 (unary_term)
+
+
+State 183
+
+   18 maybe_space: maybe_space . S
+  191 unary_term: VH maybe_space .
+
+    S  shift, and go to state 25
+
+    S         [reduce using rule 191 (unary_term)]
+    $default  reduce using rule 191 (unary_term)
+
+
+State 184
+
+   18 maybe_space: maybe_space . S
+  192 unary_term: VW maybe_space .
+
+    S  shift, and go to state 25
+
+    S         [reduce using rule 192 (unary_term)]
+    $default  reduce using rule 192 (unary_term)
+
+
+State 185
+
+   18 maybe_space: maybe_space . S
+  193 unary_term: VMIN maybe_space .
+
+    S  shift, and go to state 25
+
+    S         [reduce using rule 193 (unary_term)]
+    $default  reduce using rule 193 (unary_term)
+
+
+State 186
+
+   18 maybe_space: maybe_space . S
+  194 unary_term: VMAX maybe_space .
+
+    S  shift, and go to state 25
+
+    S         [reduce using rule 194 (unary_term)]
+    $default  reduce using rule 194 (unary_term)
+
+
+State 187
+
+   18 maybe_space: maybe_space . S
+  161 term: DIMEN maybe_space .
+
+    S  shift, and go to state 25
+
+    S         [reduce using rule 161 (term)]
+    $default  reduce using rule 161 (term)
+
+
+State 188
+
+   18 maybe_space: maybe_space . S
+  170 unary_term: PERCENTAGE maybe_space .
+
+    S  shift, and go to state 25
+
+    S         [reduce using rule 170 (unary_term)]
+    $default  reduce using rule 170 (unary_term)
+
+
+State 189
+
+   18 maybe_space: maybe_space . S
+  169 unary_term: FLOAT maybe_space .
+
+    S  shift, and go to state 25
+
+    S         [reduce using rule 169 (unary_term)]
+    $default  reduce using rule 169 (unary_term)
+
+
+State 190
+
+   18 maybe_space: maybe_space . S
+  168 unary_term: INTEGER maybe_space .
+
+    S  shift, and go to state 25
+
+    S         [reduce using rule 168 (unary_term)]
+    $default  reduce using rule 168 (unary_term)
+
+
+State 191
+
+   18 maybe_space: maybe_space . S
+  164 term: URI maybe_space .
+
+    S  shift, and go to state 25
+
+    S         [reduce using rule 164 (term)]
+    $default  reduce using rule 164 (term)
+
+
+State 192
+
+   18 maybe_space: maybe_space . S
+  195 function: FUNCTION maybe_space . expr ')' maybe_space
+  196         | FUNCTION maybe_space . error
+
+    error         shift, and go to state 237
+    S             shift, and go to state 25
+    STRING        shift, and go to state 65
+    IDENT         shift, and go to state 66
+    HEXCOLOR      shift, and go to state 67
+    QEMS          shift, and go to state 68
+    EMS           shift, and go to state 69
+    EXS           shift, and go to state 70
+    CHS           shift, and go to state 71
+    REMS          shift, and go to state 72
+    PXS           shift, and go to state 73
+    CMS           shift, and go to state 74
+    MMS           shift, and go to state 75
+    INS           shift, and go to state 76
+    PTS           shift, and go to state 77
+    PCS           shift, and go to state 78
+    DEGS          shift, and go to state 79
+    RADS          shift, and go to state 80
+    GRADS         shift, and go to state 81
+    MSECS         shift, and go to state 82
+    SECS          shift, and go to state 83
+    HERZ          shift, and go to state 84
+    KHERZ         shift, and go to state 85
+    DPI           shift, and go to state 86
+    DPCM          shift, and go to state 87
+    VH            shift, and go to state 88
+    VW            shift, and go to state 89
+    VMIN          shift, and go to state 90
+    VMAX          shift, and go to state 91
+    DIMEN         shift, and go to state 92
+    PERCENTAGE    shift, and go to state 93
+    FLOAT         shift, and go to state 94
+    INTEGER       shift, and go to state 95
+    URI           shift, and go to state 96
+    FUNCTION      shift, and go to state 97
+    UNICODERANGE  shift, and go to state 98
+    '+'           shift, and go to state 99
+    '-'           shift, and go to state 100
+
+    unary_operator  go to state 101
+    expr            go to state 238
+    term            go to state 103
+    unary_term      go to state 104
+    function        go to state 105
+    hexcolor        go to state 106
+
+
+State 193
+
+   18 maybe_space: maybe_space . S
+  165 term: UNICODERANGE maybe_space .
+
+    S  shift, and go to state 25
+
+    S         [reduce using rule 165 (term)]
+    $default  reduce using rule 165 (term)
+
+
+State 194
+
+  160 term: unary_operator unary_term .
+
+    $default  reduce using rule 160 (term)
+
+
+State 195
+
+   12 khtml_value: KHTML_VALUE_SYM '{' maybe_space expr '}' .
+
+    $default  reduce using rule 12 (khtml_value)
+
+
+State 196
+
+  157 operator: ',' . maybe_space
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 239
+
+
+State 197
+
+  156 operator: '/' . maybe_space
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 240
+
+
+State 198
+
+  155 expr: expr operator . term
+
+    STRING        shift, and go to state 65
+    IDENT         shift, and go to state 66
+    HEXCOLOR      shift, and go to state 67
+    QEMS          shift, and go to state 68
+    EMS           shift, and go to state 69
+    EXS           shift, and go to state 70
+    CHS           shift, and go to state 71
+    REMS          shift, and go to state 72
+    PXS           shift, and go to state 73
+    CMS           shift, and go to state 74
+    MMS           shift, and go to state 75
+    INS           shift, and go to state 76
+    PTS           shift, and go to state 77
+    PCS           shift, and go to state 78
+    DEGS          shift, and go to state 79
+    RADS          shift, and go to state 80
+    GRADS         shift, and go to state 81
+    MSECS         shift, and go to state 82
+    SECS          shift, and go to state 83
+    HERZ          shift, and go to state 84
+    KHERZ         shift, and go to state 85
+    DPI           shift, and go to state 86
+    DPCM          shift, and go to state 87
+    VH            shift, and go to state 88
+    VW            shift, and go to state 89
+    VMIN          shift, and go to state 90
+    VMAX          shift, and go to state 91
+    DIMEN         shift, and go to state 92
+    PERCENTAGE    shift, and go to state 93
+    FLOAT         shift, and go to state 94
+    INTEGER       shift, and go to state 95
+    URI           shift, and go to state 96
+    FUNCTION      shift, and go to state 97
+    UNICODERANGE  shift, and go to state 98
+    '+'           shift, and go to state 99
+    '-'           shift, and go to state 100
+
+    unary_operator  go to state 101
+    term            go to state 241
+    unary_term      go to state 104
+    function        go to state 105
+    hexcolor        go to state 106
+
+
+State 199
+
+   18 maybe_space: maybe_space . S
+   58 media_query_exp: '(' maybe_space . media_feature maybe_space maybe_media_value ')' maybe_space
+
+    S      shift, and go to state 25
+    IDENT  shift, and go to state 242
+
+    media_feature  go to state 243
+
+
+State 200
+
+   18 maybe_space: maybe_space . S
+   60 media_query_exp_list: media_query_exp_list maybe_space . MEDIA_AND maybe_space media_query_exp
+
+    S          shift, and go to state 25
+    MEDIA_AND  shift, and go to state 244
+
+
+State 201
+
+   18 maybe_space: maybe_space . S
+   67 media_query: maybe_media_restrictor maybe_space . medium maybe_and_media_query_exp_list
+
+    S      shift, and go to state 25
+    IDENT  shift, and go to state 245
+
+    medium  go to state 246
+
+
+State 202
+
+   14 khtml_mediaquery: KHTML_MEDIAQUERY_SYM S maybe_space media_query '}' .
+
+    $default  reduce using rule 14 (khtml_mediaquery)
+
+
+State 203
+
+   13 khtml_selectors: KHTML_SELECTORS_SYM '{' maybe_space selector_list '}' .
+
+    $default  reduce using rule 13 (khtml_selectors)
+
+
+State 204
+
+  201 invalid_block: '{' error . invalid_block_list error '}'
+  202              | '{' error . '}'
+
+    '{'  shift, and go to state 115
+    '}'  shift, and go to state 247
+
+    invalid_block       go to state 248
+    invalid_block_list  go to state 249
+
+
+State 205
+
+   18 maybe_space: maybe_space . S
+   24 charset: CHARSET_SYM maybe_space STRING maybe_space . ';'
+
+    S    shift, and go to state 25
+    ';'  shift, and go to state 250
+
+
+State 206
+
+   28 import_list: import_list import . maybe_sgml
+
+    $default  reduce using rule 19 (maybe_sgml)
+
+    maybe_sgml  go to state 251
+
+
+State 207
+
+    1 stylesheet: maybe_space maybe_charset maybe_sgml import_list namespace_list . rule_list
+   33 namespace_list: namespace_list . namespace maybe_sgml
+
+    NAMESPACE_SYM  shift, and go to state 252
+
+    $default  reduce using rule 40 (rule_list)
+
+    namespace_rule  go to state 253
+    namespace       go to state 254
+    rule_list       go to state 255
+
+
+State 208
+
+  134 pseudo: ':' ':' IDENT .
+
+    $default  reduce using rule 134 (pseudo)
+
+
+State 209
+
+   18 maybe_space: maybe_space . S
+  135 pseudo: ':' FUNCTION maybe_space . NTH maybe_space ')'
+  136       | ':' FUNCTION maybe_space . maybe_plus INTEGER maybe_space ')'
+  137       | ':' FUNCTION maybe_space . IDENT maybe_space ')'
+  138       | ':' FUNCTION maybe_space . STRING maybe_space ')'
+
+    S       shift, and go to state 25
+    STRING  shift, and go to state 256
+    IDENT   shift, and go to state 257
+    NTH     shift, and go to state 258
+    '+'     shift, and go to state 259
+
+    $default  reduce using rule 15 (maybe_plus)
+
+    maybe_plus  go to state 260
+
+
+State 210
+
+   18 maybe_space: maybe_space . S
+  139 pseudo: ':' NOTFUNCTION maybe_space . simple_css3_selector maybe_space ')'
+
+    S      shift, and go to state 25
+    IDENT  shift, and go to state 37
+    HASH   shift, and go to state 38
+    ':'    shift, and go to state 39
+    '.'    shift, and go to state 40
+    '['    shift, and go to state 41
+    '*'    shift, and go to state 42
+    '|'    shift, and go to state 43
+
+    namespace_selector    go to state 261
+    simple_css3_selector  go to state 262
+    element_name          go to state 263
+    specifier             go to state 264
+    class                 go to state 57
+    attrib                go to state 58
+    pseudo                go to state 59
+
+
+State 211
+
+   99 namespace_selector: IDENT . '|'
+  120 attrib_id: IDENT . maybe_space
+
+    '|'  shift, and go to state 122
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 265
+
+
+State 212
+
+   98 namespace_selector: '*' . '|'
+
+    '|'  shift, and go to state 129
+
+
+State 213
+
+  123 attrib: '[' maybe_space namespace_selector . attrib_id ']'
+  124       | '[' maybe_space namespace_selector . attrib_id match maybe_space ident_or_string maybe_space ']'
+
+    IDENT  shift, and go to state 266
+
+    attrib_id  go to state 267
+
+
+State 214
+
+  121 attrib: '[' maybe_space attrib_id . ']'
+  122       | '[' maybe_space attrib_id . match maybe_space ident_or_string maybe_space ']'
+
+    INCLUDES    shift, and go to state 268
+    DASHMATCH   shift, and go to state 269
+    BEGINSWITH  shift, and go to state 270
+    ENDSWITH    shift, and go to state 271
+    CONTAINS    shift, and go to state 272
+    ']'         shift, and go to state 273
+    '='         shift, and go to state 274
+
+    match  go to state 275
+
+
+State 215
+
+   31 import: IMPORT_SYM error ';' .
+
+    $default  reduce using rule 31 (import)
+
+
+State 216
+
+   30 import: IMPORT_SYM error invalid_block .
+
+    $default  reduce using rule 30 (import)
+
+
+State 217
+
+   53 string_or_uri: STRING .
+
+    $default  reduce using rule 53 (string_or_uri)
+
+
+State 218
+
+   54 string_or_uri: URI .
+
+    $default  reduce using rule 54 (string_or_uri)
+
+
+State 219
+
+   29 import: IMPORT_SYM maybe_space string_or_uri . maybe_space maybe_media_list ';'
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 276
+
+
+State 220
+
+   39 maybe_ns_prefix: IDENT . S
+
+    S  shift, and go to state 277
+
+
+State 221
+
+   34 namespace_rule: NAMESPACE_SYM maybe_space maybe_ns_prefix . string_or_uri
+
+    STRING  shift, and go to state 217
+    URI     shift, and go to state 218
+
+    string_or_uri  go to state 278
+
+
+State 222
+
+   10 khtml_rule: KHTML_RULE_SYM '{' maybe_space ruleset_or_import_or_namespace maybe_space '}' .
+
+    $default  reduce using rule 10 (khtml_rule)
+
+
+State 223
+
+   18 maybe_space: maybe_space . S
+   90 selector_list: selector_list ',' maybe_space . selector
+
+    S      shift, and go to state 25
+    IDENT  shift, and go to state 37
+    HASH   shift, and go to state 38
+    ':'    shift, and go to state 39
+    '.'    shift, and go to state 40
+    '['    shift, and go to state 41
+    '*'    shift, and go to state 42
+    '|'    shift, and go to state 43
+
+    selector            go to state 279
+    namespace_selector  go to state 52
+    simple_selector     go to state 53
+    element_name        go to state 54
+    specifier_list      go to state 55
+    specifier           go to state 56
+    class               go to state 57
+    attrib              go to state 58
+    pseudo              go to state 59
+
+
+State 224
+
+   94 selector: selector S simple_selector .
+
+    $default  reduce using rule 94 (selector)
+
+
+State 225
+
+   18 maybe_space: maybe_space . S
+   83 combinator: '+' maybe_space .
+
+    S  shift, and go to state 25
+
+    $default  reduce using rule 83 (combinator)
+
+
+State 226
+
+   18 maybe_space: maybe_space . S
+   84 combinator: '~' maybe_space .
+
+    S  shift, and go to state 25
+
+    $default  reduce using rule 84 (combinator)
+
+
+State 227
+
+   18 maybe_space: maybe_space . S
+   85 combinator: '>' maybe_space .
+
+    S  shift, and go to state 25
+
+    $default  reduce using rule 85 (combinator)
+
+
+State 228
+
+   95 selector: selector combinator simple_selector .
+
+    $default  reduce using rule 95 (selector)
+
+
+State 229
+
+  104 simple_selector: namespace_selector element_name specifier_list .
+  113 specifier_list: specifier_list . specifier
+  114               | specifier_list . error
+
+    error  shift, and go to state 148
+    HASH   shift, and go to state 38
+    ':'    shift, and go to state 39
+    '.'    shift, and go to state 40
+    '['    shift, and go to state 41
+
+    error  [reduce using rule 104 (simple_selector)]
+    S      reduce using rule 104 (simple_selector)
+    '{'    reduce using rule 104 (simple_selector)
+    '}'    reduce using rule 104 (simple_selector)
+    '+'    reduce using rule 104 (simple_selector)
+    ','    reduce using rule 104 (simple_selector)
+    '~'    reduce using rule 104 (simple_selector)
+    '>'    reduce using rule 104 (simple_selector)
+
+    specifier  go to state 149
+    class      go to state 57
+    attrib     go to state 58
+    pseudo     go to state 59
+
+
+State 230
+
+   18 maybe_space: maybe_space . S
+  146 declaration_list: error ';' maybe_space .
+
+    S  shift, and go to state 25
+
+    $default  reduce using rule 146 (declaration_list)
+
+
+State 231
+
+  144 declaration_block: '{' maybe_space declaration_list error '}' .
+
+    $default  reduce using rule 144 (declaration_block)
+
+
+State 232
+
+  148 declaration_list: declaration_list error ';' . maybe_space
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 280
+
+
+State 233
+
+  143 declaration_block: '{' maybe_space declaration_list declaration '}' .
+
+    $default  reduce using rule 143 (declaration_block)
+
+
+State 234
+
+  147 declaration_list: declaration_list declaration ';' . maybe_space
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 281
+
+
+State 235
+
+   18 maybe_space: maybe_space . S
+  145 declaration_list: declaration ';' maybe_space .
+
+    S  shift, and go to state 25
+
+    $default  reduce using rule 145 (declaration_list)
+
+
+State 236
+
+   18 maybe_space: maybe_space . S
+  149 declaration: property ':' maybe_space . expr prio
+
+    S             shift, and go to state 25
+    STRING        shift, and go to state 65
+    IDENT         shift, and go to state 66
+    HEXCOLOR      shift, and go to state 67
+    QEMS          shift, and go to state 68
+    EMS           shift, and go to state 69
+    EXS           shift, and go to state 70
+    CHS           shift, and go to state 71
+    REMS          shift, and go to state 72
+    PXS           shift, and go to state 73
+    CMS           shift, and go to state 74
+    MMS           shift, and go to state 75
+    INS           shift, and go to state 76
+    PTS           shift, and go to state 77
+    PCS           shift, and go to state 78
+    DEGS          shift, and go to state 79
+    RADS          shift, and go to state 80
+    GRADS         shift, and go to state 81
+    MSECS         shift, and go to state 82
+    SECS          shift, and go to state 83
+    HERZ          shift, and go to state 84
+    KHERZ         shift, and go to state 85
+    DPI           shift, and go to state 86
+    DPCM          shift, and go to state 87
+    VH            shift, and go to state 88
+    VW            shift, and go to state 89
+    VMIN          shift, and go to state 90
+    VMAX          shift, and go to state 91
+    DIMEN         shift, and go to state 92
+    PERCENTAGE    shift, and go to state 93
+    FLOAT         shift, and go to state 94
+    INTEGER       shift, and go to state 95
+    URI           shift, and go to state 96
+    FUNCTION      shift, and go to state 97
+    UNICODERANGE  shift, and go to state 98
+    '+'           shift, and go to state 99
+    '-'           shift, and go to state 100
+
+    unary_operator  go to state 101
+    expr            go to state 282
+    term            go to state 103
+    unary_term      go to state 104
+    function        go to state 105
+    hexcolor        go to state 106
+
+
+State 237
+
+  196 function: FUNCTION maybe_space error .
+
+    $default  reduce using rule 196 (function)
+
+
+State 238
+
+  155 expr: expr . operator term
+  195 function: FUNCTION maybe_space expr . ')' maybe_space
+
+    ')'  shift, and go to state 283
+    ','  shift, and go to state 196
+    '/'  shift, and go to state 197
+
+    $default  reduce using rule 158 (operator)
+
+    operator  go to state 198
+
+
+State 239
+
+   18 maybe_space: maybe_space . S
+  157 operator: ',' maybe_space .
+
+    S  shift, and go to state 25
+
+    $default  reduce using rule 157 (operator)
+
+
+State 240
+
+   18 maybe_space: maybe_space . S
+  156 operator: '/' maybe_space .
+
+    S  shift, and go to state 25
+
+    $default  reduce using rule 156 (operator)
+
+
+State 241
+
+  155 expr: expr operator term .
+
+    $default  reduce using rule 155 (expr)
+
+
+State 242
+
+   55 media_feature: IDENT . maybe_space
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 284
+
+
+State 243
+
+   58 media_query_exp: '(' maybe_space media_feature . maybe_space maybe_media_value ')' maybe_space
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 285
+
+
+State 244
+
+   60 media_query_exp_list: media_query_exp_list maybe_space MEDIA_AND . maybe_space media_query_exp
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 286
+
+
+State 245
+
+   77 medium: IDENT . maybe_space
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 287
+
+
+State 246
+
+   67 media_query: maybe_media_restrictor maybe_space medium . maybe_and_media_query_exp_list
+
+    MEDIA_AND  shift, and go to state 288
+
+    $default  reduce using rule 61 (maybe_and_media_query_exp_list)
+
+    maybe_and_media_query_exp_list  go to state 289
+
+
+State 247
+
+  202 invalid_block: '{' error '}' .
+
+    $default  reduce using rule 202 (invalid_block)
+
+
+State 248
+
+  203 invalid_block_list: invalid_block .
+
+    $default  reduce using rule 203 (invalid_block_list)
+
+
+State 249
+
+  201 invalid_block: '{' error invalid_block_list . error '}'
+  204 invalid_block_list: invalid_block_list . error invalid_block
+
+    error  shift, and go to state 290
+
+
+State 250
+
+   24 charset: CHARSET_SYM maybe_space STRING maybe_space ';' .
+
+    $default  reduce using rule 24 (charset)
+
+
+State 251
+
+   20 maybe_sgml: maybe_sgml . SGML_CD
+   21           | maybe_sgml . S
+   28 import_list: import_list import maybe_sgml .
+
+    S        shift, and go to state 119
+    SGML_CD  shift, and go to state 120
+
+    $default  reduce using rule 28 (import_list)
+
+
+State 252
+
+   34 namespace_rule: NAMESPACE_SYM . maybe_space maybe_ns_prefix string_or_uri
+   36 namespace: NAMESPACE_SYM . error invalid_block
+   37          | NAMESPACE_SYM . error ';'
+
+    error  shift, and go to state 291
+
+    S       reduce using rule 17 (maybe_space)
+    STRING  reduce using rule 17 (maybe_space)
+    IDENT   reduce using rule 17 (maybe_space)
+    URI     reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 132
+
+
+State 253
+
+   35 namespace: namespace_rule . maybe_space ';'
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 292
+
+
+State 254
+
+   33 namespace_list: namespace_list namespace . maybe_sgml
+
+    $default  reduce using rule 19 (maybe_sgml)
+
+    maybe_sgml  go to state 293
+
+
+State 255
+
+    1 stylesheet: maybe_space maybe_charset maybe_sgml import_list namespace_list rule_list .
+   41 rule_list: rule_list . rule maybe_sgml
+
+    error          shift, and go to state 294
+    IDENT          shift, and go to state 37
+    HASH           shift, and go to state 38
+    ':'            shift, and go to state 39
+    '.'            shift, and go to state 40
+    '['            shift, and go to state 41
+    '*'            shift, and go to state 42
+    '|'            shift, and go to state 43
+    IMPORT_SYM     shift, and go to state 44
+    PAGE_SYM       shift, and go to state 295
+    MEDIA_SYM      shift, and go to state 296
+    FONT_FACE_SYM  shift, and go to state 297
+    '@'            shift, and go to state 298
+
+    $end  reduce using rule 1 (stylesheet)
+
+    import              go to state 299
+    rule                go to state 300
+    media               go to state 301
+    page                go to state 302
+    font_face           go to state 303
+    ruleset             go to state 304
+    selector_list       go to state 50
+    selector            go to state 51
+    namespace_selector  go to state 52
+    simple_selector     go to state 53
+    element_name        go to state 54
+    specifier_list      go to state 55
+    specifier           go to state 56
+    class               go to state 57
+    attrib              go to state 58
+    pseudo              go to state 59
+    invalid_at          go to state 305
+    invalid_rule        go to state 306
+
+
+State 256
+
+  138 pseudo: ':' FUNCTION maybe_space STRING . maybe_space ')'
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 307
+
+
+State 257
+
+  137 pseudo: ':' FUNCTION maybe_space IDENT . maybe_space ')'
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 308
+
+
+State 258
+
+  135 pseudo: ':' FUNCTION maybe_space NTH . maybe_space ')'
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 309
+
+
+State 259
+
+   16 maybe_plus: '+' .
+
+    $default  reduce using rule 16 (maybe_plus)
+
+
+State 260
+
+  136 pseudo: ':' FUNCTION maybe_space maybe_plus . INTEGER maybe_space ')'
+
+    INTEGER  shift, and go to state 310
+
+
+State 261
+
+  108 simple_css3_selector: namespace_selector . element_name
+  109                     | namespace_selector . specifier
+
+    IDENT  shift, and go to state 143
+    HASH   shift, and go to state 38
+    ':'    shift, and go to state 39
+    '.'    shift, and go to state 40
+    '['    shift, and go to state 41
+    '*'    shift, and go to state 144
+
+    element_name  go to state 311
+    specifier     go to state 312
+    class         go to state 57
+    attrib        go to state 58
+    pseudo        go to state 59
+
+
+State 262
+
+  139 pseudo: ':' NOTFUNCTION maybe_space simple_css3_selector . maybe_space ')'
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 313
+
+
+State 263
+
+  106 simple_css3_selector: element_name .
+
+    $default  reduce using rule 106 (simple_css3_selector)
+
+
+State 264
+
+  107 simple_css3_selector: specifier .
+
+    $default  reduce using rule 107 (simple_css3_selector)
+
+
+State 265
+
+   18 maybe_space: maybe_space . S
+  120 attrib_id: IDENT maybe_space .
+
+    S  shift, and go to state 25
+
+    $default  reduce using rule 120 (attrib_id)
+
+
+State 266
+
+  120 attrib_id: IDENT . maybe_space
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 265
+
+
+State 267
+
+  123 attrib: '[' maybe_space namespace_selector attrib_id . ']'
+  124       | '[' maybe_space namespace_selector attrib_id . match maybe_space ident_or_string maybe_space ']'
+
+    INCLUDES    shift, and go to state 268
+    DASHMATCH   shift, and go to state 269
+    BEGINSWITH  shift, and go to state 270
+    ENDSWITH    shift, and go to state 271
+    CONTAINS    shift, and go to state 272
+    ']'         shift, and go to state 314
+    '='         shift, and go to state 274
+
+    match  go to state 315
+
+
+State 268
+
+  126 match: INCLUDES .
+
+    $default  reduce using rule 126 (match)
+
+
+State 269
+
+  127 match: DASHMATCH .
+
+    $default  reduce using rule 127 (match)
+
+
+State 270
+
+  128 match: BEGINSWITH .
+
+    $default  reduce using rule 128 (match)
+
+
+State 271
+
+  129 match: ENDSWITH .
+
+    $default  reduce using rule 129 (match)
+
+
+State 272
+
+  130 match: CONTAINS .
+
+    $default  reduce using rule 130 (match)
+
+
+State 273
+
+  121 attrib: '[' maybe_space attrib_id ']' .
+
+    $default  reduce using rule 121 (attrib)
+
+
+State 274
+
+  125 match: '=' .
+
+    $default  reduce using rule 125 (match)
+
+
+State 275
+
+  122 attrib: '[' maybe_space attrib_id match . maybe_space ident_or_string maybe_space ']'
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 316
+
+
+State 276
+
+   18 maybe_space: maybe_space . S
+   29 import: IMPORT_SYM maybe_space string_or_uri maybe_space . maybe_media_list ';'
+
+    S           shift, and go to state 25
+    MEDIA_ONLY  shift, and go to state 107
+    MEDIA_NOT   shift, and go to state 108
+    '('         shift, and go to state 109
+
+    S         [reduce using rule 63 (maybe_media_restrictor)]
+    ';'       reduce using rule 68 (maybe_media_list)
+    $default  reduce using rule 63 (maybe_media_restrictor)
+
+    media_query_exp         go to state 110
+    media_query_exp_list    go to state 111
+    maybe_media_restrictor  go to state 112
+    media_query             go to state 317
+    maybe_media_list        go to state 318
+    media_list              go to state 319
+
+
+State 277
+
+   39 maybe_ns_prefix: IDENT S .
+
+    $default  reduce using rule 39 (maybe_ns_prefix)
+
+
+State 278
+
+   34 namespace_rule: NAMESPACE_SYM maybe_space maybe_ns_prefix string_or_uri .
+
+    $default  reduce using rule 34 (namespace_rule)
+
+
+State 279
+
+   90 selector_list: selector_list ',' maybe_space selector .
+   93 selector: selector . S
+   94         | selector . S simple_selector
+   95         | selector . combinator simple_selector
+   96         | selector . error
+
+    error  shift, and go to state 137
+    S      shift, and go to state 138
+    '+'    shift, and go to state 139
+    '~'    shift, and go to state 140
+    '>'    shift, and go to state 141
+
+    '{'  reduce using rule 90 (selector_list)
+    '}'  reduce using rule 90 (selector_list)
+    ','  reduce using rule 90 (selector_list)
+
+    combinator  go to state 142
+
+
+State 280
+
+   18 maybe_space: maybe_space . S
+  148 declaration_list: declaration_list error ';' maybe_space .
+
+    S  shift, and go to state 25
+
+    $default  reduce using rule 148 (declaration_list)
+
+
+State 281
+
+   18 maybe_space: maybe_space . S
+  147 declaration_list: declaration_list declaration ';' maybe_space .
+
+    S  shift, and go to state 25
+
+    $default  reduce using rule 147 (declaration_list)
+
+
+State 282
+
+  149 declaration: property ':' maybe_space expr . prio
+  155 expr: expr . operator term
+
+    IMPORTANT_SYM  shift, and go to state 320
+    ','            shift, and go to state 196
+    '/'            shift, and go to state 197
+
+    '}'       reduce using rule 153 (prio)
+    ';'       reduce using rule 153 (prio)
+    $default  reduce using rule 158 (operator)
+
+    prio      go to state 321
+    operator  go to state 198
+
+
+State 283
+
+  195 function: FUNCTION maybe_space expr ')' . maybe_space
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 322
+
+
+State 284
+
+   18 maybe_space: maybe_space . S
+   55 media_feature: IDENT maybe_space .
+
+    S  shift, and go to state 25
+
+    S         [reduce using rule 55 (media_feature)]
+    $default  reduce using rule 55 (media_feature)
+
+
+State 285
+
+   18 maybe_space: maybe_space . S
+   58 media_query_exp: '(' maybe_space media_feature maybe_space . maybe_media_value ')' maybe_space
+
+    S    shift, and go to state 25
+    ':'  shift, and go to state 323
+
+    $default  reduce using rule 56 (maybe_media_value)
+
+    maybe_media_value  go to state 324
+
+
+State 286
+
+   18 maybe_space: maybe_space . S
+   60 media_query_exp_list: media_query_exp_list maybe_space MEDIA_AND maybe_space . media_query_exp
+
+    S    shift, and go to state 25
+    '('  shift, and go to state 109
+
+    media_query_exp  go to state 325
+
+
+State 287
+
+   18 maybe_space: maybe_space . S
+   77 medium: IDENT maybe_space .
+
+    S  shift, and go to state 25
+
+    $default  reduce using rule 77 (medium)
+
+
+State 288
+
+   62 maybe_and_media_query_exp_list: MEDIA_AND . maybe_space media_query_exp_list
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 326
+
+
+State 289
+
+   67 media_query: maybe_media_restrictor maybe_space medium maybe_and_media_query_exp_list .
+
+    $default  reduce using rule 67 (media_query)
+
+
+State 290
+
+  201 invalid_block: '{' error invalid_block_list error . '}'
+  204 invalid_block_list: invalid_block_list error . invalid_block
+
+    '{'  shift, and go to state 115
+    '}'  shift, and go to state 327
+
+    invalid_block  go to state 328
+
+
+State 291
+
+   36 namespace: NAMESPACE_SYM error . invalid_block
+   37          | NAMESPACE_SYM error . ';'
+
+    '{'  shift, and go to state 115
+    ';'  shift, and go to state 329
+
+    invalid_block  go to state 330
+
+
+State 292
+
+   18 maybe_space: maybe_space . S
+   35 namespace: namespace_rule maybe_space . ';'
+
+    S    shift, and go to state 25
+    ';'  shift, and go to state 331
+
+
+State 293
+
+   20 maybe_sgml: maybe_sgml . SGML_CD
+   21           | maybe_sgml . S
+   33 namespace_list: namespace_list namespace maybe_sgml .
+
+    S        shift, and go to state 119
+    SGML_CD  shift, and go to state 120
+
+    $default  reduce using rule 33 (namespace_list)
+
+
+State 294
+
+  200 invalid_rule: error . invalid_block
+
+    '{'  shift, and go to state 115
+
+    invalid_block  go to state 332
+
+
+State 295
+
+   78 page: PAGE_SYM . error invalid_block
+   79     | PAGE_SYM . error ';'
+
+    error  shift, and go to state 333
+
+
+State 296
+
+   73 media: MEDIA_SYM . maybe_space media_list '{' maybe_space ruleset_list '}'
+   74      | MEDIA_SYM . maybe_space '{' maybe_space ruleset_list '}'
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 334
+
+
+State 297
+
+   80 font_face: FONT_FACE_SYM . maybe_space declaration_block
+   81          | FONT_FACE_SYM . error invalid_block
+   82          | FONT_FACE_SYM . error ';'
+
+    error  shift, and go to state 335
+
+    S    reduce using rule 17 (maybe_space)
+    '{'  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 336
+
+
+State 298
+
+  198 invalid_at: '@' . error invalid_block
+  199           | '@' . error ';'
+
+    error  shift, and go to state 337
+
+
+State 299
+
+   48 rule: import . error
+
+    error  shift, and go to state 338
+
+
+State 300
+
+   41 rule_list: rule_list rule . maybe_sgml
+
+    $default  reduce using rule 19 (maybe_sgml)
+
+    maybe_sgml  go to state 339
+
+
+State 301
+
+   43 rule: media .
+
+    $default  reduce using rule 43 (rule)
+
+
+State 302
+
+   44 rule: page .
+
+    $default  reduce using rule 44 (rule)
+
+
+State 303
+
+   45 rule: font_face .
+
+    $default  reduce using rule 45 (rule)
+
+
+State 304
+
+   42 rule: ruleset .
+
+    $default  reduce using rule 42 (rule)
+
+
+State 305
+
+   47 rule: invalid_at .
+
+    $default  reduce using rule 47 (rule)
+
+
+State 306
+
+   46 rule: invalid_rule .
+
+    $default  reduce using rule 46 (rule)
+
+
+State 307
+
+   18 maybe_space: maybe_space . S
+  138 pseudo: ':' FUNCTION maybe_space STRING maybe_space . ')'
+
+    S    shift, and go to state 25
+    ')'  shift, and go to state 340
+
+
+State 308
+
+   18 maybe_space: maybe_space . S
+  137 pseudo: ':' FUNCTION maybe_space IDENT maybe_space . ')'
+
+    S    shift, and go to state 25
+    ')'  shift, and go to state 341
+
+
+State 309
+
+   18 maybe_space: maybe_space . S
+  135 pseudo: ':' FUNCTION maybe_space NTH maybe_space . ')'
+
+    S    shift, and go to state 25
+    ')'  shift, and go to state 342
+
+
+State 310
+
+  136 pseudo: ':' FUNCTION maybe_space maybe_plus INTEGER . maybe_space ')'
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 343
+
+
+State 311
+
+  108 simple_css3_selector: namespace_selector element_name .
+
+    $default  reduce using rule 108 (simple_css3_selector)
+
+
+State 312
+
+  109 simple_css3_selector: namespace_selector specifier .
+
+    $default  reduce using rule 109 (simple_css3_selector)
+
+
+State 313
+
+   18 maybe_space: maybe_space . S
+  139 pseudo: ':' NOTFUNCTION maybe_space simple_css3_selector maybe_space . ')'
+
+    S    shift, and go to state 25
+    ')'  shift, and go to state 344
+
+
+State 314
+
+  123 attrib: '[' maybe_space namespace_selector attrib_id ']' .
+
+    $default  reduce using rule 123 (attrib)
+
+
+State 315
+
+  124 attrib: '[' maybe_space namespace_selector attrib_id match . maybe_space ident_or_string maybe_space ']'
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 345
+
+
+State 316
+
+   18 maybe_space: maybe_space . S
+  122 attrib: '[' maybe_space attrib_id match maybe_space . ident_or_string maybe_space ']'
+
+    S       shift, and go to state 25
+    STRING  shift, and go to state 346
+    IDENT   shift, and go to state 347
+
+    ident_or_string  go to state 348
+
+
+State 317
+
+   70 media_list: media_query .
+
+    $default  reduce using rule 70 (media_list)
+
+
+State 318
+
+   29 import: IMPORT_SYM maybe_space string_or_uri maybe_space maybe_media_list . ';'
+
+    ';'  shift, and go to state 349
+
+
+State 319
+
+   69 maybe_media_list: media_list .
+   71 media_list: media_list . ',' maybe_space media_query
+   72           | media_list . error
+
+    error  shift, and go to state 350
+    ','    shift, and go to state 351
+
+    ';'  reduce using rule 69 (maybe_media_list)
+
+
+State 320
+
+  152 prio: IMPORTANT_SYM . maybe_space
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 352
+
+
+State 321
+
+  149 declaration: property ':' maybe_space expr prio .
+
+    $default  reduce using rule 149 (declaration)
+
+
+State 322
+
+   18 maybe_space: maybe_space . S
+  195 function: FUNCTION maybe_space expr ')' maybe_space .
+
+    S  shift, and go to state 25
+
+    S         [reduce using rule 195 (function)]
+    $default  reduce using rule 195 (function)
+
+
+State 323
+
+   57 maybe_media_value: ':' . maybe_space expr maybe_space
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 353
+
+
+State 324
+
+   58 media_query_exp: '(' maybe_space media_feature maybe_space maybe_media_value . ')' maybe_space
+
+    ')'  shift, and go to state 354
+
+
+State 325
+
+   60 media_query_exp_list: media_query_exp_list maybe_space MEDIA_AND maybe_space media_query_exp .
+
+    $default  reduce using rule 60 (media_query_exp_list)
+
+
+State 326
+
+   18 maybe_space: maybe_space . S
+   62 maybe_and_media_query_exp_list: MEDIA_AND maybe_space . media_query_exp_list
+
+    S    shift, and go to state 25
+    '('  shift, and go to state 109
+
+    media_query_exp       go to state 110
+    media_query_exp_list  go to state 355
+
+
+State 327
+
+  201 invalid_block: '{' error invalid_block_list error '}' .
+
+    $default  reduce using rule 201 (invalid_block)
+
+
+State 328
+
+  204 invalid_block_list: invalid_block_list error invalid_block .
+
+    $default  reduce using rule 204 (invalid_block_list)
+
+
+State 329
+
+   37 namespace: NAMESPACE_SYM error ';' .
+
+    $default  reduce using rule 37 (namespace)
+
+
+State 330
+
+   36 namespace: NAMESPACE_SYM error invalid_block .
+
+    $default  reduce using rule 36 (namespace)
+
+
+State 331
+
+   35 namespace: namespace_rule maybe_space ';' .
+
+    $default  reduce using rule 35 (namespace)
+
+
+State 332
+
+  200 invalid_rule: error invalid_block .
+
+    $default  reduce using rule 200 (invalid_rule)
+
+
+State 333
+
+   78 page: PAGE_SYM error . invalid_block
+   79     | PAGE_SYM error . ';'
+
+    '{'  shift, and go to state 115
+    ';'  shift, and go to state 356
+
+    invalid_block  go to state 357
+
+
+State 334
+
+   18 maybe_space: maybe_space . S
+   73 media: MEDIA_SYM maybe_space . media_list '{' maybe_space ruleset_list '}'
+   74      | MEDIA_SYM maybe_space . '{' maybe_space ruleset_list '}'
+
+    S           shift, and go to state 25
+    MEDIA_ONLY  shift, and go to state 107
+    MEDIA_NOT   shift, and go to state 108
+    '{'         shift, and go to state 358
+    '('         shift, and go to state 109
+
+    S         [reduce using rule 63 (maybe_media_restrictor)]
+    $default  reduce using rule 63 (maybe_media_restrictor)
+
+    media_query_exp         go to state 110
+    media_query_exp_list    go to state 111
+    maybe_media_restrictor  go to state 112
+    media_query             go to state 317
+    media_list              go to state 359
+
+
+State 335
+
+   81 font_face: FONT_FACE_SYM error . invalid_block
+   82          | FONT_FACE_SYM error . ';'
+
+    '{'  shift, and go to state 115
+    ';'  shift, and go to state 360
+
+    invalid_block  go to state 361
+
+
+State 336
+
+   18 maybe_space: maybe_space . S
+   80 font_face: FONT_FACE_SYM maybe_space . declaration_block
+
+    S    shift, and go to state 25
+    '{'  shift, and go to state 14
+
+    declaration_block  go to state 362
+
+
+State 337
+
+  198 invalid_at: '@' error . invalid_block
+  199           | '@' error . ';'
+
+    '{'  shift, and go to state 115
+    ';'  shift, and go to state 363
+
+    invalid_block  go to state 364
+
+
+State 338
+
+   48 rule: import error .
+
+    $default  reduce using rule 48 (rule)
+
+
+State 339
+
+   20 maybe_sgml: maybe_sgml . SGML_CD
+   21           | maybe_sgml . S
+   41 rule_list: rule_list rule maybe_sgml .
+
+    S        shift, and go to state 119
+    SGML_CD  shift, and go to state 120
+
+    $default  reduce using rule 41 (rule_list)
+
+
+State 340
+
+  138 pseudo: ':' FUNCTION maybe_space STRING maybe_space ')' .
+
+    $default  reduce using rule 138 (pseudo)
+
+
+State 341
+
+  137 pseudo: ':' FUNCTION maybe_space IDENT maybe_space ')' .
+
+    $default  reduce using rule 137 (pseudo)
+
+
+State 342
+
+  135 pseudo: ':' FUNCTION maybe_space NTH maybe_space ')' .
+
+    $default  reduce using rule 135 (pseudo)
+
+
+State 343
+
+   18 maybe_space: maybe_space . S
+  136 pseudo: ':' FUNCTION maybe_space maybe_plus INTEGER maybe_space . ')'
+
+    S    shift, and go to state 25
+    ')'  shift, and go to state 365
+
+
+State 344
+
+  139 pseudo: ':' NOTFUNCTION maybe_space simple_css3_selector maybe_space ')' .
+
+    $default  reduce using rule 139 (pseudo)
+
+
+State 345
+
+   18 maybe_space: maybe_space . S
+  124 attrib: '[' maybe_space namespace_selector attrib_id match maybe_space . ident_or_string maybe_space ']'
+
+    S       shift, and go to state 25
+    STRING  shift, and go to state 346
+    IDENT   shift, and go to state 347
+
+    ident_or_string  go to state 366
+
+
+State 346
+
+  132 ident_or_string: STRING .
+
+    $default  reduce using rule 132 (ident_or_string)
+
+
+State 347
+
+  131 ident_or_string: IDENT .
+
+    $default  reduce using rule 131 (ident_or_string)
+
+
+State 348
+
+  122 attrib: '[' maybe_space attrib_id match maybe_space ident_or_string . maybe_space ']'
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 367
+
+
+State 349
+
+   29 import: IMPORT_SYM maybe_space string_or_uri maybe_space maybe_media_list ';' .
+
+    $default  reduce using rule 29 (import)
+
+
+State 350
+
+   72 media_list: media_list error .
+
+    $default  reduce using rule 72 (media_list)
+
+
+State 351
+
+   71 media_list: media_list ',' . maybe_space media_query
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 368
+
+
+State 352
+
+   18 maybe_space: maybe_space . S
+  152 prio: IMPORTANT_SYM maybe_space .
+
+    S  shift, and go to state 25
+
+    $default  reduce using rule 152 (prio)
+
+
+State 353
+
+   18 maybe_space: maybe_space . S
+   57 maybe_media_value: ':' maybe_space . expr maybe_space
+
+    S             shift, and go to state 25
+    STRING        shift, and go to state 65
+    IDENT         shift, and go to state 66
+    HEXCOLOR      shift, and go to state 67
+    QEMS          shift, and go to state 68
+    EMS           shift, and go to state 69
+    EXS           shift, and go to state 70
+    CHS           shift, and go to state 71
+    REMS          shift, and go to state 72
+    PXS           shift, and go to state 73
+    CMS           shift, and go to state 74
+    MMS           shift, and go to state 75
+    INS           shift, and go to state 76
+    PTS           shift, and go to state 77
+    PCS           shift, and go to state 78
+    DEGS          shift, and go to state 79
+    RADS          shift, and go to state 80
+    GRADS         shift, and go to state 81
+    MSECS         shift, and go to state 82
+    SECS          shift, and go to state 83
+    HERZ          shift, and go to state 84
+    KHERZ         shift, and go to state 85
+    DPI           shift, and go to state 86
+    DPCM          shift, and go to state 87
+    VH            shift, and go to state 88
+    VW            shift, and go to state 89
+    VMIN          shift, and go to state 90
+    VMAX          shift, and go to state 91
+    DIMEN         shift, and go to state 92
+    PERCENTAGE    shift, and go to state 93
+    FLOAT         shift, and go to state 94
+    INTEGER       shift, and go to state 95
+    URI           shift, and go to state 96
+    FUNCTION      shift, and go to state 97
+    UNICODERANGE  shift, and go to state 98
+    '+'           shift, and go to state 99
+    '-'           shift, and go to state 100
+
+    unary_operator  go to state 101
+    expr            go to state 369
+    term            go to state 103
+    unary_term      go to state 104
+    function        go to state 105
+    hexcolor        go to state 106
+
+
+State 354
+
+   58 media_query_exp: '(' maybe_space media_feature maybe_space maybe_media_value ')' . maybe_space
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 370
+
+
+State 355
+
+   60 media_query_exp_list: media_query_exp_list . maybe_space MEDIA_AND maybe_space media_query_exp
+   62 maybe_and_media_query_exp_list: MEDIA_AND maybe_space media_query_exp_list .
+
+    S          reduce using rule 17 (maybe_space)
+    MEDIA_AND  reduce using rule 17 (maybe_space)
+    $default   reduce using rule 62 (maybe_and_media_query_exp_list)
+
+    maybe_space  go to state 200
+
+
+State 356
+
+   79 page: PAGE_SYM error ';' .
+
+    $default  reduce using rule 79 (page)
+
+
+State 357
+
+   78 page: PAGE_SYM error invalid_block .
+
+    $default  reduce using rule 78 (page)
+
+
+State 358
+
+   74 media: MEDIA_SYM maybe_space '{' . maybe_space ruleset_list '}'
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 371
+
+
+State 359
+
+   71 media_list: media_list . ',' maybe_space media_query
+   72           | media_list . error
+   73 media: MEDIA_SYM maybe_space media_list . '{' maybe_space ruleset_list '}'
+
+    error  shift, and go to state 350
+    '{'    shift, and go to state 372
+    ','    shift, and go to state 351
+
+
+State 360
+
+   82 font_face: FONT_FACE_SYM error ';' .
+
+    $default  reduce using rule 82 (font_face)
+
+
+State 361
+
+   81 font_face: FONT_FACE_SYM error invalid_block .
+
+    $default  reduce using rule 81 (font_face)
+
+
+State 362
+
+   80 font_face: FONT_FACE_SYM maybe_space declaration_block .
+
+    $default  reduce using rule 80 (font_face)
+
+
+State 363
+
+  199 invalid_at: '@' error ';' .
+
+    $default  reduce using rule 199 (invalid_at)
+
+
+State 364
+
+  198 invalid_at: '@' error invalid_block .
+
+    $default  reduce using rule 198 (invalid_at)
+
+
+State 365
+
+  136 pseudo: ':' FUNCTION maybe_space maybe_plus INTEGER maybe_space ')' .
+
+    $default  reduce using rule 136 (pseudo)
+
+
+State 366
+
+  124 attrib: '[' maybe_space namespace_selector attrib_id match maybe_space ident_or_string . maybe_space ']'
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 373
+
+
+State 367
+
+   18 maybe_space: maybe_space . S
+  122 attrib: '[' maybe_space attrib_id match maybe_space ident_or_string maybe_space . ']'
+
+    S    shift, and go to state 25
+    ']'  shift, and go to state 374
+
+
+State 368
+
+   18 maybe_space: maybe_space . S
+   71 media_list: media_list ',' maybe_space . media_query
+
+    S           shift, and go to state 25
+    MEDIA_ONLY  shift, and go to state 107
+    MEDIA_NOT   shift, and go to state 108
+    '('         shift, and go to state 109
+
+    S         [reduce using rule 63 (maybe_media_restrictor)]
+    $default  reduce using rule 63 (maybe_media_restrictor)
+
+    media_query_exp         go to state 110
+    media_query_exp_list    go to state 111
+    maybe_media_restrictor  go to state 112
+    media_query             go to state 375
+
+
+State 369
+
+   57 maybe_media_value: ':' maybe_space expr . maybe_space
+  155 expr: expr . operator term
+
+    ','  shift, and go to state 196
+    '/'  shift, and go to state 197
+
+    S         reduce using rule 17 (maybe_space)
+    ')'       reduce using rule 17 (maybe_space)
+    $default  reduce using rule 158 (operator)
+
+    maybe_space  go to state 376
+    operator     go to state 198
+
+
+State 370
+
+   18 maybe_space: maybe_space . S
+   58 media_query_exp: '(' maybe_space media_feature maybe_space maybe_media_value ')' maybe_space .
+
+    S  shift, and go to state 25
+
+    S         [reduce using rule 58 (media_query_exp)]
+    $default  reduce using rule 58 (media_query_exp)
+
+
+State 371
+
+   18 maybe_space: maybe_space . S
+   74 media: MEDIA_SYM maybe_space '{' maybe_space . ruleset_list '}'
+
+    S  shift, and go to state 25
+
+    $default  reduce using rule 75 (ruleset_list)
+
+    ruleset_list  go to state 377
+
+
+State 372
+
+   73 media: MEDIA_SYM maybe_space media_list '{' . maybe_space ruleset_list '}'
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 378
+
+
+State 373
+
+   18 maybe_space: maybe_space . S
+  124 attrib: '[' maybe_space namespace_selector attrib_id match maybe_space ident_or_string maybe_space . ']'
+
+    S    shift, and go to state 25
+    ']'  shift, and go to state 379
+
+
+State 374
+
+  122 attrib: '[' maybe_space attrib_id match maybe_space ident_or_string maybe_space ']' .
+
+    $default  reduce using rule 122 (attrib)
+
+
+State 375
+
+   71 media_list: media_list ',' maybe_space media_query .
+
+    $default  reduce using rule 71 (media_list)
+
+
+State 376
+
+   18 maybe_space: maybe_space . S
+   57 maybe_media_value: ':' maybe_space expr maybe_space .
+
+    S  shift, and go to state 25
+
+    $default  reduce using rule 57 (maybe_media_value)
+
+
+State 377
+
+   74 media: MEDIA_SYM maybe_space '{' maybe_space ruleset_list . '}'
+   76 ruleset_list: ruleset_list . safe_ruleset maybe_space
+
+    error       shift, and go to state 294
+    IDENT       shift, and go to state 37
+    HASH        shift, and go to state 38
+    ':'         shift, and go to state 39
+    '.'         shift, and go to state 40
+    '['         shift, and go to state 41
+    '*'         shift, and go to state 42
+    '|'         shift, and go to state 43
+    IMPORT_SYM  shift, and go to state 44
+    '}'         shift, and go to state 380
+    '@'         shift, and go to state 298
+
+    import              go to state 381
+    safe_ruleset        go to state 382
+    ruleset             go to state 383
+    selector_list       go to state 50
+    selector            go to state 51
+    namespace_selector  go to state 52
+    simple_selector     go to state 53
+    element_name        go to state 54
+    specifier_list      go to state 55
+    specifier           go to state 56
+    class               go to state 57
+    attrib              go to state 58
+    pseudo              go to state 59
+    invalid_at          go to state 384
+    invalid_rule        go to state 385
+
+
+State 378
+
+   18 maybe_space: maybe_space . S
+   73 media: MEDIA_SYM maybe_space media_list '{' maybe_space . ruleset_list '}'
+
+    S  shift, and go to state 25
+
+    $default  reduce using rule 75 (ruleset_list)
+
+    ruleset_list  go to state 386
+
+
+State 379
+
+  124 attrib: '[' maybe_space namespace_selector attrib_id match maybe_space ident_or_string maybe_space ']' .
+
+    $default  reduce using rule 124 (attrib)
+
+
+State 380
+
+   74 media: MEDIA_SYM maybe_space '{' maybe_space ruleset_list '}' .
+
+    $default  reduce using rule 74 (media)
+
+
+State 381
+
+   52 safe_ruleset: import . error
+
+    error  shift, and go to state 387
+
+
+State 382
+
+   76 ruleset_list: ruleset_list safe_ruleset . maybe_space
+
+    $default  reduce using rule 17 (maybe_space)
+
+    maybe_space  go to state 388
+
+
+State 383
+
+   49 safe_ruleset: ruleset .
+
+    $default  reduce using rule 49 (safe_ruleset)
+
+
+State 384
+
+   51 safe_ruleset: invalid_at .
+
+    $default  reduce using rule 51 (safe_ruleset)
+
+
+State 385
+
+   50 safe_ruleset: invalid_rule .
+
+    $default  reduce using rule 50 (safe_ruleset)
+
+
+State 386
+
+   73 media: MEDIA_SYM maybe_space media_list '{' maybe_space ruleset_list . '}'
+   76 ruleset_list: ruleset_list . safe_ruleset maybe_space
+
+    error       shift, and go to state 294
+    IDENT       shift, and go to state 37
+    HASH        shift, and go to state 38
+    ':'         shift, and go to state 39
+    '.'         shift, and go to state 40
+    '['         shift, and go to state 41
+    '*'         shift, and go to state 42
+    '|'         shift, and go to state 43
+    IMPORT_SYM  shift, and go to state 44
+    '}'         shift, and go to state 389
+    '@'         shift, and go to state 298
+
+    import              go to state 381
+    safe_ruleset        go to state 382
+    ruleset             go to state 383
+    selector_list       go to state 50
+    selector            go to state 51
+    namespace_selector  go to state 52
+    simple_selector     go to state 53
+    element_name        go to state 54
+    specifier_list      go to state 55
+    specifier           go to state 56
+    class               go to state 57
+    attrib              go to state 58
+    pseudo              go to state 59
+    invalid_at          go to state 384
+    invalid_rule        go to state 385
+
+
+State 387
+
+   52 safe_ruleset: import error .
+
+    $default  reduce using rule 52 (safe_ruleset)
+
+
+State 388
+
+   18 maybe_space: maybe_space . S
+   76 ruleset_list: ruleset_list safe_ruleset maybe_space .
+
+    S  shift, and go to state 25
+
+    $default  reduce using rule 76 (ruleset_list)
+
+
+State 389
+
+   73 media: MEDIA_SYM maybe_space media_list '{' maybe_space ruleset_list '}' .
+
+    $default  reduce using rule 73 (media)
