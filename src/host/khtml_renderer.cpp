@@ -323,13 +323,12 @@ public:
         m_container->setEnabled(true);
         m_container->setFocusPolicy(Qt::StrongFocus);
         m_container->setAttribute(Qt::WA_TransparentForMouseEvents, false);
-        QVBoxLayout *lay = new QVBoxLayout(m_container);
-        lay->setContentsMargins(0, 0, 0, 0);
-        m_view = new RendererView(m_jsEnabled, m_container);
+        // KHTML view widget is created top-level (no widget parent) so its
+        // native HWND can be embedded directly by the browser process.
+        m_view = new RendererView(m_jsEnabled, nullptr);
         m_view->widget()->setEnabled(true);
         m_view->widget()->setFocusPolicy(Qt::StrongFocus);
         m_view->widget()->setAttribute(Qt::WA_TransparentForMouseEvents, false);
-        lay->addWidget(m_view->widget());
 
         connect(m_view, &RendererView::navigateRequested, this, [this](const QUrl &u) {
             m_pendingUrl = u;
@@ -435,10 +434,14 @@ private slots:
             // avoid orphan renderer processes lingering after browser close.
             QCoreApplication::quit();
         });
-        // Now that the parent is connected, show the window and send HWND.
-        m_container->setGeometry(m_pendingX, m_pendingY, m_pendingW, m_pendingH);
-        m_container->show();
-        const QString hwndStr = QString::number((quint64)(uintptr_t)m_container->winId());
+        // Embed the actual KHTML widget directly. It was created top-level
+        // (no widget parent), so its native HWND is ready for the browser to
+        // Win32-SetParent into its tab container.
+        QWidget *view = m_view->widget();
+        view->setGeometry(m_pendingX, m_pendingY, m_pendingW, m_pendingH);
+        view->show();
+        view->winId(); // force native window creation
+        const QString hwndStr = QString::number((quint64)(uintptr_t)view->winId());
         sendMessage(QStringLiteral("hwnd"), hwndStr);
         // Also write HWND to a temp file as a fallback (socket can be flaky).
         QFile hf(QDir::tempPath() + QStringLiteral("/khtml_hwnd_%1.txt").arg(m_socketName));
@@ -467,8 +470,8 @@ private slots:
                     else m_loader->load(u);
                 }
             } else if (cmd == QLatin1String("resize")) {
-                m_container->resize(obj.value(QStringLiteral("w")).toInt(800),
-                                    obj.value(QStringLiteral("h")).toInt(600));
+                m_view->widget()->resize(obj.value(QStringLiteral("w")).toInt(800),
+                                         obj.value(QStringLiteral("h")).toInt(600));
             } else if (cmd == QLatin1String("reload")) {
                 if (m_pendingUrl.isValid()) m_loader->load(m_pendingUrl);
             }
