@@ -543,10 +543,21 @@ void PageLoader::load(const QUrl &url)
 {
     PERF_BEGIN(url.toString().toUtf8().constData());
     PERF_MARK("pageloader_load_start");
+    // Bump generation so replies from a previous navigation are ignored.
+    ++m_navGeneration;
+    // Abort any in-flight replies from the previous navigation safely.
+    if (m_mainReply) {
+        m_mainReply->abort();
+        m_mainReply = nullptr;
+    }
+    const QList<QNetworkReply *> oldReplies = m_pendingMap.keys();
+    for (QNetworkReply *r : oldReplies)
+        r->abort();
     m_original = url;
     m_finalUrl = QUrl();
     m_failed = false;
     m_timedOut = false;
+    m_initialDelivered = false;
     m_resources.clear();
     m_pendingMap.clear();
     m_cssRaw.clear();
@@ -561,8 +572,8 @@ void PageLoader::load(const QUrl &url)
     req.setRawHeader("User-Agent",
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
         "(KHTML, like Gecko) KHtml/5.116 Safari/537.36");
-    QNetworkReply *r = m_nam.get(req);
-    connect(r, &QNetworkReply::finished, this, &PageLoader::onMainFinished);
+    m_mainReply = m_nam.get(req);
+    connect(m_mainReply, &QNetworkReply::finished, this, &PageLoader::onMainFinished);
 }
 
 void PageLoader::onMainFinished()
@@ -570,8 +581,17 @@ void PageLoader::onMainFinished()
     PERF_MARK("main_response_received");
     QNetworkReply *r = qobject_cast<QNetworkReply*>(sender());
     if (!r) return;
+    // Ignore replies from an obsolete navigation (aborted by a newer load()).
+    if (r != m_mainReply) {
+        r->deleteLater();
+        return;
+    }
+    m_mainReply = nullptr;
     if (r->error() != QNetworkReply::NoError) {
-        fail(r->errorString());
+        // OperationCanceledError is expected when we abort for a new navigation;
+        // don't report it as a page failure.
+        if (r->error() != QNetworkReply::OperationCanceledError)
+            fail(r->errorString());
         r->deleteLater();
         return;
     }
@@ -595,7 +615,9 @@ void PageLoader::onMainFinished()
     PERF_MARK_D("extract_resources_done", QString::number(m_resources.size()) + " resources");
     PERF_MARK("resource_downloads_start");
     startDownloads();
-    maybeFinish(); // in case there are no resources
+    // Deliver the main document immediately so KHTML can begin parsing and
+    // painting without waiting for CSS/JS subresources to finish.
+    deliverInitialDocument();
 }
 
 static bool isFetchable(const QUrl &u)
@@ -694,7 +716,9 @@ void PageLoader::startOne(const Res &res)
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
         "(KHTML, like Gecko) KHtml/5.116 Safari/537.36");
     QNetworkReply *r = m_nam.get(req);
-    m_pendingMap.insert(r, res);
+    Res stamped = res;
+    stamped.gen = m_navGeneration;
+    m_pendingMap.insert(r, stamped);
     ++m_pending;
     if (res.isCss || res.isJs) ++m_criticalPending;
     connect(r, &QNetworkReply::finished, this, &PageLoader::onResourceFinished);
@@ -713,6 +737,11 @@ void PageLoader::onResourceFinished()
     if (!r) return;
     Res res = m_pendingMap.value(r);
     m_pendingMap.remove(r);
+    // Ignore replies from an obsolete navigation.
+    if (res.gen != m_navGeneration) {
+        r->deleteLater();
+        return;
+    }
     if (res.isCss || res.isJs) --m_criticalPending;
 
     if (r->error() == QNetworkReply::NoError) {
@@ -723,7 +752,7 @@ void PageLoader::onResourceFinished()
         if (data.size() > 8 * 1024 * 1024) {
             r->deleteLater();
             --m_pending;
-            maybeFinish();
+            finalizeSubresources();
             return;
         }
         // Transpile external scripts before caching them: page JS is written in
@@ -759,7 +788,7 @@ void PageLoader::onResourceFinished()
     }
     r->deleteLater();
     --m_pending;
-    maybeFinish();
+    finalizeSubresources();
 }
 
 void PageLoader::extractFromCss(const QByteArray &css, const QUrl &baseUrl, const QString &localName)
@@ -1344,16 +1373,103 @@ void PageLoader::rewriteCssFiles()
     }
 }
 
-void PageLoader::maybeFinish()
+// Deliver the main document to KHTML immediately after the main HTML response
+// arrives, without waiting for CSS/JS subresources.  Only the minimum
+// transformation is applied: known resource URLs are rewritten to local
+// file:// paths and a <base href> is set for correct navigation.  No full
+// rewriteAndSave() (no gradient simplification, no SVG transform, no JS
+// transpile, no polyfill injection) is run here.
+void PageLoader::deliverInitialDocument()
 {
-    PERF_MARK("maybe_finish_check");
-    if (m_failed || m_finished) return;
-    if (m_criticalPending > 0 && !m_timedOut) return;
+    if (m_initialDelivered || m_failed) return;
+    m_initialDelivered = true;
     m_finished = true;
-    m_timeout->stop();
-    rewriteAndSave();
+
+    QString html = QString::fromUtf8(m_mainHtml);
+
+    // Build URL replacement table from resources discovered by extractResources().
+    QStringList needles;
+    QHash<QString, QString> repl;
+    for (const Res &res : m_resources) {
+        const QString la = localAbs(res.localName);
+        repl.insert(res.url.toString(), la);
+        repl.insert(QLatin1String("//") + res.url.host() + res.url.path(), la);
+    }
+    // Add relative references, excluding short names subsumed by longer ones.
+    {
+        const QStringList raws = m_rawToLocal.keys();
+        QSet<QString> subsumed;
+        for (int i = 0; i < raws.size(); ++i)
+            for (int j = 0; j < raws.size(); ++j)
+                if (i != j && raws.at(i).size() < raws.at(j).size()
+                    && raws.at(j).contains(raws.at(i)))
+                    subsumed.insert(raws.at(i));
+        for (auto it = m_rawToLocal.begin(); it != m_rawToLocal.end(); ++it)
+            if (!subsumed.contains(it.key()))
+                repl.insert(it.key(), it.value());
+    }
+    needles = repl.keys();
+    std::sort(needles.begin(), needles.end(), [](const QString &a, const QString &b) {
+        return a.size() > b.size();
+    });
+    for (const QString &n : needles)
+        html.replace(n, repl.value(n));
+
+    // Set <base href> to the final (post-redirect) URL for correct navigation.
+    const QRegularExpression reBase(
+        QStringLiteral("<base[^>]*>"), QRegularExpression::CaseInsensitiveOption);
+    if (reBase.match(html).hasMatch()) {
+        html.replace(reBase, QStringLiteral("<base href=\"%1\">").arg(m_finalUrl.toString()));
+    } else {
+        // Insert <base> right after <head> (or <html> if no head).
+        const QRegularExpression reHead(
+            QStringLiteral("<head[^>]*>"), QRegularExpression::CaseInsensitiveOption);
+        const QRegularExpressionMatch hm = reHead.match(html);
+        const QString baseTag = QStringLiteral("<base href=\"%1\">").arg(m_finalUrl.toString());
+        if (hm.hasMatch()) {
+            html.insert(hm.capturedEnd(), baseTag);
+        } else {
+            const QRegularExpression reHtml(
+                QStringLiteral("<html[^>]*>"), QRegularExpression::CaseInsensitiveOption);
+            const QRegularExpressionMatch htm = reHtml.match(html);
+            if (htm.hasMatch())
+                html.insert(htm.capturedEnd(), QStringLiteral("<head>") + baseTag + QStringLiteral("</head>"));
+        }
+    }
+
+    // Write the initial document.
+    QDir().mkpath(m_cacheDir);
+    QFile f(m_cacheDir + QStringLiteral("/index.html"));
+    if (f.open(QIODevice::WriteOnly)) {
+        QTextStream ts(&f);
+        ts.setCodec("UTF-8");
+        ts << html;
+    }
+
+    PERF_MARK("initial_document_delivered");
     const QUrl local = QUrl::fromLocalFile(m_cacheDir + QStringLiteral("/index.html"));
     emit finished(local, m_finalUrl, QString());
+}
+
+// Called as subresources finish.  Keeps the existing cache write and
+// bookkeeping (done by the caller).  When all critical resources are in,
+// runs the full rewriteAndSave() to update the cached copy with CSS/JS
+// processing — but never emits finished() a second time.
+void PageLoader::finalizeSubresources()
+{
+    if (m_failed) return;
+    if (m_criticalPending > 0 && !m_timedOut) return;
+    m_timeout->stop();
+    // Full rewrite updates the cached index.html with gradient simplification,
+    // CSS var expansion, JS transpile, etc.  KHTML already has the initial
+    // document; this improves the cached copy for future reloads.
+    if (m_initialDelivered && m_criticalPending == 0)
+        rewriteAndSave();
+}
+
+void PageLoader::maybeFinish()
+{
+    finalizeSubresources();
 }
 
 void PageLoader::onTimeout()
@@ -1364,7 +1480,7 @@ void PageLoader::onTimeout()
     const QList<QNetworkReply *> replies = m_pendingMap.keys();
     for (QNetworkReply *r : replies)
         r->abort();
-    maybeFinish();
+    finalizeSubresources();
 }
 
 void PageLoader::fail(const QString &msg)

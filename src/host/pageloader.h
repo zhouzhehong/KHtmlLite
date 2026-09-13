@@ -41,6 +41,7 @@ private Q_SLOTS:
 
 private:
     QNetworkAccessManager m_nam;
+    QNetworkReply *m_mainReply = nullptr;
     QUrl m_original;   // URL the user requested (before redirects)
     QUrl m_finalUrl;   // URL after HTTP redirects (== m_original when none)
     QByteArray m_mainHtml;
@@ -50,9 +51,11 @@ private:
     bool m_failed = false;
     bool m_timedOut = false;
     bool m_finished = false;
+    bool m_initialDelivered = false;
+    int m_navGeneration = 0;
     QTimer *m_timeout = nullptr;
 
-    struct Res { QUrl url; QString localName; bool isCss = false; bool isJs = false; };
+    struct Res { QUrl url; QString localName; bool isCss = false; bool isJs = false; int gen = 0; };
     QList<Res> m_resources;
     QHash<QNetworkReply*, Res> m_pendingMap;
     // Raw CSS content keyed by local name, held so references can be rewritten
@@ -76,6 +79,8 @@ private:
     QString localAbs(const QString &localName) const;
     void rewriteAndSave();
     void rewriteCssFiles();
+    void deliverInitialDocument();
+    void finalizeSubresources();
     void maybeFinish();
     void fail(const QString &msg);
 };
