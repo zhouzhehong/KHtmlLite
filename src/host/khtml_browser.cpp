@@ -84,6 +84,10 @@ public:
 
         connect(m_process, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
                 this, &RenderTab::onFinished);
+        // Drain renderer stdout/stderr (MergedChannels) so the pipe buffer
+        // never fills and blocks the renderer process on write.
+        connect(m_process, &QProcess::readyReadStandardOutput,
+                this, &RenderTab::onStdout);
         // Connect IPC socket immediately — the renderer sends its HWND through
         // it as soon as we connect (chicken-and-egg: we need the socket to
         // receive the HWND, and the HWND to embed the window).
@@ -182,14 +186,11 @@ Q_SIGNALS:
 private slots:
     void onStdout()
     {
-        while (m_process && m_process->canReadLine()) {
-            const QString line = QString::fromUtf8(m_process->readLine()).trimmed();
-            if (line.startsWith(QStringLiteral("HWND="))) {
-                bool ok = false;
-                const WId wid = line.mid(5).toULongLong(&ok);
-                if (ok && wid) embedWindow(wid);
-            }
-        }
+        // Drain all available output so the pipe buffer cannot fill and block
+        // the renderer.  The renderer sends HWND/IPC via QLocalSocket, not
+        // stdout, so the content is discarded.
+        if (m_process)
+            m_process->readAllStandardOutput();
     }
 
     void onFinished(int exitCode, QProcess::ExitStatus status)
