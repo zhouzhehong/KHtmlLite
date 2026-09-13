@@ -1187,6 +1187,10 @@ void RenderBox::relativePositionOffset(int &tx, int &ty) const
 
 void RenderBox::calcWidth()
 {
+    // Flex layout (and similar) may pin the width so that children are laid
+    // out at the flex base size rather than the full containing-block width.
+    if (m_overrideWidth)
+        return;
 #ifdef DEBUG_LAYOUT
     qCDebug(KHTML_LOG) << "RenderBox(" << renderName() << ")::calcWidth()";
 #endif

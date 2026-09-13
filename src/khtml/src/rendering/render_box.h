@@ -121,6 +121,11 @@ public:
     void setWidth(int width) override;
     void setHeight(int height) override;
 
+    // When true, calcWidth() preserves the current m_width instead of
+    // recalculating it from the containing block.  Used by flex layout to
+    // lay out a flex item at its flex base size.  Must be cleared after use.
+    void setOverrideWidth(bool enable) { m_overrideWidth = enable; }
+
     void position(InlineBox *box, int from, int len, bool reverse) override;
 
     int highestPosition(bool includeOverflowInterior = true, bool includeSelf = true) const override;
@@ -270,6 +275,9 @@ protected:
      * (e.g replaced or positioned elements)
      */
     InlineBox *m_placeHolderBox;
+
+    // When true, calcWidth() is a no-op (preserves externally-set width).
+    bool m_overrideWidth = false;
 };
 
 } //namespace

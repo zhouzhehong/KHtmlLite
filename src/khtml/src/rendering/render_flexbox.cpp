@@ -169,10 +169,13 @@ void RenderFlexBox::layoutBlockChildren(bool relayoutChildren)
             int contentMin = box->minWidth();
             if (contentMax > 0 && contentMax < cw) {
                 itemW = qMax(contentMin, contentMax);
+                // Pin the width so calcWidth() does not stretch it back to cw
+                // during layout; children must be laid out at the flex base size.
+                box->setOverrideWidth(true);
                 box->setWidth(itemW);
                 child->setChildNeedsLayout(true);
                 box->layout();
-                box->setWidth(itemW);
+                box->setOverrideWidth(false);
             }
         }
 

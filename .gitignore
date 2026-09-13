@@ -80,3 +80,5 @@ src/khtml/src/css/tokenizer.cc
 src/khtml/src/css/tokenizer.flex
 src/khtml/src/html/htmltokenizer.cc
 src/khtml/src/dom/dom2.cc
+
+build-host/
