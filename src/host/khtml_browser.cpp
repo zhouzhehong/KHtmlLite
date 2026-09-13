@@ -145,11 +145,13 @@ public:
         if (m_process) {
             disconnect(m_process, nullptr, this, nullptr);
             m_process->kill();
-            m_process->waitForFinished(2000);
-            delete m_process;
+            // Non-blocking: QProcess cleans up asynchronously via deleteLater.
+            // waitForFinished() would block the UI thread for up to 2 s and
+            // make the browser window show "Not Responding".
+            m_process->deleteLater();
             m_process = nullptr;
         }
-        if (m_socket) { delete m_socket; m_socket = nullptr; }
+        if (m_socket) { m_socket->deleteLater(); m_socket = nullptr; }
         // m_container is owned by the QTabWidget; don't delete here.
         m_embedded = false;
         m_crashed = false;
@@ -470,25 +472,13 @@ protected:
     }
 
     void closeEvent(QCloseEvent *event) override {
-        // Phase 1: graceful shutdown — tell every renderer to stop.
+        // Non-blocking shutdown: kill every renderer and close immediately.
+        // Renderer processes are terminated asynchronously; the OS reclaims
+        // any that are still alive when this process exits. A busy-wait loop
+        // with processEvents() here caused the window to hang as "Not
+        // Responding" for up to 5 s on close.
         for (TabPage *pg : m_pages) {
             if (pg->render) pg->render->terminate();
-        }
-        // Phase 2: wait for all renderer processes to actually exit.
-        QElapsedTimer t; t.start();
-        while (t.elapsed() < 5000) {
-            bool anyRunning = false;
-            for (TabPage *pg : m_pages) {
-                if (pg->render && pg->render->isRunning()) { anyRunning = true; break; }
-            }
-            if (!anyRunning) break;
-            QCoreApplication::processEvents(QEventLoop::AllEvents, 100);
-        }
-        // Phase 3: hard kill any survivors as last resort.
-        for (TabPage *pg : m_pages) {
-            if (pg->render && pg->render->isRunning()) {
-                pg->render->terminate();
-            }
         }
         m_pages.clear();
         QMainWindow::closeEvent(event);
