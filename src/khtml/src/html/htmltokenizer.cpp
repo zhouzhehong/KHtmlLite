@@ -1477,7 +1477,8 @@ void HTMLTokenizer::parseTag(TokenizerString &src)
             // tags with forbidden end-tags
             if (tagID < ID_CLOSE_TAG && tagID != ID_SCRIPT &&
                     DOM::endTagRequirement(tagID) != DOM::FORBIDDEN &&
-                    parser->doc()->htmlMode() != DocumentImpl::XHtml) {
+                    parser->doc()->htmlMode() != DocumentImpl::XHtml &&
+                    !parser->inSVGContent()) {
                 currToken.flat = false;
             }
 

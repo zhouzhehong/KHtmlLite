@@ -102,6 +102,11 @@ public:
         return inSelect;
     }
 
+    bool inSVGContent() const
+    {
+        return m_svgDepth > 0;
+    }
+
     DOM::HTMLDocumentImpl *doc() const
     {
         return static_cast<DOM::HTMLDocumentImpl *>(document);
