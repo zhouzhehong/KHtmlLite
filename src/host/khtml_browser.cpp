@@ -241,10 +241,11 @@ private:
         SetParent(childHwnd, containerHwnd);
         SetWindowLongPtr(childHwnd, GWL_STYLE, WS_CHILD | WS_VISIBLE);
         EnableWindow(childHwnd, TRUE);
-        SetFocus(childHwnd);
         RECT rc;
         GetClientRect(containerHwnd, &rc);
-        MoveWindow(childHwnd, 0, 0, rc.right - rc.left, rc.bottom - rc.top, TRUE);
+        SetWindowPos(childHwnd, nullptr, 0, 0,
+                     rc.right - rc.left, rc.bottom - rc.top,
+                     SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS);
         emit ready();
     }
 
