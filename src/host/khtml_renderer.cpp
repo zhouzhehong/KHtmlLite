@@ -16,6 +16,7 @@
 
 #include <KHTMLPart>
 #include <khtml_part.h>
+#include <khtmlview.h>
 #include <kparts/part.h>
 #include <kparts/browserextension.h>
 #include <kparts/openurlarguments.h>
@@ -355,9 +356,24 @@ public:
         });
         connect(m_view, QOverload<>::of(&KParts::ReadOnlyPart::completed), this, [this]() {
             PERF_MARK("khtmlpart_completed");
+            // Apply tombstone restore (scroll + zoom) now that the document
+            // is loaded and layout is ready. Uses native KHTML APIs, not JS.
+            if (m_hasPendingRestore) {
+                m_view->setZoomFactor(m_pendingRestoreZoom);
+                KHTMLView *v = m_view->view();
+                if (v) v->setContentsPos(m_pendingRestoreX, m_pendingRestoreY);
+                m_hasPendingRestore = false;
+            }
             const QVariant t = m_view->executeScript(QStringLiteral("document.title"));
             sendMessage(QStringLiteral("title"), t.isValid() ? t.toString() : QString());
+            sendState();
         });
+        // Periodic state report so the browser always has fresh scroll/zoom
+        // for tombstone. One small JSON message every 10 s per active tab.
+        m_stateTimer = new QTimer(this);
+        m_stateTimer->setInterval(10000);
+        connect(m_stateTimer, &QTimer::timeout, this, &RendererHost::sendState);
+        m_stateTimer->start();
     }
 
     void showAt(int x, int y, int w, int h)
@@ -365,6 +381,20 @@ public:
         m_pendingX = x; m_pendingY = y; m_pendingW = w; m_pendingH = h;
         // Window is shown in onClient() once the parent connects, so we can
         // send the HWND through the socket (GUI apps have no stdout).
+    }
+
+    // Report current scroll position + zoom factor to the browser. Used for
+    // lightweight tab tombstone/restore so a suspended tab can resume at the
+    // same scroll offset and zoom without serializing DOM or JS state.
+    void sendState()
+    {
+        KHTMLView *v = m_view ? m_view->view() : nullptr;
+        if (!v) return;
+        const int x = v->contentsX();
+        const int y = v->contentsY();
+        const int z = m_view->zoomFactor();
+        sendMessage(QStringLiteral("state"),
+                    QStringLiteral("%1,%2,%3").arg(x).arg(y).arg(z));
     }
 
     void loadInitial(const QUrl &url)
@@ -451,6 +481,12 @@ private slots:
                                          obj.value(QStringLiteral("h")).toInt(600));
             } else if (cmd == QLatin1String("reload")) {
                 if (m_pendingUrl.isValid()) m_loader->load(m_pendingUrl);
+            } else if (cmd == QLatin1String("restore")) {
+                // Tombstone restore: store scroll/zoom, apply after page completes.
+                m_pendingRestoreX = obj.value(QStringLiteral("x")).toInt();
+                m_pendingRestoreY = obj.value(QStringLiteral("y")).toInt();
+                m_pendingRestoreZoom = obj.value(QStringLiteral("z")).toInt(100);
+                m_hasPendingRestore = true;
             }
         }
     }
@@ -472,9 +508,15 @@ private:
     QWidget *m_container = nullptr;
     RendererView *m_view = nullptr;
     PageLoader *m_loader = nullptr;
+    QTimer *m_stateTimer = nullptr;
     QUrl m_pendingUrl;
     bool m_jsEnabled = true;
     int m_pendingX = 0, m_pendingY = 0, m_pendingW = 800, m_pendingH = 600;
+    // Tombstone restore state, applied when the next document completes.
+    int m_pendingRestoreX = 0;
+    int m_pendingRestoreY = 0;
+    int m_pendingRestoreZoom = 100;
+    bool m_hasPendingRestore = false;
 };
 
 int main(int argc, char **argv)

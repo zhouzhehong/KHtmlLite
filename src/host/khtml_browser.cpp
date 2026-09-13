@@ -93,6 +93,7 @@ public:
         // receive the HWND, and the HWND to embed the window).
         m_socket = new QLocalSocket(this);
         connect(m_socket, &QLocalSocket::readyRead, this, &RenderTab::onSocketReady);
+        connect(m_socket, &QLocalSocket::connected, this, [this]() { sendRestoreIfConnected(); });
         connect(m_socket, &QLocalSocket::errorOccurred, this, [this](QLocalSocket::LocalSocketError) {
             // Server not ready yet — retry with backoff.
             if (m_connectRetries < 50) {
@@ -152,6 +153,14 @@ public:
         }
     }
 
+    // Send tombstone restore (scroll + zoom) to the renderer. If the socket
+    // is not connected yet, the values are stored and sent when it connects.
+    void setRestoreState(int x, int y, int zoom)
+    {
+        m_restoreX = x; m_restoreY = y; m_restoreZoom = zoom; m_hasRestore = true;
+        sendRestoreIfConnected();
+    }
+
     void terminate()
     {
         if (m_process) {
@@ -200,6 +209,7 @@ Q_SIGNALS:
     void crashed();
     void ready();          // window embedded, ready to show
     void openNewTab(const QUrl &url);
+    void stateChanged(int scrollX, int scrollY, int zoom);
 
 private slots:
     void onStdout()
@@ -243,11 +253,29 @@ private slots:
                 }
             } else if (type == QLatin1String("newtab")) {
                 emit openNewTab(QUrl(data));
+            } else if (type == QLatin1String("state")) {
+                const QStringList parts = data.split(QLatin1Char(','));
+                if (parts.size() >= 3)
+                    emit stateChanged(parts[0].toInt(), parts[1].toInt(),
+                                      parts[2].toInt());
             }
         }
     }
 
 private:
+    void sendRestoreIfConnected()
+    {
+        if (!m_hasRestore || !m_socket || !m_socket->isOpen()) return;
+        QJsonObject obj;
+        obj[QStringLiteral("cmd")] = QStringLiteral("restore");
+        obj[QStringLiteral("x")] = m_restoreX;
+        obj[QStringLiteral("y")] = m_restoreY;
+        obj[QStringLiteral("z")] = m_restoreZoom;
+        m_socket->write(QJsonDocument(obj).toJson(QJsonDocument::Compact) + "\n");
+        m_socket->flush();
+        m_hasRestore = false;
+    }
+
     void embedWindow(WId wid)
     {
         if (m_embedded) return;
@@ -276,6 +304,8 @@ private:
     bool m_embedded = false;
     bool m_crashed = false;
     int m_connectRetries = 0;
+    int m_restoreX = 0, m_restoreY = 0, m_restoreZoom = 100;
+    bool m_hasRestore = false;
     static int m_tabCounter;
 };
 int RenderTab::m_tabCounter = 0;
@@ -292,6 +322,10 @@ struct TabPage {
     qint64 lastActive = 0;
     bool jsDisabled = false;
     int crashCount = 0;
+    // Lightweight tombstone: scroll position + zoom for restore after suspend.
+    int scrollX = 0;
+    int scrollY = 0;
+    int zoom = 100;
 };
 
 class KHtmlLiteWindow : public QMainWindow
@@ -469,6 +503,10 @@ public:
             m_tabs->setTabText(idx, QStringLiteral("已崩溃"));
         });
         connect(pg->render, &RenderTab::openNewTab, this, [this](const QUrl &u) { addTab(u); });
+        connect(pg->render, &RenderTab::stateChanged, this,
+                [pg](int x, int y, int zoom) {
+                    pg->scrollX = x; pg->scrollY = y; pg->zoom = zoom;
+                });
         pg->render->start(url, 800, 560, pg->jsDisabled);
     }
 
@@ -606,6 +644,10 @@ protected:
         if (pg->render) { delete pg->render; pg->render = nullptr; }
         if (pg->crashWidget) { delete pg->crashWidget; pg->crashWidget = nullptr; }
         startRenderer(pg, pg->current);
+        // Restore tombstone scroll + zoom. Sent when the renderer socket
+        // connects; applied by the renderer after the document completes.
+        if (pg->scrollX != 0 || pg->scrollY != 0 || pg->zoom != 100)
+            pg->render->setRestoreState(pg->scrollX, pg->scrollY, pg->zoom);
         pg->suspended = false;
         if (idx >= 0) {
             m_tabs->insertTab(idx, pg->render->container() ? pg->render->container() : new QWidget, pg->savedTitle);
