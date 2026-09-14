@@ -12,6 +12,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QDir>
+#include <QFile>
 #include <QCoreApplication>
 
 #include <KHTMLPart>
@@ -355,7 +356,30 @@ public:
                 sendMessage(QStringLiteral("url"), finalUrl.toString());
             }
             PERF_MARK("khtmlpart_load_start");
-            m_view->loadUrl(localFile);
+            // Bypass KIO for the PageLoader-generated local cached document.
+            // The in-process kio_file.dll worker intermittently stalls after
+            // the first ~32 KB chunk on large cached HTML files (219 KB Bing
+            // document: 1/10 completion via KIO vs 10/10 via direct QFile).
+            // KHTMLPart's public begin()/write()/end() API feeds the same
+            // bytes directly without going through KIO.  HTTP/HTTPS navigation
+            // and other KIO paths are unaffected.
+            const QString localPath = localFile.toLocalFile();
+            QFile f(localPath);
+            if (!f.open(QIODevice::ReadOnly)) {
+                sendMessage(QStringLiteral("error"),
+                    QStringLiteral("Failed to open cached document: %1").arg(localPath));
+                return;
+            }
+            const QByteArray html = f.readAll();
+            f.close();
+            if (html.isEmpty()) {
+                sendMessage(QStringLiteral("error"),
+                    QStringLiteral("Cached document is empty: %1").arg(localPath));
+                return;
+            }
+            m_view->begin(localFile);
+            m_view->write(html.constData(), html.size());
+            m_view->end();
         });
         connect(m_view, QOverload<>::of(&KParts::ReadOnlyPart::completed), this, [this]() {
             PERF_MARK("khtmlpart_completed");
