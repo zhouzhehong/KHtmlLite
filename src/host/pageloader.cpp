@@ -613,11 +613,14 @@ void PageLoader::onMainFinished()
     PERF_MARK("extract_resources_start");
     extractResources();
     PERF_MARK_D("extract_resources_done", QString::number(m_resources.size()) + " resources");
+    // Deliver the main document first so KHTML can begin parsing/painting
+    // before the large batch of subresource downloads starts.  Concurrent
+    // QNetworkAccessManager downloads were observed to starve the in-process
+    // KIO file worker, causing it to stall after the first ~32 KB chunk of
+    // the cached index.html and leaving the page permanently white.
+    deliverInitialDocument();
     PERF_MARK("resource_downloads_start");
     startDownloads();
-    // Deliver the main document immediately so KHTML can begin parsing and
-    // painting without waiting for CSS/JS subresources to finish.
-    deliverInitialDocument();
 }
 
 static bool isFetchable(const QUrl &u)
