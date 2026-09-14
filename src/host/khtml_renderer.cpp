@@ -317,7 +317,10 @@ public:
             m_server->listen(socketName);
         }
         connect(m_server, &QLocalServer::newConnection, this, &RendererHost::onClient);
-        PerfLog::instance().setEnabled(true);
+        // PerfLog is a diagnostic tool that writes synchronously to disk on
+        // every event (flush() after each PERF_MARK). Keep it disabled in
+        // production to avoid main-thread disk I/O jank during page load.
+        PerfLog::instance().setEnabled(false);
 
         m_container = new QWidget(nullptr, Qt::FramelessWindowHint);
         m_container->setWindowTitle(QStringLiteral("KHtmlLite-Renderer"));
@@ -460,6 +463,12 @@ private slots:
 
     void onMessage()
     {
+        // Coalesce: if multiple resize messages arrive in one batch, only
+        // the last one matters — applying each intermediate size triggers a
+        // synchronous KHTML relayout that can starve the event loop.
+        int pendingW = -1, pendingH = -1;
+        bool hasPendingResize = false;
+
         while (m_socket && m_socket->canReadLine()) {
             const QByteArray line = m_socket->readLine().trimmed();
             const QJsonDocument doc = QJsonDocument::fromJson(line);
@@ -477,8 +486,9 @@ private slots:
                     else m_loader->load(u);
                 }
             } else if (cmd == QLatin1String("resize")) {
-                m_view->widget()->resize(obj.value(QStringLiteral("w")).toInt(800),
-                                         obj.value(QStringLiteral("h")).toInt(600));
+                pendingW = obj.value(QStringLiteral("w")).toInt(800);
+                pendingH = obj.value(QStringLiteral("h")).toInt(600);
+                hasPendingResize = true;
             } else if (cmd == QLatin1String("reload")) {
                 if (m_pendingUrl.isValid()) m_loader->load(m_pendingUrl);
             } else if (cmd == QLatin1String("restore")) {
@@ -489,6 +499,10 @@ private slots:
                 m_hasPendingRestore = true;
             }
         }
+
+        // Apply only the final resize from this batch.
+        if (hasPendingResize && m_view)
+            m_view->widget()->resize(pendingW, pendingH);
     }
 
 private:

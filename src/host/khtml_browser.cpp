@@ -1,4 +1,4 @@
-// KHtmlLite - multi-process sandboxed browser shell on KHTML.
+﻿// KHtmlLite - multi-process sandboxed browser shell on KHTML.
 //
 // Architecture (Safari-style):
 //   UI process (this file)  — tabs, address bar, memory budget, crash recovery
@@ -343,6 +343,9 @@ public:
         m_memTimer = new QTimer(this);
         connect(m_memTimer, &QTimer::timeout, this, &KHtmlLiteWindow::checkMemoryBudget);
         m_memTimer->start(10000);
+        m_resizeTimer = new QTimer(this);
+        m_resizeTimer->setSingleShot(true);
+        connect(m_resizeTimer, &QTimer::timeout, this, &KHtmlLiteWindow::applyPendingResize);
         addTab(start.isEmpty() ? QUrl(QStringLiteral("https://cn.bing.com")) : start);
         syncChrome();
     }
@@ -409,7 +412,12 @@ public:
             TabPage *pg = (idx >= 0 && idx < m_pages.size()) ? m_pages.at(idx) : nullptr;
             if (pg) pg->lastActive = QDateTime::currentMSecsSinceEpoch();
             if (pg && pg->suspended) resumeTab(pg);
-            else syncChrome();
+            else {
+                syncChrome();
+                // The newly visible tab may have been skipped by the
+                // current-tab-only resize policy; give it the current size.
+                QTimer::singleShot(0, this, &KHtmlLiteWindow::applyPendingResize);
+            }
         });
     }
 
@@ -521,20 +529,26 @@ public:
         syncChrome();
     }
 
+    // Called by the coalescing resize timer. Only resizes the currently
+    // visible tab — background tabs are resized when they become visible.
+    void applyPendingResize() {
+        TabPage *pg = currentPage();
+        if (!pg || !pg->render || !pg->render->isRunning())
+            return;
+        QWidget *container = pg->render->container();
+        if (!container)
+            return;
+        const QSize s = container->size();
+        pg->render->resize(s.width(), s.height());
+    }
+
 protected:
     void resizeEvent(QResizeEvent *event) override {
         QMainWindow::resizeEvent(event);
-        QTimer::singleShot(0, this, [this]() {
-            for (TabPage *pg : m_pages) {
-                if (!pg || !pg->render || !pg->render->isRunning())
-                    continue;
-                QWidget *container = pg->render->container();
-                if (!container)
-                    continue;
-                const QSize s = container->size();
-                pg->render->resize(s.width(), s.height());
-            }
-        });
+        // Coalesce: restarting an already-running single-shot timer discards
+        // the previous pending resize, so only the last size in a drag is sent.
+        if (m_resizeTimer)
+            m_resizeTimer->start(0);
     }
 
     void closeEvent(QCloseEvent *event) override {
@@ -727,6 +741,7 @@ protected:
 
     QTimer *m_memTimer = nullptr;
     QLabel *m_memLabel = nullptr;
+    QTimer *m_resizeTimer = nullptr;
     bool m_purgingCache = false;
     QTabWidget *m_tabs = nullptr;
     QList<TabPage *> m_pages;
