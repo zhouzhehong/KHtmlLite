@@ -35,6 +35,9 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QTextStream>
+#include <QSharedMemory>
+#include <QImage>
+#include <QPainter>
 
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -49,15 +52,50 @@
 #include <windows.h>
 #include <psapi.h>
 
+// PageSurface — browser-side widget that paints the latest software frame
+// received from the renderer process via shared memory.  The browser owns
+// this widget (and its native HWND); the renderer never owns a visible
+// window, so dragging the browser window never touches the renderer.
+class PageSurface : public QWidget
+{
+    Q_OBJECT
+public:
+    explicit PageSurface(QWidget *parent = nullptr) : QWidget(parent) {
+        setAttribute(Qt::WA_NativeWindow, true);
+        setAutoFillBackground(true);
+        QPalette pal = palette();
+        pal.setColor(QPalette::Window, Qt::white);
+        setPalette(pal);
+    }
+    void setFrame(const QImage &img) {
+        m_frame = img;
+        update();
+    }
+protected:
+    void paintEvent(QPaintEvent *) override {
+        QPainter p(this);
+        if (!m_frame.isNull()) {
+            // Draw 1:1 at top-left; if sizes differ, scale to fit.
+            if (m_frame.size() == size())
+                p.drawImage(0, 0, m_frame);
+            else
+                p.drawImage(rect(), m_frame, m_frame.rect());
+        } else {
+            p.fillRect(rect(), Qt::white);
+        }
+    }
+private:
+    QImage m_frame;
+};
+
 class RenderTab : public QObject
 {
     Q_OBJECT
 public:
     explicit RenderTab(QObject *parent = nullptr) : QObject(parent) {
-        // Container exists from day one so the tab widget has something to
-        // hold before the renderer window is ready.
-        m_container = new QWidget;
-        m_container->setAttribute(Qt::WA_NativeWindow, true);
+        // PageSurface owns the visible page area.  The renderer paints into
+        // shared memory; this widget draws the latest frame in paintEvent.
+        m_container = new PageSurface;
     }
 
     ~RenderTab() {
@@ -108,18 +146,6 @@ public:
         });
         m_socket->connectToServer(m_socketName);
         m_process->start(exe, args);
-        // Fallback: if no HWND via socket in 3s, read the temp file the
-        // renderer writes as a backup.
-        QTimer::singleShot(3000, this, [this]() {
-            if (m_embedded) return;
-            QFile hf(QDir::tempPath() + QStringLiteral("/khtml_hwnd_%1.txt").arg(m_socketName));
-            if (hf.open(QIODevice::ReadOnly)) {
-                bool ok = false;
-                const WId wid = hf.readAll().trimmed().toULongLong(&ok);
-                if (ok && wid) embedWindow(wid);
-                hf.close();
-            }
-        });
     }
 
     void navigate(const QUrl &url)
@@ -176,9 +202,8 @@ public:
             m_process = nullptr;
         }
         if (m_socket) { m_socket->deleteLater(); m_socket = nullptr; }
-        m_childHwnd = nullptr;
+        if (m_shm) { m_shm->detach(); m_shm->deleteLater(); m_shm = nullptr; }
         // m_container is owned by the QTabWidget; don't delete here.
-        m_embedded = false;
         m_crashed = false;
         m_connectRetries = 0;
     }
@@ -239,10 +264,21 @@ private slots:
             const QJsonObject obj = doc.object();
             const QString type = obj.value(QStringLiteral("type")).toString();
             const QString data = obj.value(QStringLiteral("data")).toString();
-            if (type == QLatin1String("hwnd")) {
-                bool ok = false;
-                const WId wid = data.toULongLong(&ok);
-                if (ok && wid) embedWindow(wid);
+            if (type == QLatin1String("ready")) {
+                // Renderer is up and its offscreen surface is initialized.
+                if (!m_embedded) {
+                    m_embedded = true;
+                    emit ready();
+                }
+            } else if (type == QLatin1String("frame")) {
+                // Software frame: "w,h,stride" — pixels are in shared memory.
+                const QStringList parts = data.split(QLatin1Char(','));
+                if (parts.size() >= 2) {
+                    const int fw = parts[0].toInt();
+                    const int fh = parts[1].toInt();
+                    if (fw > 0 && fh > 0)
+                        readFrame(fw, fh);
+                }
             } else if (type == QLatin1String("title")) {
                 m_title = data;
                 emit titleChanged(m_title);
@@ -277,51 +313,37 @@ private:
         m_hasRestore = false;
     }
 
-    void embedWindow(WId wid)
+    // Read a frame from shared memory and hand it to the PageSurface.
+    void readFrame(int w, int h)
     {
-        if (m_embedded) return;
-        m_childHwnd = (HWND)wid;
-        m_embedded = true;
-        const HWND containerHwnd = (HWND)m_container->winId();
-        const HWND childHwnd = m_childHwnd;
-        // Cross-process embedding via SetParent+WS_CHILD causes the browser UI
-        // thread to block whenever the renderer is busy (KHTML layout / JS):
-        // Windows sends synchronous messages to the child window, and SendMessage
-        // waits for the renderer's message pump.  Instead, keep the renderer as a
-        // borderless popup owned by the container and positioned over its client
-        // area.  This gives the same visual result without the parent-child
-        // message coupling.
-        SetWindowLongPtr(childHwnd, GWL_STYLE, WS_POPUP | WS_VISIBLE);
-        // Keep it out of the taskbar / Alt-Tab list.  No owner is set so the
-        // browser and renderer threads remain fully decoupled (an owned window
-        // can still receive synchronous messages from the owner thread).
-        SetWindowLongPtr(childHwnd, -20, GetWindowLongPtr(childHwnd, -20) | WS_EX_TOOLWINDOW | WS_EX_NOPARENTNOTIFY); // GWL_EXSTYLE
-        reposition();
-        emit ready();
+        if (!m_container) return;
+        if (!m_shm) {
+            m_shmKey = QStringLiteral("khtml_frame_%1").arg(m_socketName);
+            m_shm = new QSharedMemory(m_shmKey, this);
+        }
+        if (!m_shm->isAttached()) {
+            if (!m_shm->attach()) {
+                // Renderer may not have created it yet; skip this frame.
+                return;
+            }
+        }
+        if (m_shm->size() < (qint64)w * h * 4) return;
+        if (!m_shm->lock()) return;
+        QImage img((const uchar *)m_shm->constData(), w, h, w * 4,
+                   QImage::Format_RGB32);
+        // Copy out immediately so the renderer can overwrite the buffer.
+        QImage frame = img.copy();
+        m_shm->unlock();
+        m_container->setFrame(frame);
     }
 
 public:
-    // Move the owned popup to match the container's current screen position.
-    // Called on browser window move and after initial embedding.
-    void reposition() {
-        if (!m_childHwnd || !m_container) return;
-        const HWND containerHwnd = (HWND)m_container->winId();
-        RECT rc;
-        GetClientRect(containerHwnd, &rc);
-        POINT pt = { 0, 0 };
-        ClientToScreen(containerHwnd, &pt);
-        SetWindowPos(m_childHwnd, nullptr, pt.x, pt.y,
-                     rc.right - rc.left, rc.bottom - rc.top,
-                     SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS);
-    }
-
-    void showEmbedded() { if (m_childHwnd) ShowWindow(m_childHwnd, SW_SHOW); }
-    void hideEmbedded() { if (m_childHwnd) ShowWindow(m_childHwnd, SW_HIDE); }
 
     QProcess *m_process = nullptr;
     QLocalSocket *m_socket = nullptr;
-    QWidget *m_container = nullptr;
-    HWND m_childHwnd = nullptr;
+    PageSurface *m_container = nullptr;
+    QSharedMemory *m_shm = nullptr;
+    QString m_shmKey;
     QString m_socketName;
     QUrl m_current;
     QString m_title;
@@ -433,21 +455,14 @@ public:
         connect(newTab, &QToolButton::clicked, this, [this] { addTab(QUrl(QStringLiteral("https://cn.bing.com"))); });
         connect(m_tabs, &QTabWidget::tabCloseRequested, this, &KHtmlLiteWindow::closeTab);
         connect(m_tabs, &QTabWidget::currentChanged, this, [this](int idx) {
-            // Hide all non-current tab popups, show the current one.
-            for (int i = 0; i < m_pages.size(); i++) {
-                TabPage *pg = m_pages.at(i);
-                if (pg && pg->render) {
-                    if (i == idx) pg->render->showEmbedded();
-                    else pg->render->hideEmbedded();
-                }
-            }
+            // With software frames, each tab's PageSurface is already a child
+            // of the QTabWidget stack — no show/hide of renderer windows needed.
             TabPage *pg = (idx >= 0 && idx < m_pages.size()) ? m_pages.at(idx) : nullptr;
             if (pg) pg->lastActive = QDateTime::currentMSecsSinceEpoch();
             if (pg && pg->suspended) resumeTab(pg);
             else {
                 syncChrome();
                 QTimer::singleShot(0, this, &KHtmlLiteWindow::applyPendingResize);
-                if (pg && pg->render) pg->render->reposition();
             }
         });
     }
@@ -584,9 +599,9 @@ protected:
 
     void moveEvent(QMoveEvent *event) override {
         QMainWindow::moveEvent(event);
-        // Owned popups do not auto-follow the owner; reposition on every move.
-        TabPage *pg = currentPage();
-        if (pg && pg->render) pg->render->reposition();
+        // Software-frame architecture: the browser owns the only visible
+        // surface.  No renderer window to reposition, so dragging is purely
+        // a local window move — the renderer process is never touched.
     }
 
     void closeEvent(QCloseEvent *event) override {

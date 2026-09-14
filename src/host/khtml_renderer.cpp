@@ -14,6 +14,9 @@
 #include <QDir>
 #include <QFile>
 #include <QCoreApplication>
+#include <QSharedMemory>
+#include <QImage>
+#include <QPainter>
 
 #include <KHTMLPart>
 #include <khtml_part.h>
@@ -323,17 +326,28 @@ public:
         // production to avoid main-thread disk I/O jank during page load.
         PerfLog::instance().setEnabled(false);
 
-        m_container = new QWidget(nullptr, Qt::FramelessWindowHint);
-        m_container->setWindowTitle(QStringLiteral("KHtmlLite-Renderer"));
-        m_container->setEnabled(true);
-        m_container->setFocusPolicy(Qt::StrongFocus);
-        m_container->setAttribute(Qt::WA_TransparentForMouseEvents, false);
-        // KHTML view widget is created top-level (no widget parent) so its
-        // native HWND can be embedded directly by the browser process.
+        // Software-frame transport: the renderer never owns a visible window.
+        // KHTML renders to an offscreen widget; frames are captured and sent
+        // to the browser via QSharedMemory + a small JSON "frame" message.
+        // This eliminates the WS_POPUP drag/freeze problem entirely: the
+        // browser owns the only visible surface and window movement never
+        // touches the renderer process.
         m_view = new RendererView(m_jsEnabled, nullptr);
         m_view->widget()->setEnabled(true);
         m_view->widget()->setFocusPolicy(Qt::StrongFocus);
-        m_view->widget()->setAttribute(Qt::WA_TransparentForMouseEvents, false);
+        // Do NOT show the widget.  It remains offscreen; grab() renders it
+        // into a pixmap on demand.  Resize is applied via IPC from the browser.
+
+        // Shared memory key derived from the socket name so both sides agree.
+        m_shmKey = QStringLiteral("khtml_frame_%1").arg(socketName);
+        m_shm = new QSharedMemory(m_shmKey, this);
+
+        // Frame capture timer: ~30 fps.  Coalesced naturally — if a grab is
+        // still in progress (unlikely for software render) the next tick simply
+        // overwrites the shared-memory buffer.
+        m_frameTimer = new QTimer(this);
+        m_frameTimer->setInterval(33);
+        connect(m_frameTimer, &QTimer::timeout, this, &RendererHost::grabFrame);
 
         connect(m_view, &RendererView::navigateRequested, this, [this](const QUrl &u) {
             m_pendingUrl = u;
@@ -406,8 +420,65 @@ public:
     void showAt(int x, int y, int w, int h)
     {
         m_pendingX = x; m_pendingY = y; m_pendingW = w; m_pendingH = h;
-        // Window is shown in onClient() once the parent connects, so we can
-        // send the HWND through the socket (GUI apps have no stdout).
+        // Offscreen mode: no visible window.  Size is applied when the browser
+        // connects and sends a resize, or immediately if non-default.
+        if (w > 0 && h > 0 && m_view) {
+            m_view->widget()->resize(w, h);
+            ensureShm(w, h);
+        }
+    }
+
+    // Capture the current KHTML view into shared memory and notify the
+    // browser.  Called from a 30 fps timer.  Does not block the browser.
+    void grabFrame()
+    {
+        if (!m_view || !m_shm) return;
+        QWidget *w = m_view->widget();
+        const int fw = w->width();
+        const int fh = w->height();
+        if (fw <= 0 || fh <= 0) return;
+        ensureShm(fw, fh);
+        if (!m_shm->isAttached() && !m_shm->attach()) {
+            // Try create if attach fails (browser may not have attached yet).
+            if (!m_shm->create(fw * fh * 4)) return;
+        }
+        if (!m_shm->lock()) return;
+        // Render the offscreen widget into a QImage.
+        QImage frame(fw, fh, QImage::Format_RGB32);
+        frame.fill(Qt::white);
+        QPainter p(&frame);
+        w->render(&p);
+        p.end();
+        // Copy to shared memory.  RGB32 is 4 bytes/pixel, rows are tightly
+        // packed in QImage when bytesPerLine == width*4 (guaranteed for RGB32).
+        const int stride = frame.bytesPerLine();
+        uchar *dst = (uchar *)m_shm->data();
+        if (dst) {
+            if (stride == fw * 4) {
+                memcpy(dst, frame.constBits(), fw * fh * 4);
+            } else {
+                for (int y = 0; y < fh; y++)
+                    memcpy(dst + y * fw * 4, frame.constScanLine(y), fw * 4);
+            }
+        }
+        m_shm->unlock();
+        // Notify browser: dimensions + stride.
+        sendMessage(QStringLiteral("frame"),
+                    QStringLiteral("%1,%2,%3").arg(fw).arg(fh).arg(fw * 4));
+    }
+
+    // (Re)allocate shared memory to fit the given frame size.
+    void ensureShm(int w, int h)
+    {
+        if (!m_shm) return;
+        const qint64 needed = (qint64)w * h * 4;
+        if (m_shm->isAttached() && m_shm->size() >= needed &&
+            m_frameW == w && m_frameH == h)
+            return;
+        if (m_shm->isAttached()) m_shm->detach();
+        m_shm->create(needed);
+        m_frameW = w;
+        m_frameH = h;
     }
 
     // Report current scroll position + zoom factor to the browser. Used for
@@ -468,21 +539,20 @@ private slots:
             // avoid orphan renderer processes lingering after browser close.
             QCoreApplication::quit();
         });
-        // Embed the actual KHTML widget directly. It was created top-level
-        // (no widget parent), so its native HWND is ready for the browser to
-        // Win32-SetParent into its tab container.
+        // Software-frame mode: no native window embedding.  The renderer
+        // paints offscreen and sends frames via shared memory.  Notify the
+        // browser that we are ready so it can start sending resize/navigate.
         QWidget *view = m_view->widget();
-        view->setGeometry(m_pendingX, m_pendingY, m_pendingW, m_pendingH);
-        view->show();
-        view->winId(); // force native window creation
-        const QString hwndStr = QString::number((quint64)(uintptr_t)view->winId());
-        sendMessage(QStringLiteral("hwnd"), hwndStr);
-        // Also write HWND to a temp file as a fallback (socket can be flaky).
-        QFile hf(QDir::tempPath() + QStringLiteral("/khtml_hwnd_%1.txt").arg(m_socketName));
-        if (hf.open(QIODevice::WriteOnly)) {
-            hf.write(hwndStr.toUtf8());
-            hf.close();
-        }
+        if (m_pendingW > 0 && m_pendingH > 0)
+            view->resize(m_pendingW, m_pendingH);
+        // Force native window creation without showing the widget.  KHTML
+        // requires a native window handle to initialize its view; we never
+        // call show() so no visible popup appears on screen.
+        view->winId();
+        ensureShm(view->width() > 0 ? view->width() : m_pendingW,
+                  view->height() > 0 ? view->height() : m_pendingH);
+        sendMessage(QStringLiteral("ready"), QString());
+        m_frameTimer->start();
     }
 
     void onMessage()
@@ -525,8 +595,10 @@ private slots:
         }
 
         // Apply only the final resize from this batch.
-        if (hasPendingResize && m_view)
+        if (hasPendingResize && m_view) {
             m_view->widget()->resize(pendingW, pendingH);
+            ensureShm(pendingW, pendingH);
+        }
     }
 
 private:
@@ -543,7 +615,10 @@ private:
     QLocalServer *m_server = nullptr;
     QLocalSocket *m_socket = nullptr;
     QString m_socketName;
-    QWidget *m_container = nullptr;
+    QString m_shmKey;
+    QSharedMemory *m_shm = nullptr;
+    QTimer *m_frameTimer = nullptr;
+    int m_frameW = 0, m_frameH = 0;
     RendererView *m_view = nullptr;
     PageLoader *m_loader = nullptr;
     QTimer *m_stateTimer = nullptr;
@@ -571,6 +646,9 @@ int main(int argc, char **argv)
 
     QApplication app(argc, argv);
     app.setApplicationName(QStringLiteral("KHtmlLiteRenderer"));
+    // Renderer has no visible windows in software-frame mode; prevent Qt from
+    // auto-quitting when there are no top-level windows to close.
+    app.setQuitOnLastWindowClosed(false);
 
     const QString caPath = QCoreApplication::applicationDirPath()
                            + QStringLiteral("/ssl-ca-bundle.crt");
