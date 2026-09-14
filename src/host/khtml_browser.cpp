@@ -38,6 +38,10 @@
 #include <QSharedMemory>
 #include <QImage>
 #include <QPainter>
+#include <QMouseEvent>
+#include <QWheelEvent>
+#include <QKeyEvent>
+#include <functional>
 
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -56,6 +60,10 @@
 // received from the renderer process via shared memory.  The browser owns
 // this widget (and its native HWND); the renderer never owns a visible
 // window, so dragging the browser window never touches the renderer.
+//
+// Input events are forwarded to the Renderer via QLocalSocket JSON IPC.
+// mousemove and wheel are coalesced (latest only / accumulated delta);
+// click and key events are sent immediately and never coalesced.
 class PageSurface : public QWidget
 {
     Q_OBJECT
@@ -63,19 +71,32 @@ public:
     explicit PageSurface(QWidget *parent = nullptr) : QWidget(parent) {
         setAttribute(Qt::WA_NativeWindow, true);
         setAutoFillBackground(true);
+        setFocusPolicy(Qt::StrongFocus);
         QPalette pal = palette();
         pal.setColor(QPalette::Window, Qt::white);
         setPalette(pal);
     }
     void setFrame(const QImage &img) {
         m_frame = img;
+        m_frameW = img.width();
+        m_frameH = img.height();
         update();
     }
+    // Map a widget-relative point to frame coordinates (accounts for scaling
+    // when the frame size differs from the widget size).
+    QPoint mapToFrame(const QPoint &p) const {
+        if (m_frameW <= 0 || m_frameH <= 0) return p;
+        const int w = width(), h = height();
+        if (w <= 0 || h <= 0) return p;
+        return QPoint(p.x() * m_frameW / w, p.y() * m_frameH / h);
+    }
+    // Callback set by RenderTab to forward input events to the renderer.
+    void setInputCallback(std::function<void(const QJsonObject &)> cb) { m_inputCb = std::move(cb); }
+
 protected:
     void paintEvent(QPaintEvent *) override {
         QPainter p(this);
         if (!m_frame.isNull()) {
-            // Draw 1:1 at top-left; if sizes differ, scale to fit.
             if (m_frame.size() == size())
                 p.drawImage(0, 0, m_frame);
             else
@@ -84,8 +105,91 @@ protected:
             p.fillRect(rect(), Qt::white);
         }
     }
+
+    void mousePressEvent(QMouseEvent *e) override {
+        setFocus();
+        sendInput(QStringLiteral("mousepress"), e, mapToFrame(e->pos()));
+    }
+    void mouseReleaseEvent(QMouseEvent *e) override {
+        sendInput(QStringLiteral("mouserelease"), e, mapToFrame(e->pos()));
+    }
+    void mouseMoveEvent(QMouseEvent *e) override {
+        // Coalesce: keep only the latest pending mousemove.
+        m_pendingMove = *e;
+        m_pendingMovePos = mapToFrame(e->pos());
+        if (!m_moveTimer) {
+            m_moveTimer = new QTimer(this);
+            m_moveTimer->setSingleShot(true);
+            m_moveTimer->setInterval(0);
+            connect(m_moveTimer, &QTimer::timeout, this, [this]() {
+                sendInput(QStringLiteral("mousemove"), &m_pendingMove, m_pendingMovePos);
+            });
+        }
+        m_moveTimer->start();
+    }
+    void wheelEvent(QWheelEvent *e) override {
+        m_pendingWheelDelta += e->angleDelta().y();
+        m_pendingWheelPos = mapToFrame(e->pos());
+        m_pendingWheelMods = e->modifiers();
+        if (!m_wheelTimer) {
+            m_wheelTimer = new QTimer(this);
+            m_wheelTimer->setSingleShot(true);
+            m_wheelTimer->setInterval(16);
+            connect(m_wheelTimer, &QTimer::timeout, this, [this]() {
+                if (!m_inputCb) return;
+                QJsonObject obj;
+                obj[QStringLiteral("type")] = QStringLiteral("wheel");
+                obj[QStringLiteral("x")] = m_pendingWheelPos.x();
+                obj[QStringLiteral("y")] = m_pendingWheelPos.y();
+                obj[QStringLiteral("deltaX")] = 0;
+                obj[QStringLiteral("deltaY")] = m_pendingWheelDelta;
+                obj[QStringLiteral("modifiers")] = (int)m_pendingWheelMods;
+                m_inputCb(obj);
+                m_pendingWheelDelta = 0;
+            });
+        }
+        m_wheelTimer->start();
+        e->accept();
+    }
+    void keyPressEvent(QKeyEvent *e) override {
+        sendKey(QStringLiteral("keypress"), e);
+    }
+    void keyReleaseEvent(QKeyEvent *e) override {
+        sendKey(QStringLiteral("keyrelease"), e);
+    }
+
 private:
+    void sendInput(const QString &type, QMouseEvent *e, const QPoint &framePos) {
+        if (!m_inputCb) return;
+        QJsonObject obj;
+        obj[QStringLiteral("type")] = type;
+        obj[QStringLiteral("x")] = framePos.x();
+        obj[QStringLiteral("y")] = framePos.y();
+        obj[QStringLiteral("button")] = (int)e->button();
+        obj[QStringLiteral("buttons")] = (int)e->buttons();
+        obj[QStringLiteral("modifiers")] = (int)e->modifiers();
+        m_inputCb(obj);
+    }
+    void sendKey(const QString &type, QKeyEvent *e) {
+        if (!m_inputCb) return;
+        QJsonObject obj;
+        obj[QStringLiteral("type")] = type;
+        obj[QStringLiteral("key")] = e->key();
+        obj[QStringLiteral("text")] = e->text();
+        obj[QStringLiteral("modifiers")] = (int)e->modifiers();
+        m_inputCb(obj);
+    }
+
     QImage m_frame;
+    int m_frameW = 0, m_frameH = 0;
+    std::function<void(const QJsonObject &)> m_inputCb;
+    QMouseEvent m_pendingMove{QEvent::MouseMove, QPointF(), Qt::NoButton, Qt::NoButton, Qt::NoModifier};
+    QPoint m_pendingMovePos;
+    QTimer *m_moveTimer = nullptr;
+    int m_pendingWheelDelta = 0;
+    QPoint m_pendingWheelPos;
+    Qt::KeyboardModifiers m_pendingWheelMods;
+    QTimer *m_wheelTimer = nullptr;
 };
 
 class RenderTab : public QObject
@@ -96,6 +200,10 @@ public:
         // PageSurface owns the visible page area.  The renderer paints into
         // shared memory; this widget draws the latest frame in paintEvent.
         m_container = new PageSurface;
+        // Forward input events from PageSurface to the renderer via IPC.
+        m_container->setInputCallback([this](const QJsonObject &obj) {
+            sendInput(obj);
+        });
     }
 
     ~RenderTab() {
@@ -168,6 +276,20 @@ public:
             m_socket->write(QJsonDocument(obj).toJson(QJsonDocument::Compact) + "\n");
             m_socket->flush();
         }
+    }
+
+    // Forward an input event (mouse/key/wheel) to the renderer.  Never blocks:
+    // writes the JSON line and returns immediately.  The renderer dispatches
+    // on its main thread and schedules a frame asynchronously.
+    void sendInput(const QJsonObject &obj)
+    {
+        if (!m_socket || !m_socket->isOpen()) return;
+        QJsonObject msg;
+        msg[QStringLiteral("cmd")] = QStringLiteral("input");
+        for (auto it = obj.begin(); it != obj.end(); ++it)
+            msg[it.key()] = it.value();
+        m_socket->write(QJsonDocument(msg).toJson(QJsonDocument::Compact) + "\n");
+        m_socket->flush();
     }
 
     void resize(int w, int h)

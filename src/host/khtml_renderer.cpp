@@ -17,6 +17,12 @@
 #include <QSharedMemory>
 #include <QImage>
 #include <QPainter>
+#include <QMouseEvent>
+#include <QWheelEvent>
+#include <QKeyEvent>
+#include <QRegion>
+#include <QScrollBar>
+#include <QElapsedTimer>
 
 #include <KHTMLPart>
 #include <khtml_part.h>
@@ -429,40 +435,68 @@ public:
     }
 
     // Capture the current KHTML view into shared memory and notify the
-    // browser.  Called from a 30 fps timer.  Does not block the browser.
+    // browser.  Called from a 30 fps timer and from scheduleFrame() on input.
+    // Does not block the browser.  Uses dirty-region partial rendering when
+    // the changed area is small (< 60% of viewport).
     void grabFrame()
     {
+        m_framePending = false;
         if (!m_view || !m_shm) return;
         QWidget *w = m_view->widget();
         const int fw = w->width();
         const int fh = w->height();
         if (fw <= 0 || fh <= 0) return;
+
+        // Flush coalesced mousemove/wheel before rendering this frame.
+        flushPendingInput();
+
         ensureShm(fw, fh);
         if (!m_shm->isAttached() && !m_shm->attach()) {
-            // Try create if attach fails (browser may not have attached yet).
             if (!m_shm->create(fw * fh * 4)) return;
         }
         if (!m_shm->lock()) return;
-        // Render the offscreen widget into a QImage.
-        QImage frame(fw, fh, QImage::Format_RGB32);
-        frame.fill(Qt::white);
-        QPainter p(&frame);
-        w->render(&p);
-        p.end();
-        // Copy to shared memory.  RGB32 is 4 bytes/pixel, rows are tightly
-        // packed in QImage when bytesPerLine == width*4 (guaranteed for RGB32).
-        const int stride = frame.bytesPerLine();
+
+        // Decide full vs partial render.
+        const qint64 viewArea = (qint64)fw * fh;
+        QRect dirtyRect = m_dirtyRegion.boundingRect();
+        dirtyRect = dirtyRect.intersected(QRect(0, 0, fw, fh));
+        const bool partial = !dirtyRect.isEmpty() &&
+            ((qint64)dirtyRect.width() * dirtyRect.height() < viewArea * 6 / 10);
+
+        if (partial && !m_frameBuffer.isNull() &&
+            m_frameBuffer.width() == fw && m_frameBuffer.height() == fh) {
+            // Partial: render only the dirty sub-rect into a temp image, then
+            // composite into the persistent frame buffer.
+            QImage sub(dirtyRect.size(), QImage::Format_RGB32);
+            sub.fill(Qt::white);
+            QPainter sp(&sub);
+            w->render(&sp, QPoint(), QRegion(dirtyRect));
+            sp.end();
+            QPainter fp(&m_frameBuffer);
+            fp.drawImage(dirtyRect.topLeft(), sub);
+            fp.end();
+        } else {
+            // Full frame render.
+            m_frameBuffer = QImage(fw, fh, QImage::Format_RGB32);
+            m_frameBuffer.fill(Qt::white);
+            QPainter p(&m_frameBuffer);
+            w->render(&p);
+            p.end();
+        }
+        m_dirtyRegion = QRegion();
+
+        // Copy to shared memory.
         uchar *dst = (uchar *)m_shm->data();
         if (dst) {
+            const int stride = m_frameBuffer.bytesPerLine();
             if (stride == fw * 4) {
-                memcpy(dst, frame.constBits(), fw * fh * 4);
+                memcpy(dst, m_frameBuffer.constBits(), fw * fh * 4);
             } else {
                 for (int y = 0; y < fh; y++)
-                    memcpy(dst + y * fw * 4, frame.constScanLine(y), fw * 4);
+                    memcpy(dst + y * fw * 4, m_frameBuffer.constScanLine(y), fw * 4);
             }
         }
         m_shm->unlock();
-        // Notify browser: dimensions + stride.
         sendMessage(QStringLiteral("frame"),
                     QStringLiteral("%1,%2,%3").arg(fw).arg(fh).arg(fw * 4));
     }
@@ -479,6 +513,143 @@ public:
         m_shm->create(needed);
         m_frameW = w;
         m_frameH = h;
+        // Size change invalidates the persistent frame buffer.
+        m_frameBuffer = QImage();
+        m_dirtyRegion = QRegion();
+    }
+
+    // === Input dispatch (WebKit EventDispatcher, lightweight) ===
+    // Events arrive from the Browser via QLocalSocket JSON.  Clicks/keys are
+    // dispatched immediately; mousemove and wheel are coalesced.
+    void dispatchInput(const QJsonObject &obj)
+    {
+        const QString type = obj.value(QStringLiteral("type")).toString();
+        KHTMLView *view = m_view ? m_view->view() : nullptr;
+        if (!view) return;
+        QWidget *vp = view->viewport();
+        if (!vp) return;
+
+        const int x = obj.value(QStringLiteral("x")).toInt();
+        const int y = obj.value(QStringLiteral("y")).toInt();
+        const QPoint localPos(x, y);
+        const QPoint globalPos = vp->mapToGlobal(localPos);
+        const Qt::MouseButton button = (Qt::MouseButton)obj.value(QStringLiteral("button")).toInt();
+        const Qt::MouseButtons buttons = (Qt::MouseButtons)obj.value(QStringLiteral("buttons")).toInt();
+        const Qt::KeyboardModifiers mods = (Qt::KeyboardModifiers)obj.value(QStringLiteral("modifiers")).toInt();
+
+        if (type == QLatin1String("mousepress") || type == QLatin1String("mouserelease")) {
+            QEvent::Type et = (type == QLatin1String("mousepress"))
+                ? QEvent::MouseButtonPress : QEvent::MouseButtonRelease;
+            QMouseEvent *ev = new QMouseEvent(et, localPos, globalPos, button, buttons, mods);
+            // KHTMLView installs its event filter on the content widget
+            // (KHTMLWidget), not on the viewport.  Events must be posted to
+            // the content widget so KHTML's eventFilter/hit-testing runs.
+            QWidget *content = view->widget();
+            if (content)
+                QCoreApplication::postEvent(content, ev);
+            else
+                delete ev;
+            invalidateFull();
+            scheduleFrame();
+        } else if (type == QLatin1String("mousemove")) {
+            // Coalesce: keep only the latest pending mousemove.
+            m_pendingMouseMove = obj;
+            m_hasPendingMouseMove = true;
+            scheduleFrame();
+        } else if (type == QLatin1String("wheel")) {
+            // Coalesce: accumulate delta, dispatch at most once per tick.
+            m_pendingWheelDeltaX += obj.value(QStringLiteral("deltaX")).toInt();
+            m_pendingWheelDeltaY += obj.value(QStringLiteral("deltaY")).toInt();
+            m_hasPendingWheel = true;
+            m_wheelMouseX = x;
+            m_wheelMouseY = y;
+            m_wheelModifiers = mods;
+            scheduleFrame();
+        } else if (type == QLatin1String("keypress") || type == QLatin1String("keyrelease")) {
+            QEvent::Type et = (type == QLatin1String("keypress"))
+                ? QEvent::KeyPress : QEvent::KeyRelease;
+            const int key = obj.value(QStringLiteral("key")).toInt();
+            const QString text = obj.value(QStringLiteral("text")).toString();
+            QKeyEvent *ev = new QKeyEvent(et, key, mods, text);
+            QWidget *content = view->widget();
+            if (content)
+                QCoreApplication::postEvent(content, ev);
+            else
+                delete ev;
+            invalidateFull();
+            scheduleFrame();
+        }
+    }
+
+    // Flush coalesced mousemove and wheel events.  Called from grabFrame()
+    // so at most one of each is dispatched per frame tick.
+    void flushPendingInput()
+    {
+        KHTMLView *view = m_view ? m_view->view() : nullptr;
+        if (!view) return;
+        QWidget *content = view->widget();
+        if (!content) return;
+
+        if (m_hasPendingMouseMove) {
+            const QJsonObject &obj = m_pendingMouseMove;
+            const QPoint lp(obj.value(QStringLiteral("x")).toInt(),
+                            obj.value(QStringLiteral("y")).toInt());
+            const QPoint gp = content->mapToGlobal(lp);
+            const Qt::MouseButtons btns = (Qt::MouseButtons)obj.value(QStringLiteral("buttons")).toInt();
+            const Qt::KeyboardModifiers mods = (Qt::KeyboardModifiers)obj.value(QStringLiteral("modifiers")).toInt();
+            QMouseEvent ev(QEvent::MouseMove, lp, gp, Qt::NoButton, btns, mods);
+            QCoreApplication::postEvent(content, new QMouseEvent(ev));
+            m_hasPendingMouseMove = false;
+            invalidateFull();
+        }
+
+        if (m_hasPendingWheel) {
+            // WebKit async-scroll fast path: apply scroll offset immediately
+            // without waiting for JS/layout, then dispatch the DOM event.
+            const int dx = m_pendingWheelDeltaX;
+            const int dy = m_pendingWheelDeltaY;
+            if (dy != 0) {
+                QScrollBar *sb = view->verticalScrollBar();
+                if (sb) sb->setValue(sb->value() - dy / 120 * sb->singleStep() * 3);
+            }
+            if (dx != 0) {
+                QScrollBar *sb = view->horizontalScrollBar();
+                if (sb) sb->setValue(sb->value() - dx / 120 * sb->singleStep() * 3);
+            }
+            // Also dispatch the wheel event for JS listeners.
+            const QPoint lp(m_wheelMouseX, m_wheelMouseY);
+            const QPoint gp = content->mapToGlobal(lp);
+            QWheelEvent ev(lp, gp, QPoint(dx, dy), QPoint(dx, dy),
+                           Qt::NoButton, m_wheelModifiers, Qt::NoScrollPhase, false);
+            QCoreApplication::postEvent(content, new QWheelEvent(ev));
+            m_hasPendingWheel = false;
+            m_pendingWheelDeltaX = 0;
+            m_pendingWheelDeltaY = 0;
+            invalidateFull();
+        }
+    }
+
+    // === Frame scheduling (WebKit DisplayRefreshMonitor, lightweight) ===
+    // Input-triggered changes request an immediate frame instead of waiting
+    // for the next 33ms timer tick.  Multiple requests coalesce into one.
+    void scheduleFrame()
+    {
+        if (m_framePending) return;
+        m_framePending = true;
+        QTimer::singleShot(0, this, &RendererHost::grabFrame);
+    }
+
+    void invalidateFull()
+    {
+        if (m_view) {
+            QWidget *w = m_view->widget();
+            m_dirtyRegion = QRegion(0, 0, w->width(), w->height());
+        }
+    }
+
+    void invalidateRect(const QRect &r)
+    {
+        m_dirtyRegion += r;
     }
 
     // Report current scroll position + zoom factor to the browser. Used for
@@ -545,9 +716,13 @@ private slots:
         QWidget *view = m_view->widget();
         if (m_pendingW > 0 && m_pendingH > 0)
             view->resize(m_pendingW, m_pendingH);
-        // Force native window creation without showing the widget.  KHTML
-        // requires a native window handle to initialize its view; we never
-        // call show() so no visible popup appears on screen.
+        // Fully initialize the offscreen widget: WA_DontShowOnScreen makes
+        // show() not create a visible window, but Qt still runs the full
+        // show/visibility path so KHTML's event filters and viewport state
+        // are initialized correctly.  Without this, synthetic mouse events
+        // are not processed because the viewport is !isVisible().
+        view->setAttribute(Qt::WA_DontShowOnScreen, true);
+        view->show();
         view->winId();
         ensureShm(view->width() > 0 ? view->width() : m_pendingW,
                   view->height() > 0 ? view->height() : m_pendingH);
@@ -591,6 +766,10 @@ private slots:
                 m_pendingRestoreY = obj.value(QStringLiteral("y")).toInt();
                 m_pendingRestoreZoom = obj.value(QStringLiteral("z")).toInt(100);
                 m_hasPendingRestore = true;
+            } else if (cmd == QLatin1String("input")) {
+                // Browser → Renderer input event.  Dispatched immediately for
+                // click/key, coalesced for mousemove/wheel.
+                dispatchInput(obj);
             }
         }
 
@@ -630,6 +809,18 @@ private:
     int m_pendingRestoreY = 0;
     int m_pendingRestoreZoom = 100;
     bool m_hasPendingRestore = false;
+    // === Input event queue (WebKit EventDispatcher, lightweight) ===
+    QJsonObject m_pendingMouseMove;
+    bool m_hasPendingMouseMove = false;
+    int m_pendingWheelDeltaX = 0;
+    int m_pendingWheelDeltaY = 0;
+    bool m_hasPendingWheel = false;
+    int m_wheelMouseX = 0, m_wheelMouseY = 0;
+    Qt::KeyboardModifiers m_wheelModifiers;
+    // === Dirty region + frame scheduling ===
+    QRegion m_dirtyRegion;
+    QImage m_frameBuffer;   // persistent buffer for partial updates
+    bool m_framePending = false;
 };
 
 int main(int argc, char **argv)
