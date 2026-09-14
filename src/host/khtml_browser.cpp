@@ -46,6 +46,9 @@
 
 // Per-tab renderer process manager. Starts khtml_renderer.exe, embeds its
 // window, relays navigation via QLocalSocket, and detects crashes.
+#include <windows.h>
+#include <psapi.h>
+
 class RenderTab : public QObject
 {
     Q_OBJECT
@@ -173,6 +176,7 @@ public:
             m_process = nullptr;
         }
         if (m_socket) { m_socket->deleteLater(); m_socket = nullptr; }
+        m_childHwnd = nullptr;
         // m_container is owned by the QTabWidget; don't delete here.
         m_embedded = false;
         m_crashed = false;
@@ -214,9 +218,6 @@ Q_SIGNALS:
 private slots:
     void onStdout()
     {
-        // Drain all available output so the pipe buffer cannot fill and block
-        // the renderer.  The renderer sends HWND/IPC via QLocalSocket, not
-        // stdout, so the content is discarded.
         if (m_process)
             m_process->readAllStandardOutput();
     }
@@ -279,25 +280,48 @@ private:
     void embedWindow(WId wid)
     {
         if (m_embedded) return;
+        m_childHwnd = (HWND)wid;
         m_embedded = true;
-        // m_container already exists (created in constructor) and is already
-        // parented inside the QTabWidget. Just plug the renderer window in.
         const HWND containerHwnd = (HWND)m_container->winId();
-        const HWND childHwnd = (HWND)wid;
-        SetParent(childHwnd, containerHwnd);
-        SetWindowLongPtr(childHwnd, GWL_STYLE, WS_CHILD | WS_VISIBLE);
-        EnableWindow(childHwnd, TRUE);
-        RECT rc;
-        GetClientRect(containerHwnd, &rc);
-        SetWindowPos(childHwnd, nullptr, 0, 0,
-                     rc.right - rc.left, rc.bottom - rc.top,
-                     SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS);
+        const HWND childHwnd = m_childHwnd;
+        // Cross-process embedding via SetParent+WS_CHILD causes the browser UI
+        // thread to block whenever the renderer is busy (KHTML layout / JS):
+        // Windows sends synchronous messages to the child window, and SendMessage
+        // waits for the renderer's message pump.  Instead, keep the renderer as a
+        // borderless popup owned by the container and positioned over its client
+        // area.  This gives the same visual result without the parent-child
+        // message coupling.
+        SetWindowLongPtr(childHwnd, GWL_STYLE, WS_POPUP | WS_VISIBLE);
+        // Keep it out of the taskbar / Alt-Tab list.  No owner is set so the
+        // browser and renderer threads remain fully decoupled (an owned window
+        // can still receive synchronous messages from the owner thread).
+        SetWindowLongPtr(childHwnd, -20, GetWindowLongPtr(childHwnd, -20) | WS_EX_TOOLWINDOW | WS_EX_NOPARENTNOTIFY); // GWL_EXSTYLE
+        reposition();
         emit ready();
     }
+
+public:
+    // Move the owned popup to match the container's current screen position.
+    // Called on browser window move and after initial embedding.
+    void reposition() {
+        if (!m_childHwnd || !m_container) return;
+        const HWND containerHwnd = (HWND)m_container->winId();
+        RECT rc;
+        GetClientRect(containerHwnd, &rc);
+        POINT pt = { 0, 0 };
+        ClientToScreen(containerHwnd, &pt);
+        SetWindowPos(m_childHwnd, nullptr, pt.x, pt.y,
+                     rc.right - rc.left, rc.bottom - rc.top,
+                     SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS);
+    }
+
+    void showEmbedded() { if (m_childHwnd) ShowWindow(m_childHwnd, SW_SHOW); }
+    void hideEmbedded() { if (m_childHwnd) ShowWindow(m_childHwnd, SW_HIDE); }
 
     QProcess *m_process = nullptr;
     QLocalSocket *m_socket = nullptr;
     QWidget *m_container = nullptr;
+    HWND m_childHwnd = nullptr;
     QString m_socketName;
     QUrl m_current;
     QString m_title;
@@ -409,14 +433,21 @@ public:
         connect(newTab, &QToolButton::clicked, this, [this] { addTab(QUrl(QStringLiteral("https://cn.bing.com"))); });
         connect(m_tabs, &QTabWidget::tabCloseRequested, this, &KHtmlLiteWindow::closeTab);
         connect(m_tabs, &QTabWidget::currentChanged, this, [this](int idx) {
+            // Hide all non-current tab popups, show the current one.
+            for (int i = 0; i < m_pages.size(); i++) {
+                TabPage *pg = m_pages.at(i);
+                if (pg && pg->render) {
+                    if (i == idx) pg->render->showEmbedded();
+                    else pg->render->hideEmbedded();
+                }
+            }
             TabPage *pg = (idx >= 0 && idx < m_pages.size()) ? m_pages.at(idx) : nullptr;
             if (pg) pg->lastActive = QDateTime::currentMSecsSinceEpoch();
             if (pg && pg->suspended) resumeTab(pg);
             else {
                 syncChrome();
-                // The newly visible tab may have been skipped by the
-                // current-tab-only resize policy; give it the current size.
                 QTimer::singleShot(0, this, &KHtmlLiteWindow::applyPendingResize);
+                if (pg && pg->render) pg->render->reposition();
             }
         });
     }
@@ -549,6 +580,13 @@ protected:
         // the previous pending resize, so only the last size in a drag is sent.
         if (m_resizeTimer)
             m_resizeTimer->start(0);
+    }
+
+    void moveEvent(QMoveEvent *event) override {
+        QMainWindow::moveEvent(event);
+        // Owned popups do not auto-follow the owner; reposition on every move.
+        TabPage *pg = currentPage();
+        if (pg && pg->render) pg->render->reposition();
     }
 
     void closeEvent(QCloseEvent *event) override {
