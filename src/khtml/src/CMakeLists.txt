@@ -36,8 +36,8 @@ if(NOT QUICKJS_FOUND)
 endif()
 set_package_properties(QUICKJS PROPERTIES DESCRIPTION "Small embeddable ES2020 JavaScript engine"
                        URL "https://bellard.org/quickjs/"
-                       TYPE RECOMMENDED
-                       PURPOSE "Powers modern JavaScript execution as the lightweight alternative to KJS")
+                       TYPE REQUIRED
+                       PURPOSE "The only JavaScript engine used by this build")
 if(QUICKJS_FOUND)
    include_directories(${QUICKJS_INCLUDE_DIRS})
    set(HAVE_QUICKJS 1)
@@ -296,84 +296,17 @@ ecm_gperf_generate(html/kentities.gperf ${CMAKE_CURRENT_BINARY_DIR}/kentities-gp
                    GENERATION_FLAGS "--key-positions=* -D -s 2")
 
 # khtml/ecma/Makefile.am: kjs_html
-
-set(EXCLUDE_SRCS_FILES
-${CMAKE_CURRENT_BINARY_DIR}/doctypes.h
-${CMAKE_CURRENT_BINARY_DIR}/kentities-gperf.h
-${CMAKE_CURRENT_BINARY_DIR}/JSTimeRanges.h
-${CMAKE_CURRENT_BINARY_DIR}/JSMediaError.h
-${CMAKE_CURRENT_BINARY_DIR}/JSHTMLMediaElement.h
-${CMAKE_CURRENT_BINARY_DIR}/JSHTMLAudioElement.h
-${CMAKE_CURRENT_BINARY_DIR}/JSHTMLVideoElement.h
-${CMAKE_CURRENT_BINARY_DIR}/JSTimeRanges.cpp
-${CMAKE_CURRENT_BINARY_DIR}/JSMediaError.cpp
-${CMAKE_CURRENT_BINARY_DIR}/JSHTMLMediaElement.cpp
-${CMAKE_CURRENT_BINARY_DIR}/JSHTMLAudioElement.cpp
-${CMAKE_CURRENT_BINARY_DIR}/JSHTMLVideoElement.cpp
-)
-
-set_property(SOURCE ${EXCLUDE_SRCS_FILES} PROPERTY SKIP_AUTOMOC TRUE) # don't run automoc on this file
+#
+# The legacy KF5JS (KJS) interpreter and all of its generated DOM bindings
+# have been removed. QuickJS is the only execution engine; the sources below
+# are the engine abstraction, the DOM bridge, and the KJSProxy shim that
+# routes inline handlers and programmatic script evaluation to QuickJS.
 
 set(kjs_html_STAT_SRCS
-  ecma/kjs_binding.cpp
-  ecma/kjs_dom.cpp
-  ecma/kjs_html.cpp
-  ecma/kjs_window.cpp
-  ecma/kjs_navigator.cpp
   ecma/kjs_proxy.cpp
-  ecma/kjs_css.cpp
-  ecma/kjs_range.cpp
-  ecma/kjs_traversal.cpp
-  ecma/kjs_events.cpp
-  ecma/kjs_views.cpp
-#  ecma/kjs_debugwin.cpp
-  ecma/kjs_mozilla.cpp
-  ${CMAKE_CURRENT_BINARY_DIR}/JSTimeRanges.h
-  ${CMAKE_CURRENT_BINARY_DIR}/JSTimeRanges.cpp
-  ${CMAKE_CURRENT_BINARY_DIR}/JSMediaError.h
-  ${CMAKE_CURRENT_BINARY_DIR}/JSMediaError.cpp
-  ecma/JSHTMLElement.cpp
-  ${CMAKE_CURRENT_BINARY_DIR}/JSHTMLMediaElement.h
-  ${CMAKE_CURRENT_BINARY_DIR}/JSHTMLMediaElement.cpp
-  ${CMAKE_CURRENT_BINARY_DIR}/JSHTMLAudioElement.h
-  ${CMAKE_CURRENT_BINARY_DIR}/JSHTMLAudioElement.cpp
-  ${CMAKE_CURRENT_BINARY_DIR}/JSHTMLVideoElement.h
-  ${CMAKE_CURRENT_BINARY_DIR}/JSHTMLVideoElement.cpp
-  ecma/xmlhttprequest.cpp
-  ecma/xmlserializer.cpp
-  ecma/domparser.cpp
-  ecma/kjs_context2d.cpp
-  ecma/kjs_webgl.cpp
-  ecma/kjs_dom_extras.cpp
-  ecma/kjs_audio.cpp
-  ecma/kjs_xpath.cpp
-  ecma/kjs_scriptable.cpp
-  ecma/kjs_data.cpp
-  ecma/kjs_arraybuffer.cpp
-  ecma/kjs_arraybufferview.cpp
-  ecma/kjs_arraytyped.cpp
-  ecma/kjs_clientrect.cpp
   ecma/quickjs_engine.cpp
   ecma/qjs_dom_bridge.cpp
 )
-
-# TODO: set(KJS_DEBUGGER) once we can depend on the ktexteditor interfaces
-if (KJS_DEBUGGER)
-  set (kjs_html_STAT_SRCS ${kjs_html_STAT_SRCS}
-  ecma/debugger/debugwindow.cpp
-  ecma/debugger/debugdocument.cpp
-  ecma/debugger/consoledock.cpp
-  ecma/debugger/breakpointsdock.cpp
-  ecma/debugger/callstackdock.cpp
-  ecma/debugger/localvariabledock.cpp
-  ecma/debugger/scriptsdock.cpp
-  ecma/debugger/value2string.cpp
-  ecma/debugger/errordlg.cpp
-  ecma/debugger/interpreter_ctx.cpp
-  )
-endif()
-
-#qt_add_resources( kjs_html_STAT_SRCS ecma/debugger/debugger.qrc )
 
 # khtml/rendering/Makefile.am: khtmlrender
 
@@ -570,7 +503,6 @@ set(khtml_LIB_SRCS
    khtml_printsettings.cpp
    khtml_iface.cpp
    khtmlimage.cpp
-   kjserrordlg.cpp
    ${xpath_STAT_SRCS}
    ${khtmlfind_STAT_SRCS}
    ${passwordbar_STAT_SRCS}
@@ -604,7 +536,6 @@ ecm_qt_declare_logging_category(khtml_LIB_SRCS
 )
 
 ki18n_wrap_ui(khtml_LIB_SRCS
-   kjserrordlgbase.ui
    htmlpageinfo.ui
    html/keygenwizard.ui
    html/keygenwizard2.ui
@@ -641,7 +572,6 @@ target_link_libraries(KF5KHtml
   PUBLIC
     Qt5::Gui
     KF5::KIOCore
-    KF5::JS
     KF5::I18n
     KF5::Parts
     KF5::TextWidgets
@@ -669,10 +599,6 @@ if(NOT WIN32 AND NOT APPLE AND HAVE_X11)
   target_link_libraries(KF5KHtml PRIVATE ${X11_LIBRARIES} Qt5::X11Extras)
 endif()
 
-if (KJS_DEBUGGER)
-  target_link_libraries(KF5KHtml PRIVATE KF5::KTextEditor)
-endif()
-
 if(TARGET KF5::GlobalAccel)
   target_link_libraries(KF5KHtml PRIVATE KF5::GlobalAccel)
 endif()
@@ -683,113 +609,8 @@ set_target_properties(KF5KHtml PROPERTIES VERSION ${KHTML_VERSION}
                      )
 
 
-macro(CREATE_LUT _in_FILE _out_FILE)
-
-   add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/${_out_FILE}
-      COMMAND ${PERL_EXECUTABLE} ${KJS_CREATE_HASH_TABLE} ${CMAKE_CURRENT_SOURCE_DIR}/${_in_FILE} > ${CMAKE_CURRENT_BINARY_DIR}/${_out_FILE}
-      DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/${_in_FILE}
-   )
-   macro_add_file_dependencies(${CMAKE_CURRENT_SOURCE_DIR}/${_in_FILE} ${CMAKE_CURRENT_BINARY_DIR}/${_out_FILE} )
-endmacro(CREATE_LUT)
-
-
-create_lut(ecma/kjs_dom.cpp kjs_dom.lut.h)
-create_lut(ecma/kjs_html.cpp kjs_html.lut.h)
-create_lut(ecma/kjs_window.cpp kjs_window.lut.h)
-create_lut(ecma/kjs_css.cpp kjs_css.lut.h)
-create_lut(ecma/kjs_events.cpp kjs_events.lut.h)
-create_lut(ecma/kjs_navigator.cpp kjs_navigator.lut.h)
-create_lut(ecma/kjs_mozilla.cpp kjs_mozilla.lut.h)
-create_lut(ecma/kjs_range.cpp kjs_range.lut.h)
-create_lut(ecma/kjs_traversal.cpp kjs_traversal.lut.h)
-create_lut(ecma/kjs_views.cpp kjs_views.lut.h)
-create_lut(ecma/xmlhttprequest.cpp xmlhttprequest.lut.h)
-create_lut(ecma/xmlserializer.cpp xmlserializer.lut.h)
-create_lut(ecma/domparser.cpp domparser.lut.h)
-create_lut(ecma/kjs_context2d.cpp kjs_context2d.lut.h)
-create_lut(ecma/kjs_webgl.cpp kjs_webgl.lut.h)
-create_lut(ecma/kjs_dom_extras.cpp kjs_dom_extras.lut.h)
-create_lut(ecma/kjs_xpath.cpp kjs_xpath.lut.h)
-create_lut(ecma/kjs_arraybuffer.cpp kjs_arraybuffer.lut.h)
-create_lut(ecma/kjs_arraybufferview.cpp kjs_arraybufferview.lut.h)
-create_lut(ecma/kjs_clientrect.cpp kjs_clientrect.lut.h)
-
-macro(create_js_binding _in_FILE)
-   get_filename_component(_in_filename ${_in_FILE} NAME_WE)
-   set(_out_h_FILE "${CMAKE_CURRENT_BINARY_DIR}/JS${_in_filename}.h")
-   set(_out_cpp_FILE "${CMAKE_CURRENT_BINARY_DIR}/JS${_in_filename}.cpp")
-   set(_scripts_dir "${CMAKE_CURRENT_SOURCE_DIR}/bindings/scripts")
-   add_custom_command(OUTPUT ${_out_h_FILE} ${_out_cpp_FILE}
-      COMMAND ${PERL_EXECUTABLE} -I${_scripts_dir}
-              ${_scripts_dir}/generate-bindings.pl
-              --include=html
-              --generator=JS
-              --outputdir=${CMAKE_CURRENT_BINARY_DIR}
-              --preprocessor=\"${QT_MOC_EXECUTABLE} -E\"
-              --defines=ENABLE_VIDEO
-              ${CMAKE_CURRENT_SOURCE_DIR}/${_in_FILE}
-      MAIN_DEPENDENCY ${CMAKE_CURRENT_SOURCE_DIR}/${_in_FILE}
-      DEPENDS ${_scripts_dir}/CodeGeneratorJS.pm
-      )
-   macro_add_file_dependencies(${CMAKE_CURRENT_SOURCE_DIR}/${_in_FILE} ${_out_h_FILE} ${_out_cpp_FILE})
-endmacro(create_js_binding)
-
-create_js_binding(html/TimeRanges.idl)
-create_js_binding(html/MediaError.idl)
-create_js_binding(html/HTMLMediaElement.idl)
-create_js_binding(html/HTMLAudioElement.idl)
-create_js_binding(html/HTMLVideoElement.idl)
-#create_js_binding(svg/SVGRectElement.idl)
-#create_js_binding(svg/SVGRect.idl)
-#create_js_binding(svg/SVGElement.idl)
-#create_js_binding(svg/SVGDocument.idl)
-#create_js_binding(svg/SVGAngle.idl)
-#create_js_binding(svg/SVGSVGElement.idl)
-#create_js_binding(svg/SVGLength.idl)
-#create_js_binding(svg/SVGNumber.idl)
-#create_js_binding(svg/SVGPoint.idl)
-#create_js_binding(svg/SVGMatrix.idl)
-#create_js_binding(svg/SVGTransform.idl)
-#create_js_binding(svg/SVGException.idl)
-#create_js_binding(svg/SVGPaint.idl)
-#create_js_binding(svg/SVGNumberList.idl)
-#create_js_binding(svg/SVGAnimatedLength.idl)
-#create_js_binding(svg/SVGRectElement.idl)
-#create_js_binding(svg/SVGTransformList.idl)
-#create_js_binding(svg/SVGAnimatedTransformList.idl)
-##create_js_binding(svg/SVGLocatable.idl)
-##create_js_binding(svg/SVGTransformable.idl)
-#create_js_binding(svg/SVGAnimatedString.idl)
-#create_js_binding(svg/SVGAnimatedBoolean.idl)
-#create_js_binding(svg/SVGStringList.idl)
-#create_js_binding(svg/SVGEllipseElement.idl)
-#create_js_binding(svg/SVGCircleElement.idl)
-#create_js_binding(svg/SVGLineElement.idl)
-#create_js_binding(svg/SVGScriptElement.idl)
-#create_js_binding(svg/SVGPathSeg.idl)
-#create_js_binding(svg/SVGPathElement.idl)
-#create_js_binding(svg/SVGAnimatedNumber.idl)
-#create_js_binding(svg/SVGPathSegArcAbs.idl)
-#create_js_binding(svg/SVGPathSegArcRel.idl)
-#create_js_binding(svg/SVGPathSegClosePath.idl)
-#create_js_binding(svg/SVGPathSegCurvetoCubicAbs.idl)
-#create_js_binding(svg/SVGPathSegCurvetoCubicRel.idl)
-#create_js_binding(svg/SVGPathSegCurvetoCubicSmoothAbs.idl)
-#create_js_binding(svg/SVGPathSegCurvetoCubicSmoothRel.idl)
-#create_js_binding(svg/SVGPathSegCurvetoQuadraticAbs.idl)
-#create_js_binding(svg/SVGPathSegCurvetoQuadraticRel.idl)
-#create_js_binding(svg/SVGPathSegCurvetoQuadraticSmoothAbs.idl)
-#create_js_binding(svg/SVGPathSegCurvetoQuadraticSmoothRel.idl)
-#create_js_binding(svg/SVGPathSegLinetoAbs.idl)
-#create_js_binding(svg/SVGPathSegLinetoHorizontalAbs.idl)
-#create_js_binding(svg/SVGPathSegLinetoHorizontalRel.idl)
-#create_js_binding(svg/SVGPathSegLinetoRel.idl)
-#create_js_binding(svg/SVGPathSegLinetoVerticalAbs.idl)
-#create_js_binding(svg/SVGPathSegLinetoVerticalRel.idl)
-#create_js_binding(svg/SVGPathSegList.idl)
-#create_js_binding(svg/SVGPathSegMovetoAbs.idl)
-#create_js_binding(svg/SVGPathSegMovetoRel.idl)
-
+# The legacy KJS hash-table (create_lut) and Perl generate-bindings.pl
+# steps have been removed along with KF5JS. QuickJS is the only engine.
 
 
 ########### khtmlpart ###############
@@ -832,7 +653,7 @@ install(TARGETS khtmlimagepart  DESTINATION ${KDE_INSTALL_PLUGINDIR}/kf5/parts)
 
 add_library(khtmladaptorpart MODULE khtmladaptorpart.cpp)
 
-target_link_libraries(khtmladaptorpart KF5::Parts KF5::JS KF5::I18n KF5::XmlGui)
+target_link_libraries(khtmladaptorpart KF5::Parts KF5::I18n KF5::XmlGui)
 target_compile_options(khtmladaptorpart PRIVATE ${KHTML_RELAX_QT_GUARDS})
 
 install(TARGETS khtmladaptorpart DESTINATION ${KDE_INSTALL_PLUGINDIR}/kf5/parts)
@@ -903,5 +724,5 @@ install(FILES error.html DESTINATION ${KDE_INSTALL_DATADIR_KF5}/khtml )
 install(FILES khtmlrc DESTINATION ${KDE_INSTALL_CONFDIR} )
 
 include(ECMGeneratePriFile)
-ecm_generate_pri_file(BASE_NAME KHtml LIB_NAME KF5KHtml DEPS "gui KIOCore KJS KI18n KParts" FILENAME_VAR PRI_FILENAME INCLUDE_INSTALL_DIR ${KDE_INSTALL_INCLUDEDIR_KF5}/KHtml)
+ecm_generate_pri_file(BASE_NAME KHtml LIB_NAME KF5KHtml DEPS "gui KIOCore KI18n KParts" FILENAME_VAR PRI_FILENAME INCLUDE_INSTALL_DIR ${KDE_INSTALL_INCLUDEDIR_KF5}/KHtml)
 install(FILES ${PRI_FILENAME} DESTINATION ${ECM_MKSPECS_INSTALL_DIR})

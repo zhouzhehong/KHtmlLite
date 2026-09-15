@@ -19,7 +19,6 @@
  */
 
 #include "khtmladaptorpart.h"
-#include <kjs/object.h>
 #include <QLabel>
 #include <klocalizedstring.h>
 AdaptorView::AdaptorView(QWidget *wparent, QObject *parent,
@@ -36,15 +35,6 @@ AdaptorView::AdaptorView(QWidget *wparent, QObject *parent,
 bool AdaptorView::openFile()
 {
     return true;
-}
-
-void AdaptorView::initScripting(KJS::ExecState * /*exec*/)
-{
-}
-
-KJS::JSObject *AdaptorView::scriptObject()
-{
-    return new KJS::JSObject();
 }
 
 KHTMLAdaptorPartFactory::KHTMLAdaptorPartFactory()

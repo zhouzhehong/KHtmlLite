@@ -23,7 +23,6 @@
 
 #include <QVariant>
 #include <QString>
-#include <wtf/RefPtr.h>
 
 class KHTMLPart;
 
@@ -36,19 +35,6 @@ class Event;
 class EventImpl;
 }
 
-namespace KJS
-{
-class List;
-class Interpreter;
-class Completion;
-class ScriptInterpreter;
-}
-
-namespace KJSDebugger
-{
-class DebugWindow;
-}
-
 namespace khtml
 {
 class ChildFrame;
@@ -59,6 +45,10 @@ class QJsDomBridge;
  * @internal
  *
  * @short Proxy class serving as interface when being dlopen'ed.
+ *
+ * NOTE: Despite the historic name, the KF5JS (KJS) interpreter has been fully
+ * removed. This class now only routes script evaluation and inline event
+ * dispatch to the embedded QuickJS engine; it holds no KJS state.
  */
 class KJSProxy
 {
@@ -66,17 +56,16 @@ public:
     KJSProxy(khtml::ChildFrame *frame);
     ~KJSProxy();
 
-    QVariant evaluate(QString filename, int baseLine, const QString &, const DOM::Node &n,
-                      KJS::Completion *completion = nullptr);
+    QVariant evaluate(const QString &filename, int baseLine, const QString &, const DOM::Node &n);
     void clear();
 
-    DOM::EventListener *createHTMLEventHandler(QString sourceUrl, QString name, QString code, DOM::NodeImpl *node, bool svg = false);
+    DOM::EventListener *createHTMLEventHandler(const QString &sourceUrl, const QString &name, const QString &code, DOM::NodeImpl *node, bool svg = false);
     void finishedWithEvent(const DOM::Event &event);
-    KJS::Interpreter *interpreter();
 
     bool isRunningScript();
 
-    void setDebugEnabled(bool enabled);
+    // KJS debugger removed: these are retained as no-ops for source compatibility.
+    void setDebugEnabled(bool);
     bool debugEnabled() const;
     void showDebugWindow(bool show = true);
 
@@ -90,25 +79,17 @@ public:
     // Helper method, to access the private KHTMLPart::jScript()
     static KJSProxy *proxy(KHTMLPart *part);
 
-    // QuickJS event dispatch. Returns true if QuickJS handled the event
-    // (KJS must NOT re-run it). False means fall back to KJS.
     bool quickJSAvailable() const { return m_qjs != nullptr; }
     bool dispatchEventToQuickJS(DOM::EventImpl *event, DOM::NodeImpl *target,
                                 const QString &handlerSource);
 private:
-    void initScript();
-    void applyUserAgent();
     bool evaluateQuickJS(const QString &script, const QString &filename,
                          const DOM::Node &n, QVariant *result);
 
     khtml::ChildFrame *m_frame;
     int m_handlerLineno;
 
-    KJS::ScriptInterpreter *m_script;
     khtml::QJsDomBridge *m_qjs;
-#ifdef KJS_DEBUGGER
-    WTF::RefPtr<KJSDebugger::DebugWindow> m_debugWindow;
-#endif
     bool m_debugEnabled;
     int m_running;
 #ifndef NDEBUG

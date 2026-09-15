@@ -1,4 +1,4 @@
-﻿/* This file is part of the KDE project
+/* This file is part of the KDE project
  *
  * Copyright (C) 1998, 1999 Torben Weis <weis@kde.org>
  *                     1999-2001 Lars Knoll <knoll@kde.org>
@@ -81,12 +81,6 @@ namespace WebCore
 class SVGDocumentExtensions;
 }
 
-namespace KJS
-{
-class Interpreter;
-class HTMLElement;
-}
-
 namespace khtml
 {
 class DocLoader;
@@ -106,22 +100,6 @@ class XMLTokenizer;
 struct EditorContext;
 class EditCommandImpl;
 class KHTMLPartAccessor;
-}
-
-namespace KJS
-{
-class Window;
-class WindowFunc;
-class ExternalFunc;
-class JSEventListener;
-class JSLazyEventListener;
-class JSNodeFilter;
-class DOMDocument;
-class SourceFile;
-class ScheduledAction;
-class DOMSelection;
-class DOMSelectionProtoFunc;
-class KHTMLPartScriptable;
 }
 
 namespace KParts
@@ -220,19 +198,6 @@ class KHTML_EXPORT KHTMLPart : public KParts::ReadOnlyPart
     friend class DOM::ElementImpl;
     friend class KHTMLRun;
     friend class DOM::HTMLFormElementImpl;
-    friend class KJS::Window;
-    friend class KJS::ScheduledAction;
-    friend class KJS::JSNodeFilter;
-    friend class KJS::WindowFunc;
-    friend class KJS::ExternalFunc;
-    friend class KJS::JSEventListener;
-    friend class KJS::JSLazyEventListener;
-    friend class KJS::DOMDocument;
-    friend class KJS::HTMLElement;
-    friend class KJS::SourceFile;
-    friend class KJS::DOMSelection;
-    friend class KJS::DOMSelectionProtoFunc;
-    friend class KJS::KHTMLPartScriptable;
     friend class KJSProxy;
     friend class KHTMLPartBrowserExtension;
     friend class DOM::DocumentImpl;
@@ -391,23 +356,10 @@ public:
     bool jScriptEnabled() const;
 
     /**
-     * Returns the JavaScript interpreter the part is using. This method is
-     * mainly intended for applications which embed and extend the part and
-     * provides a mechanism for adding additional native objects to the
-     * interpreter (or removing the built-ins).
-     *
-     * One thing people using this method to add things to the interpreter must
-     * consider, is that when you start writing new content to the part, the
-     * interpreter is cleared. This includes both use of the
-     * begin( const QUrl &, int, int ) method, and the openUrl( const QUrl & )
-     * method. If you want your objects to have a longer lifespan, then you must
-     * retain a KJS::Object yourself to ensure that the reference count of your
-     * custom objects never reaches 0. You will also need to re-add your
-     * bindings every time this happens - one way to detect the need for this is
-     * to connect to the docCreated() signal, another is to reimplement the
-     * begin() method.
+     * Legacy accessor that used to return the KJS interpreter. KF5JS has been
+     * removed and QuickJS is the only engine, so this always returns nullptr.
      */
-    KJS::Interpreter *jScriptInterpreter();
+    void *jScriptInterpreter();
 
     /**
      * Enable/disable statusbar messages.

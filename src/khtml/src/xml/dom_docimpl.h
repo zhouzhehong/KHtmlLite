@@ -70,11 +70,6 @@ class XPathExpressionImpl;
 class XPathNSResolverImpl;
 }
 
-namespace KJS
-{
-class Window;
-}
-
 namespace WebCore
 {
 class SVGDocumentExtensions;
@@ -969,7 +964,7 @@ public:
 
     Type eventTargetType() const override;
     DocumentImpl *eventTargetDocument() override;
-    KJS::Window *window();
+    void *window();
 private:
     DOM::DocumentImpl *m_owner;
 };

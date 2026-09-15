@@ -57,7 +57,6 @@
 #include "editing/editing_p.h"
 #include "ui/findbar/khtmlfind_p.h"
 #include "ui/passwordbar/storepassbar.h"
-#include "ecma/kjs_scriptable.h"
 
 class KFind;
 class KFindDialog;
@@ -224,7 +223,7 @@ public:
     KHTMLPartBrowserExtension *m_extension;
     KParts::StatusBarExtension *m_statusBarExtension;
     KHTMLPartBrowserHostExtension *m_hostExtension;
-    KJS::KHTMLPartScriptable *m_scriptableExtension;
+    KParts::ScriptableExtension *m_scriptableExtension;
     KUrlLabel *m_statusBarIconLabel;
     KUrlLabel *m_statusBarWalletLabel;
     KUrlLabel *m_statusBarUALabel;
@@ -397,7 +396,7 @@ public:
     KHTMLFind m_find;
     StorePass m_storePass;
 
-    KJSErrorDlg *m_jsedlg;
+    void *m_jsedlg;
 
     //QGuardedPtr<KParts::Part> m_activeFrame;
     KParts::Part *m_activeFrame;

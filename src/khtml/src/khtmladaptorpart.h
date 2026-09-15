@@ -25,21 +25,13 @@
 #include <kparts/browserextension.h>
 #include <kpluginfactory.h>
 
-namespace KJS
-{
-class ExecState;
-class JSObject;
-}
+// The legacy KJS DBus scripting interface has been removed along with KF5JS.
 
 class ScriptingInterface
 {
 public:
     virtual ~ScriptingInterface() { }
-
-    virtual void initScripting(KJS::ExecState *exec) = 0;
     virtual void stopScripting() = 0;
-
-    virtual KJS::JSObject *scriptObject() = 0;
 };
 
 Q_DECLARE_INTERFACE(ScriptingInterface, "org.kde.khtml.ScriptingInterface")
@@ -64,9 +56,7 @@ class AdaptorView : public KParts::ReadOnlyPart,
 public:
     AdaptorView(QWidget *wparent, QObject *parent, const QStringList &args);
 
-    void initScripting(KJS::ExecState *exec) override;
     void stopScripting() override { }
-    KJS::JSObject *scriptObject() override;
 
 protected:
     bool openFile() override;

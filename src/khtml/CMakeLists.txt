@@ -61,8 +61,10 @@ include(ECMAddQch)
 # -----------------------------------------------------------------------------
 # Currently locked to Qt5 (KF5 dependency chain requires it).
 # For a future Qt6/KF6 port: set QT_VERSION_MAJOR to 6 and adjust
-# the find_package calls below. Note: KHTML was removed from KF6,
-# so a full Qt6 port requires replacing KF5JS, KF5Parts, etc.
+# Qt6/KF6 port: set QT_VERSION_MAJOR to 6 and adjust the find_package calls
+# below. Note: KHTML was removed from KF6, so a full Qt6 port requires
+# replacing KF5Parts, etc. The legacy KF5JS interpreter has been removed;
+# QuickJS is the only execution engine.
 # =============================================================================
 set(QT_VERSION_MAJOR 5 CACHE STRING "Qt major version (5 or 6)")
 set(REQUIRED_QT_VERSION 5.15.2)
@@ -88,7 +90,7 @@ include(KDEInstallDirs)
 include(KDECompilerSettings NO_POLICY_SCOPE)
 include(KDECMakeSettings)
 
-# Most of KJS doesn't even require Qt, thus we can't use override.
+# The QuickJS engine does not require Qt, thus we can't use override.
 # Applied at target level instead of polluting global CMAKE_CXX_FLAGS.
 string(REPLACE "-Wsuggest-override" "" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
 
@@ -98,9 +100,6 @@ find_package(KF5Codecs ${KF_DEP_VERSION} REQUIRED)
 find_package(KF5I18n ${KF_DEP_VERSION} REQUIRED)
 find_package(KF5IconThemes ${KF_DEP_VERSION} REQUIRED)
 find_package(KF5KIO ${KF_DEP_VERSION} REQUIRED)
-# KJS stopped shipping at 5.115 in the MSYS2 Qt5 compatibility set; the
-# engine is frozen, so the older package is API-compatible with this tree.
-find_package(KF5JS 5.115.0 REQUIRED)
 find_package(KF5Notifications ${KF_DEP_VERSION} REQUIRED)
 find_package(KF5Parts ${KF_DEP_VERSION} REQUIRED)
 find_package(KF5Sonnet ${KF_DEP_VERSION} REQUIRED)
@@ -122,12 +121,11 @@ ecm_setup_version(PROJECT
     SOVERSION 5
 )
 
-# --- Perl (required for JS binding generation) ---
+# --- Perl (used by gperf / legacy codegen only) ---
 find_package(Perl)
 set_package_properties(Perl PROPERTIES
     URL "https://www.perl.org/"
     TYPE REQUIRED
-    PURPOSE "Required for generating JS bindings for elements"
 )
 
 # --- X11 (Linux only) ---
@@ -201,7 +199,6 @@ add_compile_options(
     -Wno-expansion-to-defined
     # KF5 frameworks emit many deprecation warnings; suppress during transition
     $<$<CXX_COMPILER_ID:GNU,Clang>:-Wno-deprecated-declarations>
-    # KJS portion doesn't use override
     $<$<CXX_COMPILER_ID:GNU,Clang>:-Wno-suggest-override>
 )
 

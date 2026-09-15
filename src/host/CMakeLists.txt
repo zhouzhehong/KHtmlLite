@@ -23,7 +23,7 @@ find_package(Qt5 REQUIRED COMPONENTS Widgets Gui Network)
 find_package(ECM REQUIRED NO_MODULE)
 set(CMAKE_MODULE_PATH ${ECM_MODULE_PATH})
 find_package(KF5 REQUIRED COMPONENTS
-    Parts I18n JS KIO XmlGui WidgetsAddons TextWidgets IconThemes
+    Parts I18n KIO XmlGui WidgetsAddons TextWidgets IconThemes
     Codecs Archive Notifications Sonnet Wallet WindowSystem GlobalAccel)
 
 file(GLOB KHTML_SUBDIRS LIST_DIRECTORIES true "${KHTML_SOURCE_DIR}/*")
@@ -38,7 +38,7 @@ set(KHTML_HOST_INCLUDES
 set(KHTML_HOST_LIBS
     ${KHTML_LIB}
     Qt5::Widgets Qt5::Gui Qt5::Network
-    KF5::Parts KF5::I18n KF5::JS KF5::KIOCore KF5::KIOGui KF5::XmlGui
+    KF5::Parts KF5::I18n KF5::KIOCore KF5::KIOGui KF5::XmlGui
     KF5::WidgetsAddons KF5::TextWidgets KF5::IconThemes KF5::Codecs
     KF5::Archive KF5::Notifications KF5::SonnetCore KF5::SonnetUi
     KF5::Wallet KF5::WindowSystem KF5::GlobalAccel

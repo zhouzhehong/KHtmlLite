@@ -3,6 +3,7 @@
 // and monitors the process so a renderer crash never takes down the browser.
 #include <QApplication>
 #include <QWidget>
+#include <QLineEdit>
 #include <QVBoxLayout>
 #include <QLocalServer>
 #include <QLocalSocket>
@@ -541,14 +542,12 @@ public:
             QEvent::Type et = (type == QLatin1String("mousepress"))
                 ? QEvent::MouseButtonPress : QEvent::MouseButtonRelease;
             QMouseEvent *ev = new QMouseEvent(et, localPos, globalPos, button, buttons, mods);
-            // KHTMLView installs its event filter on the content widget
-            // (KHTMLWidget), not on the viewport.  Events must be posted to
-            // the content widget so KHTML's eventFilter/hit-testing runs.
             QWidget *content = view->widget();
-            if (content)
+            if (content) {
                 QCoreApplication::postEvent(content, ev);
-            else
+            } else {
                 delete ev;
+            }
             invalidateFull();
             scheduleFrame();
         } else if (type == QLatin1String("mousemove")) {
@@ -571,9 +570,27 @@ public:
             const int key = obj.value(QStringLiteral("key")).toInt();
             const QString text = obj.value(QStringLiteral("text")).toString();
             QKeyEvent *ev = new QKeyEvent(et, key, mods, text);
+            // In offscreen mode the toplevel window is never "active" in Qt's
+            // sense, so QApplication::focusWidget() stays null even after a
+            // child (the KLineEdit of a focused <input>) has taken focus. Use the
+            // content widget's own focusWidget() instead, which tracks the
+            // focused child regardless of active-window state.
             QWidget *content = view->widget();
-            if (content)
-                QCoreApplication::postEvent(content, ev);
+            QWidget *target = content ? content->focusWidget() : nullptr;
+            if (!target) {
+                target = content;
+            }
+            {
+                QFile f("C:/Users/zhouzhehong/khtml_qjs.log");
+                f.open(QIODevice::Append);
+                QTextStream ts(&f);
+                ts << "[dbg] KEY target=" << (target?target->metaObject()->className():"null") << "\n";
+                QLineEdit *le = qobject_cast<QLineEdit*>(target);
+                if (le) ts << "[dbg] lineedit text=" << le->text() << "\n";
+                f.close();
+            }
+            if (target)
+                QCoreApplication::postEvent(target, ev);
             else
                 delete ev;
             invalidateFull();

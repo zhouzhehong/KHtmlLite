@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html>
+<head><title>UI Interaction Test</title>
+<style>
+body { font-family: sans-serif; margin: 20px; }
+#btn { width: 200px; height: 60px; background: blue; color: white; font-size: 20px; cursor: pointer; }
+#btn.clicked { background: green; }
+#hover { width: 200px; height: 40px; background: gray; color: white; margin-top: 10px; }
+#hover.hovered { background: orange; }
+#text { width: 300px; height: 30px; font-size: 16px; margin-top: 10px; }
+#status { margin-top: 10px; color: red; font-size: 18px; }
+#dbl { width: 200px; height: 40px; background: purple; color: white; margin-top: 10px; }
+#dbl.dblclicked { background: teal; }
+#scrollbox { width: 300px; height: 100px; overflow: scroll; border: 1px solid black; margin-top: 10px; }
+#scrollcontent { height: 500px; background: linear-gradient(red, yellow, green, blue); }
+</style>
+</head>
+<body>
+<h2>UI Interaction Test</h2>
+<button id="btn">CLICK ME</button>
+<div id="hover">HOVER ME</div>
+<div id="dbl">DOUBLE CLICK ME</div>
+<input type="text" id="text" placeholder="Type here">
+<div id="scrollbox"><div id="scrollcontent"></div></div>
+<div id="status">Ready</div>
+<script>
+var btn = document.getElementById('btn');
+btn.addEventListener('click', function() {
+    btn.textContent = 'CLICKED';
+    btn.className = 'clicked';
+    document.getElementById('status').textContent = 'Click OK';
+});
+var hover = document.getElementById('hover');
+hover.addEventListener('mouseover', function() {
+    hover.className = 'hovered';
+    hover.textContent = 'HOVERED';
+});
+hover.addEventListener('mouseout', function() {
+    hover.className = '';
+    hover.textContent = 'HOVER ME';
+});
+var dbl = document.getElementById('dbl');
+dbl.addEventListener('dblclick', function() {
+    dbl.textContent = 'DBL CLICKED';
+    dbl.className = 'dblclicked';
+    document.getElementById('status').textContent = 'DblClick OK';
+});
+var text = document.getElementById('text');
+text.addEventListener('input', function() {
+    document.getElementById('status').textContent = 'Typed: ' + text.value;
+});
+text.addEventListener('focus', function() {
+    document.getElementById('status').textContent = 'Focus OK';
+});
+</script>
+</body>
+</html>

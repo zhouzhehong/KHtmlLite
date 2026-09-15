@@ -1,4 +1,4 @@
-﻿/* qjs_dom_bridge.cpp - QuickJS to KHTML DOM bridge (engine-internal).
+/* qjs_dom_bridge.cpp - QuickJS to KHTML DOM bridge (engine-internal).
  *
  * Binds a compact DOM surface onto the embedded QuickJS engine:
  *   document.getElementById / querySelector / createElement / body / title
@@ -29,8 +29,13 @@
 #include <dom/css_value.h>
 #include <dom/dom_string.h>
 #include <xml/dom2_eventsimpl.h>
+#include <xml/dom_nodeimpl.h>
+#include <xml/dom_docimpl.h>
+#include "kjs_proxy.h"
+#include <khtml_part.h>
 #include <cstdio>
 #include <QHash>
+#include <QSet>
 #include <QVector>
 
 static void qjslog(const char *msg)
@@ -139,6 +144,41 @@ struct QjsListenerEntry {
 static QHash<quintptr, QVector<QjsListenerEntry>> g_qjsListeners;
 static ::JSRuntime *g_qjsListenerRt = nullptr;
 
+// Tracks which (NodeImpl*, event-type) pairs already have a native C++
+// EventListener shim installed, so we register the shim exactly once per pair.
+// The shim bridges KHTML's native dispatch (handleLocalEvents) into the
+// QuickJS listener table; without it, programmatic addEventListener('click',fn)
+// callbacks never fire because g_qjsListeners is otherwise only walked from the
+// inline onXXX attribute path.
+static QHash<quintptr, QSet<QString>> g_qjsShimmed;
+
+class QJSNodeListener : public DOM::EventListener
+{
+public:
+    // Invoked by KHTML during native event dispatch on the node the shim is
+    // registered on. Routes through KJSProxy so the QuickJS runtime is lazily
+    // brought up if needed, then walks g_qjsListeners for this node+type.
+    void handleEvent(DOM::Event &evt) override
+    {
+        DOM::Node ct = evt.currentTarget();
+        DOM::NodeImpl *target = ct.handle();
+        if (!target || !target->document()) {
+            return;
+        }
+        KHTMLPart *part = qobject_cast<KHTMLPart *>(target->document()->part());
+        if (!part) {
+            return;
+        }
+        KJSProxy *proxy = KJSProxy::proxy(part);
+        if (proxy) {
+            // Empty handlerSource: run ONLY the programmatic listener table.
+            // The inline onXXX attribute path uses a non-empty handlerSource.
+            proxy->dispatchEventToQuickJS(evt.handle(), target, QString());
+        }
+    }
+    DOM::DOMString eventListenerType() override { return "_khtml_QJSNodeListener"; }
+};
+
 static const char *kSupportedEvents[] = {
     "click", "mousedown", "mouseup", "input", "change", "keydown", "keyup"
 };
@@ -160,6 +200,35 @@ static ::JSValue wrapEvent(::JSContext *ctx, DOM::EventImpl *evt)
     JS_SetPropertyStr(ctx, obj, "type", jsStr(ctx, dstr(ev.type())));
     JS_SetPropertyStr(ctx, obj, "bubbles", JS_NewBool(ctx, evt->bubbles()));
     JS_SetPropertyStr(ctx, obj, "cancelable", JS_NewBool(ctx, evt->cancelable()));
+
+    // target: wrap the DOM node the event targeted (if it is a node target).
+    if (EventTargetImpl *t = evt->target()) {
+        if (t->eventTargetType() == EventTargetImpl::DOM_NODE) {
+            DOM::Node targetNode(static_cast<NodeImpl *>(t));
+            if (!targetNode.isNull()) {
+                JS_SetPropertyStr(ctx, obj, "target", wrapNode(ctx, targetNode));
+            }
+        }
+    }
+
+    // Mouse geometry + button.
+    if (evt->isMouseEvent()) {
+        DOM::MouseEventImpl *me = static_cast<DOM::MouseEventImpl *>(evt);
+        JS_SetPropertyStr(ctx, obj, "clientX", JS_NewInt32(ctx, (int)me->clientX()));
+        JS_SetPropertyStr(ctx, obj, "clientY", JS_NewInt32(ctx, (int)me->clientY()));
+        JS_SetPropertyStr(ctx, obj, "button", JS_NewInt32(ctx, (int)me->button()));
+        JS_SetPropertyStr(ctx, obj, "which", JS_NewInt32(ctx, (int)me->which()));
+    }
+
+    // Keyboard: keyCode + human-readable key identifier.
+    if (evt->isKeyboardEvent()) {
+        DOM::KeyboardEventImpl *ke = static_cast<DOM::KeyboardEventImpl *>(evt);
+        JS_SetPropertyStr(ctx, obj, "keyCode", JS_NewInt32(ctx, ke->keyCode()));
+        JS_SetPropertyStr(ctx, obj, "key", jsStr(ctx, dstr(ke->keyIdentifier())));
+    } else if (evt->isUIEvent()) {
+        DOM::UIEventImpl *ue = static_cast<DOM::UIEventImpl *>(evt);
+        JS_SetPropertyStr(ctx, obj, "keyCode", JS_NewInt32(ctx, ue->keyCode()));
+    }
     return obj;
 }
 
@@ -336,8 +405,71 @@ static ::JSValue elAppendChild(::JSContext *ctx, ::JSValueConst this_val,
 static ::JSValue elAddEventListener(::JSContext *ctx, ::JSValueConst this_val,
                                     int argc, ::JSValueConst *argv)
 {
-    // Temporarily no-op: listener table storage is being debugged.
-    // Event dispatch for inline handlers goes through JSLazyEventListener.
+    // Store the JS callback in g_qjsListeners keyed by the node impl handle.
+    // DOM event dispatch later walks this table and JS_Call()s the function
+    // through QuickJS (see Impl::dispatchEvent), never via KJS.
+    if (argc < 2) {
+        return JS_UNDEFINED;
+    }
+    const QString type = jsValStr(ctx, argv[0]);
+    if (type.isEmpty() || !JS_IsFunction(ctx, argv[1])) {
+        return JS_UNDEFINED;
+    }
+    NodeWrap *w = unwrapNode(ctx, this_val);
+    if (!w || !w->node.handle()) {
+        return JS_UNDEFINED;
+    }
+    const quintptr key = reinterpret_cast<quintptr>(w->node.handle());
+    QjsListenerEntry e;
+    e.type = type;
+    e.func = JS_DupValue(ctx, argv[1]);
+    g_qjsListeners[key].append(e);
+
+    // Install a native C++ EventListener shim on this node exactly once per
+    // (node, type) so KHTML's real dispatch path (handleLocalEvents) invokes
+    // this table. Without it the programmatic callback only fires when an
+    // inline onXXX attribute on the same node happens to dispatch.
+    auto &shimmed = g_qjsShimmed[key];
+    if (!shimmed.contains(type)) {
+        shimmed.insert(type);
+        NodeImpl *nodeImpl = w->node.handle();
+        EventName evName = EventName::fromString(mk(type));
+        nodeImpl->addEventListener(evName, new QJSNodeListener(), false);
+    }
+    qjslog2("ADD_EVENT_LISTENER", (void *)key, nullptr);
+    return JS_UNDEFINED;
+}
+
+static ::JSValue elRemoveEventListener(::JSContext *ctx, ::JSValueConst this_val,
+                                      int argc, ::JSValueConst *argv)
+{
+    if (argc < 2) {
+        return JS_UNDEFINED;
+    }
+    const QString type = jsValStr(ctx, argv[0]);
+    NodeWrap *w = unwrapNode(ctx, this_val);
+    if (!w || !w->node.handle()) {
+        return JS_UNDEFINED;
+    }
+    const quintptr key = reinterpret_cast<quintptr>(w->node.handle());
+    auto it = g_qjsListeners.find(key);
+    if (it == g_qjsListeners.end()) {
+        return JS_UNDEFINED;
+    }
+    QVector<QjsListenerEntry> &v = it.value();
+    for (int i = v.size() - 1; i >= 0; --i) {
+        if (v[i].type != type) {
+            continue;
+        }
+        if (JS_SameValue(ctx, v[i].func, argv[1])) {
+            JS_FreeValue(ctx, v[i].func);
+            v.removeAt(i);
+        }
+    }
+    if (v.isEmpty()) {
+        g_qjsListeners.erase(it);
+    }
+    qjslog2("REMOVE_EVENT_LISTENER", (void *)key, nullptr);
     return JS_UNDEFINED;
 }
 
@@ -503,6 +635,7 @@ struct QJsDomBridge::Impl
             }
         }
         g_qjsListeners.clear();
+        g_qjsShimmed.clear();
 
         if (ctx) {
             if (!JS_IsUndefined(documentObj)) {
@@ -515,6 +648,7 @@ struct QJsDomBridge::Impl
         }
         if (rt) { JS_FreeRuntime(rt); rt = nullptr; }
         rt = JS_NewRuntime();
+        g_qjsListenerRt = rt;
         ctx = JS_NewContext(rt);
         if (rt) JS_SetMemoryLimit(rt, 64u * 1024 * 1024);
         qjslog2("RUNTIME_RESET_END", rt, ctx);
@@ -575,8 +709,12 @@ struct QJsDomBridge::Impl
             if (!JS_IsException(fnVal)) JS_FreeValue(ctx, fnVal);
         }
 
-        // 2) addEventListener callbacks from the listener table
-        if (!evtType.isEmpty()) {
+        // 2) addEventListener callbacks from the listener table.
+        //    This is walked ONLY on the QJSNodeListener shim path (empty
+        //    handlerSource). The inline onXXX path (non-empty handlerSource)
+        //    relies on the shim to dispatch programmatic callbacks, so the
+        //    table must not be iterated here too — that would double-fire.
+        if (handlerSource.isEmpty() && !evtType.isEmpty()) {
             quintptr key = reinterpret_cast<quintptr>(target);
             auto it = g_qjsListeners.find(key);
             if (it != g_qjsListeners.end()) {
@@ -681,7 +819,7 @@ struct QJsDomBridge::Impl
         }
         if (enableEvent) {
             defFunc("addEventListener", elAddEventListener, 2, proto);
-            defFunc("removeEventListener", elAddEventListener, 2, proto);
+            defFunc("removeEventListener", elRemoveEventListener, 2, proto);
         }
         if (enableDocument) {
             // document-level methods (available on every node; document is a node)
@@ -720,6 +858,7 @@ struct QJsDomBridge::Impl
         enableEvent = flagOn("KHTML_QJS_EVENT");
         qjslog("impl: rt");
         rt = JS_NewRuntime();
+        g_qjsListenerRt = rt;
         qjslog2("RUNTIME_CREATE", rt, nullptr);
         qjslog("impl: ctx");
         ctx = JS_NewContext(rt);

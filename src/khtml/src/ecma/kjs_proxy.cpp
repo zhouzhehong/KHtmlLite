@@ -1,4 +1,4 @@
-﻿/*
+/*
  *  This file is part of the KDE libraries
  *  Copyright (C) 1999-2001 Harri Porten (porten@kde.org)
  *  Copyright (C) 2001,2003 Peter Kelly (pmk@post.com)
@@ -21,34 +21,68 @@
 
 #include "kjs_proxy.h"
 
-#include "kjs_window.h"
-#include "kjs_events.h"
 #include "qjs_dom_bridge.h"
 #include <cstdio>
 static void kjlog(const char *m) { FILE *f = fopen("C:/Users/zhouzhehong/khtml_qjs.log", "a"); if (f) { fprintf(f, "%s\n", m); fclose(f); } }
-#ifdef KJS_DEBUGGER
-#include "debugger/debugwindow.h"
-#endif
+
+#include "dom/dom2_events.h"
 #include <xml/dom_nodeimpl.h>
+#include <xml/dom_docimpl.h>
 #include <khtmlpart_p.h>
 #include <khtml_part.h>
-#include <kprotocolmanager.h>
 #include "khtml_debug.h"
-#include <klocalizedstring.h>
-#include <assert.h>
-#include <kjs/function.h>
-#include <kjs/JSLock.h>
-
-using namespace KJS;
-using namespace KJSDebugger;
 
 #ifndef NDEBUG
 int KJSProxy::s_count = 0;
 #endif
 
+namespace {
+
+// A KJS-free replacement for the old KJS::JSLazyEventListener. It wraps an
+// inline event-handler body (e.g. the value of an onclick attribute). At
+// dispatch time it resolves the KHTMLPart from the event target and feeds the
+// retained source to QuickJS. It holds no interpreter state.
+class InlineQJSListener : public DOM::EventListener
+{
+public:
+    InlineQJSListener(const QString &code, const QString &sourceUrl, int lineNo, const QString &name)
+        : m_code(code), m_sourceUrl(sourceUrl), m_lineNo(lineNo), m_name(name) {}
+
+    void handleEvent(DOM::Event &evt) override
+    {
+        // Reach the KJSProxy through the event target's document -> part.
+        // This deliberately does NOT touch any JS window object: that would
+        // force an interpreter to be constructed, which we have removed.
+        KJSProxy *proxy = nullptr;
+        DOM::Node ct = evt.currentTarget();
+        DOM::NodeImpl *target = nullptr;
+        if (!ct.isNull()) {
+            target = ct.handle();
+            if (target && target->document()) {
+                KHTMLPart *part = qobject_cast<KHTMLPart *>(target->document()->part());
+                if (part) {
+                    proxy = KJSProxy::proxy(part);
+                }
+            }
+        }
+        if (proxy) {
+            proxy->dispatchEventToQuickJS(evt.handle(), target, m_code);
+        }
+    }
+
+    DOM::DOMString eventListenerType() override { return "_khtml_HTMLEventListener"; }
+
+private:
+    QString m_code;
+    QString m_sourceUrl;
+    int m_lineNo;
+    QString m_name;
+};
+
+} // namespace
+
 KJSProxy::KJSProxy(khtml::ChildFrame *frame)
 {
-    m_script = nullptr;
     m_frame = frame;
     m_debugEnabled = false;
     m_running = 0;
@@ -63,49 +97,19 @@ KJSProxy::~KJSProxy()
 {
     delete m_qjs;
     m_qjs = nullptr;
-    if (m_script) {
-        //qCDebug(KHTML_LOG) << "KJSProxy::~KJSProxyImpl clearing global object " << m_script->globalObject().imp();
-        // This allows to delete the global-object properties, like all the protos
-        m_script->globalObject()->clearProperties();
-        //qCDebug(KHTML_LOG) << "KJSProxy::~KJSProxyImpl garbage collecting";
-
-        JSLock::lock();
-        while (Interpreter::collect())
-            ;
-        JSLock::unlock();
-        //qCDebug(KHTML_LOG) << "KJSProxy::~KJSProxyImpl deleting interpreter " << m_script;
-        delete m_script;
-        //qCDebug(KHTML_LOG) << "KJSProxy::~KJSProxyImpl garbage collecting again";
-        // Garbage collect - as many times as necessary
-        // (we could delete an object which was holding another object, so
-        // the deref() will happen too late for deleting the impl of the 2nd object).
-        JSLock::lock();
-        while (Interpreter::collect())
-            ;
-        JSLock::unlock();
-    }
-
 #ifndef NDEBUG
     s_count--;
-    // If it was the last interpreter, we should have nothing left
-#ifdef KJS_DEBUG_MEM
-    if (s_count == 0) {
-        Interpreter::finalCheck();
-    }
-#endif
 #endif
 }
 
 bool KJSProxy::evaluateQuickJS(const QString &script, const QString &filename,
                                const DOM::Node &n, QVariant *result)
 {
-    // Scripts larger than 1 MiB go straight to KJS (they are almost always
-    // generated bundles that the bridge cannot help with anyway).
+    // Global kill-switch: KHTML_QJS_RUNTIME=0 disables the QuickJS path entirely.
     kjlog("evaluateQuickJS: entry");
     if (script.size() > 1048576) {
         return false;
     }
-    // Global kill-switch: KHTML_QJS_RUNTIME=0 disables the QuickJS path entirely.
     {
         const char *v = getenv("KHTML_QJS_RUNTIME");
         if (v && v[0] == '0') return false;
@@ -142,83 +146,42 @@ bool KJSProxy::evaluateQuickJS(const QString &script, const QString &filename,
 bool KJSProxy::dispatchEventToQuickJS(DOM::EventImpl *event, DOM::NodeImpl *target,
                                       const QString &handlerSource)
 {
-    // Only dispatch if QuickJS was already initialized by a page script.
-    // Do NOT lazily create the runtime inside event handling - that caused
-    // renderer crashes during startup event storms.
-    if (!m_qjs) return false;
+    // QuickJS is the only engine: lazily create the runtime on first event,
+    // mirroring evaluateQuickJS(). Inline handlers can fire before any
+    // <script> has run, so the runtime must be brought up here too.
+    if (!m_qjs) {
+        m_qjs = new khtml::QJsDomBridge();
+        if (m_frame && m_frame->m_part) {
+            if (KHTMLPart *kp = qobject_cast<KHTMLPart *>(m_frame->m_part.data())) {
+                m_qjs->setDocument(kp->document());
+            }
+        }
+    }
+    if (!m_qjs) {
+        return false;
+    }
     return m_qjs->dispatchEvent(event, target, handlerSource);
 }
-QVariant KJSProxy::evaluate(QString filename, int baseLine,
-                            const QString &str, const DOM::Node &n, Completion *completion)
+
+QVariant KJSProxy::evaluate(const QString &filename, int baseLine,
+                            const QString &str, const DOM::Node &n)
 {
     ++m_running;
     // evaluate code. Returns the JS return value or an invalid QVariant
     // if there was none, an error occurred or the type couldn't be converted.
 
-    // QuickJS path first: the embedded ES2020 engine runs modern page
-    // scripts without the KJS interpreter's syntax/robustness limits.
+    // QuickJS is the only JavaScript engine. Run the script through it.
     QVariant qjsResult;
     if (evaluateQuickJS(str, filename, n, &qjsResult)) {
-        if (completion) {
-            *completion = Completion(ReturnValue, nullptr);
-        }
         --m_running;
         return qjsResult;
     }
 
-    initScript();
-    // inlineCode is true for <a href="javascript:doSomething()">
-    // and false for <script>doSomething()</script>. Check if it has the
-    // expected value in all cases.
-    // See smart window.open policy for where this is used.
-    bool inlineCode = filename.isNull();
-    //qCDebug(KHTML_LOG) << "KJSProxy::evaluate inlineCode=" << inlineCode;
-
-#ifdef KJS_DEBUGGER
-    if (inlineCode) {
-        filename = "(unknown file)";
-    }
-    if (m_debugWindow) {
-        m_debugWindow->attach(m_script);
-    }
-#else
+    // On any failure (unsupported API, syntax error, oversized script) return
+    // an empty QVariant. There is no other engine to fall back to.
     Q_UNUSED(baseLine);
-#endif
-
-    m_script->setInlineCode(inlineCode);
-    Window *window = Window::retrieveWindow(m_frame->m_part);
-    KJS::JSValue *thisNode = n.isNull() ? Window::retrieve(m_frame->m_part) : getDOMNode(m_script->globalExec(), n.handle());
-
-    UString code(str);
-
-    m_script->startCPUGuard();
-    Completion comp = m_script->evaluate(filename, baseLine, code, thisNode);
-    m_script->stopCPUGuard();
-
-    bool success = (comp.complType() == KJS::Normal) || (comp.complType() == ReturnValue);
-
-    if (completion) {
-        *completion = comp;
-    }
-
-#ifdef KJS_DEBUGGER
-    //    KJSDebugWin::debugWindow()->setCode(QString());
-#endif
-
-    window->afterScriptExecution();
-
     --m_running;
-
-    // let's try to convert the return value
-    if (success && comp.value()) {
-        return ValueToVariant(m_script->globalExec(), comp.value());
-    } else {
-        if (comp.complType() == Throw) {
-            UString msg = comp.value()->toString(m_script->globalExec());
-            // qCDebug(KHTML_LOG) << "WARNING: Script threw exception: " << msg.qstring();
-        }
-        return QVariant();
-    }
+    return QVariant();
 }
 
 bool KJSProxy::isRunningScript()
@@ -226,199 +189,47 @@ bool KJSProxy::isRunningScript()
     return m_running != 0;
 }
 
-// Implementation of the debug() function
-class TestFunctionImp : public JSObject
-{
-public:
-    TestFunctionImp() : JSObject() {}
-    bool implementsCall() const override
-    {
-        return true;
-    }
-    JSValue *callAsFunction(ExecState *exec, JSObject *thisObj, const List &args) override;
-};
-
-JSValue *TestFunctionImp::callAsFunction(ExecState *exec, JSObject * /*thisObj*/, const List &args)
-{
-    fprintf(stderr, "--> %s\n", args[0]->toString(exec).ascii());
-    return jsUndefined();
-}
-
 void KJSProxy::clear()
 {
-    // clear resources allocated by the interpreter, and make it ready to be used by another page
-    // We have to keep it, so that the Window object for the part remains the same.
-    // (we used to delete and re-create it, previously)
-    if (m_script) {
-#ifdef KJS_DEBUGGER
-        if (m_debugWindow) {
-            m_debugWindow->clearInterpreter(m_script);
-        }
-#endif
-        m_script->clear();
-
-        Window *win = static_cast<Window *>(m_script->globalObject());
-        if (win) {
-            win->clear(m_script->globalExec());
-            // re-add "debug", clear() removed it
-            m_script->globalObject()->put(m_script->globalExec(),
-                                          "debug", new TestFunctionImp(), Internal);
-            if (win->part()) {
-                applyUserAgent();
-            }
-        }
-
-        // Really delete everything that can be, so that the DOM nodes get deref'ed
-        //qCDebug(KHTML_LOG) << "all done -> collecting";
-        JSLock::lock();
-        while (Interpreter::collect())
-            ;
-        JSLock::unlock();
-    }
-
-#ifdef KJS_DEBUGGER
-    // Detach from debugging entirely if it's been turned off.
-    if (m_debugWindow && !m_debugEnabled) {
-        m_debugWindow->detach(m_script);
-        m_debugWindow = 0;
-    }
-#endif
+    // KF5JS interpreter removed. The QuickJS bridge keeps its own document
+    // state; dropping it here would force a runtime rebuild on next page load.
 }
 
-DOM::EventListener *KJSProxy::createHTMLEventHandler(QString sourceUrl, QString name, QString code, DOM::NodeImpl *node, bool svg)
+DOM::EventListener *KJSProxy::createHTMLEventHandler(const QString &sourceUrl, const QString &name, const QString &code, DOM::NodeImpl *node, bool svg)
 {
-    initScript();
-
-#ifdef KJS_DEBUGGER
-    if (m_debugWindow) {
-        m_debugWindow->attach(m_script);
-    }
-#else
-    Q_UNUSED(sourceUrl);
-#endif
-
-    return KJS::Window::retrieveWindow(m_frame->m_part)->getJSLazyEventListener(
-               code, sourceUrl, m_handlerLineno, name, node, svg);
+    // Hand back a self-contained inline listener that retains only the raw
+    // handler source. It parses nothing with KJS; at dispatch time it feeds
+    // the source to QuickJS.
+    Q_UNUSED(node);
+    Q_UNUSED(svg);
+    return new InlineQJSListener(code, sourceUrl, m_handlerLineno, name);
 }
 
 void KJSProxy::finishedWithEvent(const DOM::Event &event)
 {
-    // This is called when the DOM implementation has finished with a particular event. This
-    // is the case in sitations where an event has been created just for temporary usage,
-    // e.g. an image load or mouse move. Once the event has been dispatched, it is forgotten
-    // by the DOM implementation and so does not need to be cached still by the interpreter
-    ScriptInterpreter::forgetDOMObject(event.handle());
-}
-
-KJS::Interpreter *KJSProxy::interpreter()
-{
-    if (!m_script) {
-        initScript();
-    }
-    return m_script;
+    // Used to tell the KJS interpreter to release its wrapper for this event.
+    // QuickJS owns no such cache, so this is a no-op.
+    Q_UNUSED(event);
 }
 
 void KJSProxy::setDebugEnabled(bool enabled)
 {
-#ifdef KJS_DEBUGGER
     m_debugEnabled = enabled;
-
-    // Note that we attach to the debugger only before
-    // running a script. Detaches/disabling are done between
-    // documents, at clear. Both are done so the debugger
-    // see the entire session
-    if (enabled) {
-        m_debugWindow = DebugWindow::window();
-    }
-#else
-    Q_UNUSED(enabled)
-#endif
 }
 
 bool KJSProxy::debugEnabled() const
 {
-#ifdef KJS_DEBUGGER
     return m_debugEnabled;
-#else
-    return false;
-#endif
 }
 
 void KJSProxy::showDebugWindow(bool /*show*/)
 {
-#ifdef KJS_DEBUGGER
-    if (m_debugWindow) {
-        m_debugWindow->show();
-    }
-#else
-    //Q_UNUSED(show);
-#endif
+    // KJS debugger removed.
 }
 
 bool KJSProxy::paused() const
 {
-#ifdef KJS_DEBUGGER
-    // if (DebugWindow::window())
-    //     return DebugWindow::window()->inSession();
-#endif
     return false;
-}
-
-KJS_QT_UNICODE_IMPL
-
-void KJSProxy::initScript()
-{
-    if (m_script) {
-        return;
-    }
-
-    // Build the global object - which is a Window instance
-    JSGlobalObject *globalObject(new Window(m_frame));
-
-    // Create a KJS interpreter for this part
-    m_script = new KJS::ScriptInterpreter(globalObject, m_frame);
-    KJS_QT_UNICODE_SET;
-    globalObject->setPrototype(m_script->builtinObjectPrototype());
-
-#ifdef KJS_DEBUGGER
-    //m_script->setDebuggingEnabled(m_debugEnabled);
-#endif
-    //m_script->enableDebug();
-    globalObject->put(m_script->globalExec(),
-                      "debug", new TestFunctionImp(), Internal);
-    applyUserAgent();
-
-#ifdef KJS_DEBUGGER
-    // Attach debugger as early as possible as not all scrips have a direct DOM-relation
-    // NOTE: attach can be called multiple times
-    if (m_debugEnabled) {
-        m_debugWindow->attach(m_script);
-    }
-#endif
-}
-
-void KJSProxy::applyUserAgent()
-{
-    assert(m_script);
-    QUrl url = m_frame->m_part.data()->url();
-    QString host = url.isLocalFile() ? "localhost" : url.host();
-    QString userAgent = KProtocolManager::userAgentForHost(host);
-    if (userAgent.indexOf(QLatin1String("Microsoft"), 0, Qt::CaseSensitive) >= 0 ||
-            userAgent.indexOf(QLatin1String("MSIE"), 0, Qt::CaseSensitive) >= 0) {
-        m_script->setCompatMode(Interpreter::IECompat);
-#ifdef KJS_VERBOSE
-        qCDebug(KHTML_LOG) << "Setting IE compat mode";
-#endif
-    } else
-        // If we find "Mozilla" but not "(compatible, ...)" we are a real Netscape
-        if (userAgent.indexOf(QLatin1String("Mozilla"), 0, Qt::CaseSensitive) >= 0 &&
-                userAgent.indexOf(QLatin1String("compatible"), 0, Qt::CaseSensitive) == -1 &&
-                userAgent.indexOf(QLatin1String("KHTML"), 0, Qt::CaseSensitive) == -1) {
-            m_script->setCompatMode(Interpreter::NetscapeCompat);
-#ifdef KJS_VERBOSE
-            qCDebug(KHTML_LOG) << "Setting NS compat mode";
-#endif
-        }
 }
 
 // Helper method, so that all classes which need jScript() don't need to be added

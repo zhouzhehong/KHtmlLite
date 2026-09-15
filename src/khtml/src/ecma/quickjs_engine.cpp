@@ -364,11 +364,6 @@ std::unique_ptr<JSEngine> JSEngine::create(Backend backend)
     switch (backend) {
     case QuickJS:
         return std::make_unique<QuickJSEngine>();
-    case KJS:
-        // KJS backend lives in the legacy ecma/ binding. Returning null
-        // here keeps the abstraction honest; the caller falls back.
-        qWarning() << "KJS backend requested but not linked in this build";
-        return nullptr;
     }
     return nullptr;
 }

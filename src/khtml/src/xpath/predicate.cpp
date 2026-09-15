@@ -30,10 +30,9 @@
 
 #include "xml/dom_nodeimpl.h"
 #include "xml/dom_nodelistimpl.h"
-#include "kjs/operations.h"
-#include "kjs/value.h"
 
-#include <math.h>
+#include <cmath>
+#include <limits>
 
 using namespace DOM;
 using namespace khtml;
@@ -127,9 +126,9 @@ Value NumericOp::doEvaluate() const
                 // +/- Infinity.
                 using namespace std; // for signbit
                 if (signbit(leftVal) == signbit(rightVal)) {
-                    return Value(KJS::Inf);
+                    return Value(std::numeric_limits<double>::infinity());
                 } else {
-                    return Value(-KJS::Inf);
+                    return Value(-std::numeric_limits<double>::infinity());
                 }
             }
         } else {

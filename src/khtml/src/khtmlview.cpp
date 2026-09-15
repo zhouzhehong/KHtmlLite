@@ -110,6 +110,15 @@ void dumpLineBoxes(RenderFlow *flow);
 using namespace DOM;
 using namespace khtml;
 
+// P0 RE-ENTRANCY GUARD: prevents eventFilter(redirected key) -> keyPressEvent
+// -> DOM/JS dispatch -> eventFilter re-entry from recursing indefinitely.
+static bool s_inKeyDispatch = false;
+struct KeyDispatchGuard {
+    bool &ref;
+    KeyDispatchGuard(bool &r) : ref(r) { ref = true; }
+    ~KeyDispatchGuard() { ref = false; }
+};
+
 #ifndef NDEBUG
 static const int sFirstLayoutDelay = 520;
 static const int sParsingLayoutsInterval = 380;
@@ -1167,6 +1176,13 @@ void KHTMLView::mousePressEvent(QMouseEvent *_mouse)
 
     DOM::NodeImpl::MouseEvent mev(_mouse->buttons(), DOM::NodeImpl::MousePress);
     m_part->xmlDocImpl()->prepareMouseEvent(false, xm, ym, &mev);
+    {
+        char nb[128];
+        QString nn = mev.innerNode.isNull() ? QStringLiteral("NULL") : mev.innerNode.nodeName().string();
+        snprintf(nb, sizeof(nb), "xm=%d ym=%d contentsX=%d contentsY=%d innerNode=%s innerNN=%s",
+                 xm, ym, contentsX(), contentsY(),
+                 mev.innerNode.handle() ? "nonnull" : "null", nn.toLatin1().constData());
+    }
 
     //qCDebug(KHTML_LOG) << "innerNode="<<mev.innerNode.nodeName().string();
 
@@ -1720,6 +1736,7 @@ bool KHTMLView::dispatchKeyEventHelper(QKeyEvent *_ke, bool keypress)
 
 void KHTMLView::keyPressEvent(QKeyEvent *_ke)
 {
+    KeyDispatchGuard _guard(s_inKeyDispatch);
     // If CTRL was hit, be prepared for access keys
     if (d->accessKeysEnabled && _ke->key() == Qt::Key_Control && !(_ke->modifiers() & ~Qt::ControlModifier) && !d->accessKeysActivated) {
         d->accessKeysPreActivate = true;
@@ -2084,6 +2101,10 @@ static void setInPaintEventFlag(QWidget *w, bool b = true, bool recurse = true)
 
 bool KHTMLView::eventFilter(QObject *o, QEvent *e)
 {
+    if (e->type() == QEvent::MouseButtonPress || e->type() == QEvent::MouseButtonRelease ||
+        e->type() == QEvent::MouseMove || e->type() == QEvent::MouseButtonDblClick) {
+        // (eventFilter entry)
+    }
     if (e->type() == QEvent::ShortcutOverride) {
         QKeyEvent *ke = (QKeyEvent *) e;
         if (m_part->isEditable() || m_part->isCaretMode()
@@ -2187,7 +2208,13 @@ bool KHTMLView::eventFilter(QObject *o, QEvent *e)
                 if (w->parentWidget() == view && !qobject_cast<QScrollBar *>(w)) {
                     QKeyEvent *ke = static_cast<QKeyEvent *>(e);
                     if (e->type() == QEvent::KeyPress) {
-                        keyPressEvent(ke);
+                        // P0: prevent re-entrant key dispatch.  If a DOM/JS
+                        // handler inside keyPressEvent causes another key event
+                        // to reach this filter, do not recurse — let the widget
+                        // handle it instead.
+                        if (!s_inKeyDispatch) {
+                            keyPressEvent(ke);
+                        }
                         ke->accept();
                     } else {
                         keyReleaseEvent(ke);
@@ -2234,6 +2261,19 @@ bool KHTMLView::eventFilter(QObject *o, QEvent *e)
 bool KHTMLView::widgetEvent(QEvent *e)
 {
     switch (e->type()) {
+    case QEvent::KeyPress:
+        // Key events are posted directly to the content widget (view->widget())
+        // by the renderer input path; route them through to KHTMLView::keyPressEvent
+        // here so the focused input element receives and inserts text.
+        {
+            QKeyEvent *_kde = static_cast<QKeyEvent*>(e);
+            if (s_inKeyDispatch) return true; // prevent re-entrant dispatch
+            keyPressEvent(_kde);
+        }
+        return true;
+    case QEvent::KeyRelease:
+        keyReleaseEvent(static_cast<QKeyEvent*>(e));
+        return true;
     case QEvent::MouseButtonPress:
     case QEvent::MouseButtonRelease:
     case QEvent::MouseButtonDblClick:

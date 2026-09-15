@@ -108,7 +108,8 @@ protected:
 
     void mousePressEvent(QMouseEvent *e) override {
         setFocus();
-        sendInput(QStringLiteral("mousepress"), e, mapToFrame(e->pos()));
+        QPoint fp = mapToFrame(e->pos());
+        sendInput(QStringLiteral("mousepress"), e, fp);
     }
     void mouseReleaseEvent(QMouseEvent *e) override {
         sendInput(QStringLiteral("mouserelease"), e, mapToFrame(e->pos()));

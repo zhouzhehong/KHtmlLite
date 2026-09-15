@@ -100,8 +100,7 @@ class JSEngine
 {
 public:
     enum Backend {
-        QuickJS,    // default: small footprint, ES2020
-        KJS         // legacy KF5JS, kept for regression comparison
+        QuickJS     // the only engine: small footprint, ES2020
     };
 
     virtual ~JSEngine() = default;

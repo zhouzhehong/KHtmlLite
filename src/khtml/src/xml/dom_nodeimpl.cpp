@@ -1442,8 +1442,6 @@ void NodeImpl::setDocument(DocumentImpl *doc)
         removedFromDocument();
     }
 
-    ScriptInterpreter::updateDOMNodeDocument(this, m_document, doc);
-
     m_document = doc;
     insertedIntoDocument();
 #endif

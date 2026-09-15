@@ -56,6 +56,9 @@
 #include <QDialogButtonBox>
 #include <QDir>
 #include <QStyle>
+#include <QFile>
+#include <QTextStream>
+#include <QKeyEvent>
 #include <QStyleOptionButton>
 #include <QLabel>
 #include <QStyleOptionFrame>
@@ -1087,6 +1090,12 @@ void LineEditWidget::clearHistoryActivated()
 
 bool LineEditWidget::event(QEvent *e)
 {
+    if (e->type() == QEvent::KeyPress) {
+        QFile f("C:/Users/zhouzhehong/khtml_qjs.log"); f.open(QIODevice::Append); QTextStream ts(&f);
+        QKeyEvent *ke = static_cast<QKeyEvent*>(e);
+        ts << "[dbg] LineEditWidget::event KeyPress key=" << ke->key() << " text=" << ke->text() << "\n";
+        f.close();
+    }
     if (KLineEdit::event(e)) {
         return true;
     }

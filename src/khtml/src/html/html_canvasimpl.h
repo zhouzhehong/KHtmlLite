@@ -313,7 +313,6 @@ public:
 
 private:
     friend class HTMLCanvasElementImpl;
-    friend class KJS::WebGLContext;
 
     enum PathPaintOp { DrawFill, DrawStroke };
     enum PaintFlags { NoPaintFlags = 0, NotUsingCanvasPattern = 1 };

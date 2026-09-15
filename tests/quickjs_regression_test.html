@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>QuickJS Test - Pending</title>
+<style>
+  body { font-family: sans-serif; margin: 24px; }
+  #status { font-size: 22px; font-weight: bold; padding: 8px; }
+  #status.ok { color: green; background: #e6ffe6; }
+  button { padding: 8px 14px; margin: 6px; font-size: 16px; }
+  button.clicked { color: white; background: #cc3300; }
+  #mutate { margin-top: 12px; padding: 6px; border: 1px solid #999; }
+  #inputOut { margin-top: 8px; color: #0033aa; }
+</style>
+</head>
+<body>
+<h1>QuickJS Regression Test</h1>
+
+<div id="status">LOADING</div>
+<div id="engine">engine: ?</div>
+
+<button id="btnInline" onclick="onInlineClick(this)">Inline handler button</button>
+<button id="btnProgrammatic">Programmatic listener button</button>
+<div id="mutate">mutation target</div>
+<input id="inp" type="text" placeholder="type here">
+<div id="inputOut">input events: none</div>
+
+<script>
+// QuickJS is the only JS engine. Mark the global so the test can confirm the
+// engine identity, then run all setup synchronously (script is end of body).
+window.__engine = 'quickjs';
+var clickCount = 0;
+
+function onInlineClick(btn) {
+    clickCount = clickCount + 1;
+    btn.textContent = 'INLINE_CLICKED_' + clickCount;
+    btn.className = 'clicked';
+    document.getElementById('mutate').textContent = 'inline mutated count=' + clickCount;
+}
+
+// 1) Prove JS executed: change title and the visible status banner.
+document.title = 'QuickJS Test - OK';
+document.getElementById('status').textContent = 'QUICKJS_OK';
+document.getElementById('status').className = 'ok';
+document.getElementById('engine').textContent = 'engine: ' + window.__engine;
+
+// 2) Programmatic addEventListener (exercises elAddEventListener + table).
+var btn = document.getElementById('btnProgrammatic');
+btn.addEventListener('click', function () {
+    btn.textContent = 'PROG_CLICKED';
+    document.getElementById('mutate').textContent = 'programmatic mutated';
+});
+
+// 3) focus + input event wiring on the text field.
+var inp = document.getElementById('inp');
+inp.addEventListener('focus', function () {
+    document.getElementById('inputOut').textContent = 'focused';
+});
+inp.addEventListener('input', function () {
+    document.getElementById('inputOut').textContent = 'input-fired';
+});
+</script>
+</body>
+</html>

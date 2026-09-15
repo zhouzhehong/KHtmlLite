@@ -121,8 +121,6 @@ class KHTML_EXPORT KHTMLView : public QScrollArea, public khtml::KHTMLWidget
     friend class khtml::CSSStyleSelector;
     friend class khtml::LineEditWidget;
     friend class khtml::HTMLTokenizer;
-    friend class KJS::WindowFunc;
-    friend class KJS::ExternalFunc;
     friend void khtml::applyRule(DOM::CSSProperty *prop);
 
 public:

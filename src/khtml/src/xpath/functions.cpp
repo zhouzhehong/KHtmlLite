@@ -28,11 +28,10 @@
 #include "xml/dom_nodeimpl.h"
 #include "xml/dom_nodelistimpl.h"
 #include "xml/dom_elementimpl.h"
-#include "kjs/operations.h"
 
 #include <QtDebug>
 
-#include <math.h>
+#include <cmath>
 
 using namespace DOM;
 
@@ -793,7 +792,7 @@ Value FunFloor::doEvaluate() const
 {
     const double num = arg(0)->evaluate().toNumber();
 
-    if (KJS::isNaN(num) || KJS::isInf(num)) {
+    if (std::isnan(num) || std::isinf(num)) {
         return Value(num);
     }
 
@@ -804,7 +803,7 @@ Value FunCeiling::doEvaluate() const
 {
     const double num = arg(0)->evaluate().toNumber();
 
-    if (KJS::isNaN(num) || KJS::isInf(num)) {
+    if (std::isnan(num) || std::isinf(num)) {
         return Value(num);
     }
 

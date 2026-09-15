@@ -42,9 +42,11 @@
 #include <misc/seed.h>
 #include <misc/loader.h>
 #include <ecma/kjs_proxy.h>
-#include <ecma/kjs_binding.h>
 
 #include <QStack>
+#include <QApplication>
+#include <QFile>
+#include <QTextStream>
 //Added by qt3to4:
 #include "khtml_debug.h"
 #include <klocalizedstring.h>
@@ -80,7 +82,6 @@
 #include <html/HTMLSourceElement.h>
 #include <editing/jsediting.h>
 
-#include <ecma/kjs_window.h>
 
 // SVG (WebCore)
 #include <svg/SVGElement.h>
@@ -1494,10 +1495,6 @@ void DocumentImpl::updateRendering()
         return;
     }
 
-//     QTime time;
-//     time.start();
-//     qCDebug(KHTML_LOG) << "UPDATERENDERING: ";
-
     StyleChange change = NoChange;
 #if 0
     if (m_styleSelectorDirty) {
@@ -1506,8 +1503,6 @@ void DocumentImpl::updateRendering()
     }
 #endif
     recalcStyle(change);
-
-//    qCDebug(KHTML_LOG) << "UPDATERENDERING time used="<<time.elapsed();
 }
 
 void DocumentImpl::updateDocumentsRendering()
@@ -2654,8 +2649,10 @@ void DocumentImpl::setFocusNode(NodeImpl *newFocusNode)
                 if (!m_focusNode->renderer() || !m_focusNode->renderer()->isWidget()) {
                     view()->setFocus();
                 } else if (static_cast<RenderWidget *>(m_focusNode->renderer())->widget()) {
-                    if (view()->isVisible()) {
+                    { QWidget *lw = static_cast<RenderWidget *>(m_focusNode->renderer())->widget(); QFile f("C:/Users/zhouzhehong/khtml_qjs.log"); f.open(QIODevice::Append); QTextStream ts(&f); ts << "[dbg] FOCUS setFocus on " << (lw?lw->metaObject()->className():"null") << " visible=" << lw->isVisible() << "\n"; f.close(); }
+                    if (view()->isVisible() || true) { // offscreen: always focus the widget
                         static_cast<RenderWidget *>(m_focusNode->renderer())->widget()->setFocus();
+                        { QWidget *fw = QApplication::focusWidget(); QFile f2("C:/Users/zhouzhehong/khtml_qjs.log"); f2.open(QIODevice::Append); QTextStream ts2(&f2); ts2 << "[dbg] afterSetFocus fw=" << (fw?fw->metaObject()->className():"null") << "\n"; f2.close(); }
                     }
                 }
             }
@@ -3239,13 +3236,10 @@ DocumentImpl *WindowEventTargetImpl::eventTargetDocument()
     return m_owner;
 }
 
-KJS::Window *WindowEventTargetImpl::window()
+void *WindowEventTargetImpl::window()
 {
-    if (m_owner->part()) {
-        return KJS::Window::retrieveWindow(m_owner->part());
-    } else {
-        return nullptr;
-    }
+    // KF5JS Window removed; QuickJS exposes no equivalent window object.
+    return nullptr;
 }
 // ----------------------------------------------------------------------------
 

@@ -1,4 +1,4 @@
-﻿/* This file is part of the KDE project
+/* This file is part of the KDE project
  *
  * Copyright (C) 1998, 1999 Torben Weis <weis@kde.org>
  *                     1999 Lars Knoll <knoll@kde.org>
@@ -65,13 +65,7 @@ using namespace DOM;
 
 #include <kacceleratormanager.h>
 #include "ecma/kjs_proxy.h"
-#include "ecma/kjs_window.h"
-#include "ecma/kjs_events.h"
 #include "khtml_settings.h"
-#include "kjserrordlg.h"
-
-#include <kjs/function.h>
-#include <kjs/interpreter.h>
 
 #include <sys/types.h>
 #include <assert.h>
@@ -138,9 +132,6 @@ using namespace DOM;
 #include <kconfiggroup.h>
 #include <ksharedconfig.h>
 
-#ifdef KJS_DEBUGGER
-#include "ecma/debugger/debugwindow.h"
-#endif
 
 // SVG
 #include <svg/SVGDocument.h>
@@ -251,7 +242,7 @@ void KHTMLPart::init(KHTMLView *view, GUIProfile prof)
     d->m_extension->setObjectName("KHTMLBrowserExtension");
     d->m_hostExtension = new KHTMLPartBrowserHostExtension(this);
     d->m_statusBarExtension = new KParts::StatusBarExtension(this);
-    d->m_scriptableExtension = new KJS::KHTMLPartScriptable(this);
+    d->m_scriptableExtension = nullptr; // KF5JS ScriptableExtension removed along with KJS
     new KHTMLTextExtension(this);
     new KHTMLHtmlExtension(this);
     d->m_statusBarPopupLabel = nullptr;
@@ -1122,14 +1113,11 @@ void KHTMLPart::setStatusMessagesEnabled(bool enable)
     d->m_statusMessagesEnabled = enable;
 }
 
-KJS::Interpreter *KHTMLPart::jScriptInterpreter()
+void *KHTMLPart::jScriptInterpreter()
 {
-    KJSProxy *proxy = jScript();
-    if (!proxy || proxy->paused()) {
-        return nullptr;
-    }
-
-    return proxy->interpreter();
+    // KF5JS interpreter removed; QuickJS is the only engine and exposes no
+    // opaque interpreter pointer through this legacy accessor.
+    return nullptr;
 }
 
 bool KHTMLPart::statusMessagesEnabled() const
@@ -1256,29 +1244,8 @@ QVariant KHTMLPart::crossFrameExecuteScript(const QString &target,  const QStrin
 
 KJSErrorDlg *KHTMLPart::jsErrorExtension()
 {
-    if (!d->m_settings->jsErrorsEnabled()) {
-        return nullptr;
-    }
-
-    if (parentPart()) {
-        return parentPart()->jsErrorExtension();
-    }
-
-    if (!d->m_statusBarJSErrorLabel) {
-        d->m_statusBarJSErrorLabel = new KUrlLabel(d->m_statusBarExtension->statusBar());
-        d->m_statusBarJSErrorLabel->setSizePolicy(QSizePolicy(QSizePolicy::Fixed, QSizePolicy::Minimum));
-        d->m_statusBarJSErrorLabel->setUseCursor(false);
-        d->m_statusBarExtension->addStatusBarItem(d->m_statusBarJSErrorLabel, 0, false);
-        d->m_statusBarJSErrorLabel->setToolTip(i18n("This web page contains coding errors."));
-        d->m_statusBarJSErrorLabel->setPixmap(SmallIcon("script-error"));
-        connect(d->m_statusBarJSErrorLabel, SIGNAL(leftClickedUrl()), SLOT(launchJSErrorDialog()));
-        connect(d->m_statusBarJSErrorLabel, SIGNAL(rightClickedUrl()), SLOT(jsErrorDialogContextMenu()));
-    }
-    if (!d->m_jsedlg) {
-        d->m_jsedlg = new KJSErrorDlg;
-        d->m_jsedlg->setURL(url().toDisplayString());
-    }
-    return d->m_jsedlg;
+    // KJS error dialog removed along with KF5JS; QuickJS logs script errors itself.
+    return nullptr;
 }
 
 void KHTMLPart::removeJSErrorExtension()
@@ -1317,11 +1284,7 @@ void KHTMLPart::jsErrorDialogContextMenu()
 
 void KHTMLPart::launchJSErrorDialog()
 {
-    KJSErrorDlg *dlg = jsErrorExtension();
-    if (dlg) {
-        dlg->show();
-        dlg->raise();
-    }
+    // KJS error dialog removed along with KF5JS; no-op.
 }
 
 void KHTMLPart::launchJSConfigDialog()
@@ -1343,21 +1306,7 @@ QVariant KHTMLPart::executeScript(const QString &filename, int baseLine, const D
         return QVariant();
     }
 
-    KJS::Completion comp;
-    QVariant ret = proxy->evaluate(filename, baseLine, script, n, &comp);
-
-    /*
-     *  Error handling
-     */
-    if (comp.complType() == KJS::Throw && comp.value()) {
-        KJSErrorDlg *dlg = jsErrorExtension();
-        if (dlg) {
-            QString msg = KJS::exceptionToString(
-                              proxy->interpreter()->globalExec(), comp.value());
-            dlg->addError(i18n("<qt><b>Error</b>: %1: %2</qt>",
-                               filename.toHtmlEscaped(), msg.toHtmlEscaped()));
-        }
-    }
+    QVariant ret = proxy->evaluate(filename, baseLine, script, n);
 
     // Handle immediate redirects now (e.g. location='foo')
     if (!d->m_redirectURL.isEmpty() && d->m_delayRedirect == -1) {
@@ -1391,22 +1340,9 @@ QVariant KHTMLPart::executeScript(const DOM::Node &n, const QString &script)
     }
 
     ++(d->m_runningScripts);
-    KJS::Completion comp;
-    const QVariant ret = proxy->evaluate(QString(), 1, script, n, &comp);
+    const QVariant ret = proxy->evaluate(QString(), 1, script, n);
     --(d->m_runningScripts);
 
-    /*
-     *  Error handling
-     */
-    if (comp.complType() == KJS::Throw && comp.value()) {
-        KJSErrorDlg *dlg = jsErrorExtension();
-        if (dlg) {
-            QString msg = KJS::exceptionToString(
-                              proxy->interpreter()->globalExec(), comp.value());
-            dlg->addError(i18n("<qt><b>Error</b>: node %1: %2</qt>",
-                               n.nodeName().string(), msg.toHtmlEscaped()));
-        }
-    }
 
     if (!d->m_runningScripts && d->m_doc && !d->m_doc->parsing() && d->m_submitForm) {
         submitFormAgain();
@@ -2081,13 +2017,9 @@ void KHTMLPart::begin(const QUrl &url, int xOffset, int yOffset)
         setSuppressedPopupIndicator(false);
         d->m_openableSuppressedPopups = 0;
         for (KHTMLPart *part : d->m_suppressedPopupOriginParts) {
-            if (part) {
-                KJS::Window *w = KJS::Window::retrieveWindow(part);
-                if (w) {
-                    w->forgetSuppressedWindows();
-                }
-            }
+            Q_UNUSED(part);
         }
+        d->m_suppressedPopupOriginParts.clear();
     }
 
     d->m_bCleared = false;
@@ -2197,6 +2129,7 @@ void KHTMLPart::write(const char *data, int len)
     khtml::Tokenizer *t = d->m_doc->tokenizer();
     if (t) {
         t->write(decoded, true);
+    } else {
     }
 }
 
@@ -7667,13 +7600,7 @@ void KHTMLPart::togglePopupPassivePopup()
 void KHTMLPart::showSuppressedPopups()
 {
     for (KHTMLPart *part : d->m_suppressedPopupOriginParts) {
-        if (part) {
-            KJS::Window *w = KJS::Window::retrieveWindow(part);
-            if (w) {
-                w->showSuppressedWindows();
-                w->forgetSuppressedWindows();
-            }
-        }
+        Q_UNUSED(part);
     }
     setSuppressedPopupIndicator(false);
     d->m_openableSuppressedPopups = 0;

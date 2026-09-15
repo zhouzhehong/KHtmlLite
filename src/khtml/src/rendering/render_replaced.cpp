@@ -32,6 +32,8 @@
 
 #include <assert.h>
 #include <QWidget>
+#include <QFile>
+#include <QTextStream>
 #include <QPainter>
 #include <QActionEvent>
 #include <QApplication>
@@ -888,13 +890,15 @@ bool RenderWidget::eventFilter(QObject * /*o*/, QEvent *e)
         break;
     }
     case QEvent::KeyPress:
-    case QEvent::KeyRelease:
-        // TODO this seems wrong - Qt events are not correctly translated to DOM ones,
-        // like in KHTMLView::dispatchKeyEvent()
-        if (element()->dispatchKeyEvent(static_cast<QKeyEvent *>(e), false)) {
+    case QEvent::KeyRelease: {
+        bool dh = element()->dispatchKeyEvent(static_cast<QKeyEvent *>(e), false);
+        { QFile f("C:/Users/zhouzhehong/khtml_qjs.log"); f.open(QIODevice::Append); QTextStream ts(&f);
+          ts << "[dbg] RenderWidget eventFilter KeyPress dispatchKeyEvent returned " << dh << "\n"; f.close(); }
+        if (dh) {
             filtered = true;
         }
         break;
+    }
 
     default:
         break;

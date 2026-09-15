@@ -980,8 +980,6 @@ class KHTML_EXPORT NodeList
     friend class Document;
     friend class DocumentFragment;
     friend class HTMLDocument;
-    friend class KJS::HTMLDocument;
-    friend class KJS::Window;
 
 public:
     NodeList();
