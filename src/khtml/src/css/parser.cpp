@@ -138,6 +138,7 @@ int DOM::getPropertyID(const char *tagStr, int len)
     struct { const char *name; int id; } static const added[] = {
         {"flex-direction", 180}, {"justify-content", 181}, {"align-items", 182},
         {"flex-grow", 183}, {"flex-wrap", 184}, {"gap", 185}, {"flex", 186},
+        {"box-shadow", 187},
     };
     for (const auto &a : added) {
         if (len == (int)strlen(a.name) && !strncmp(tagStr, a.name, len))

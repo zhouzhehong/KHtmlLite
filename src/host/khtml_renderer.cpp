@@ -452,9 +452,7 @@ public:
         flushPendingInput();
 
         ensureShm(fw, fh);
-        if (!m_shm->isAttached() && !m_shm->attach()) {
-            if (!m_shm->create(fw * fh * 4)) return;
-        }
+        if (!m_frameShmReady || !m_shm->isAttached()) return;
         if (!m_shm->lock()) return;
 
         // Decide full vs partial render.
@@ -487,6 +485,11 @@ public:
         m_dirtyRegion = QRegion();
 
         // Copy to shared memory.
+        const qsizetype bytes = qsizetype(fw) * qsizetype(fh) * 4;
+        if (!m_shm || !m_shm->isAttached() || m_shm->size() < bytes) {
+            m_shm->unlock();
+            return;
+        }
         uchar *dst = (uchar *)m_shm->data();
         const qint64 copyBytes = (qint64)fw * fh * 4;
         if (dst && m_shm->size() >= copyBytes) {
@@ -506,23 +509,30 @@ public:
     // (Re)allocate shared memory to fit the given frame size.
     void ensureShm(int w, int h)
     {
-        if (!m_shm) return;
-        const qint64 needed = (qint64)w * h * 4;
+        if (!m_shm) { m_frameShmReady = false; return; }
+        const qsizetype needed = qsizetype(w) * qsizetype(h) * qsizetype(4);
         if (m_shm->isAttached() && m_shm->size() >= needed &&
-            m_frameW == w && m_frameH == h)
+            m_frameW == w && m_frameH == h) {
+            m_frameShmReady = true;
             return;
+        }
         if (m_shm->isAttached()) m_shm->detach();
         if (!m_shm->create(needed)) {
             // create() failed — on Windows the Browser may still hold the old
             // segment open with a smaller size.  Try to attach to it.
             if (!m_shm->attach()) {
+                m_frameShmReady = false;
                 m_frameW = 0;
                 m_frameH = 0;
+                m_frameBuffer = QImage();
+                m_dirtyRegion = QRegion();
                 return;
             }
             if (m_shm->size() < needed) {
-                // Existing segment is too small for this frame.  Keep the old
-                // dimensions so grabFrame() does not memcpy past the end.
+                // Existing segment is too small for this frame.  Cannot
+                // resize while the Browser holds it.  Mark not ready so
+                // grabFrame() skips the memcpy instead of overrunning.
+                m_frameShmReady = false;
                 m_frameBuffer = QImage();
                 m_dirtyRegion = QRegion();
                 return;
@@ -530,6 +540,7 @@ public:
         }
         m_frameW = w;
         m_frameH = h;
+        m_frameShmReady = true;
         // Size change invalidates the persistent frame buffer.
         m_frameBuffer = QImage();
         m_dirtyRegion = QRegion();
@@ -554,16 +565,29 @@ public:
         const Qt::MouseButtons buttons = (Qt::MouseButtons)obj.value(QStringLiteral("buttons")).toInt();
         const Qt::KeyboardModifiers mods = (Qt::KeyboardModifiers)obj.value(QStringLiteral("modifiers")).toInt();
 
-        if (type == QLatin1String("mousepress") || type == QLatin1String("mouserelease")) {
-            QEvent::Type et = (type == QLatin1String("mousepress"))
-                ? QEvent::MouseButtonPress : QEvent::MouseButtonRelease;
-            QMouseEvent *ev = new QMouseEvent(et, localPos, globalPos, button, buttons, mods);
-            QWidget *content = view->widget();
-            if (content) {
-                QCoreApplication::postEvent(content, ev);
-            } else {
-                delete ev;
-            }
+        if (type == QLatin1String("mousepress") || type == QLatin1String("mouserelease")
+            || type == QLatin1String("mousedblclick")) {
+            // Deliver to the viewport widget (not the KHTMLView/QScrollArea
+            // itself).  KHTMLView's eventFilter installed on the viewport
+            // routes QMouseEvents into viewportMousePressEvent ->
+            // prepareMouseEvent -> hit-test -> DOM dispatch.
+            QEvent::Type et;
+            if (type == QLatin1String("mousepress"))
+                et = QEvent::MouseButtonPress;
+            else if (type == QLatin1String("mousedblclick"))
+                et = QEvent::MouseButtonDblClick;
+            else
+                et = QEvent::MouseButtonRelease;
+            // sendEvent (synchronous) so KHTML's hit-test and DOM click
+            // dispatch complete before invalidateFull()/scheduleFrame()
+            // capture the post-click render state.
+            QMouseEvent ev(et, localPos, globalPos, button, buttons, mods);
+            // Ensure the viewport (or a focused child) has Qt focus. In
+            // offscreen mode the toplevel window is never active, so
+            // QApplication::focusWidget() may be stale.
+            if (et == QEvent::MouseButtonPress && !vp->focusWidget())
+                vp->setFocus();
+            QCoreApplication::sendEvent(vp, &ev);
             invalidateFull();
             scheduleFrame();
         } else if (type == QLatin1String("mousemove")) {
@@ -596,15 +620,6 @@ public:
             if (!target) {
                 target = content;
             }
-            {
-                QFile f("C:/Users/zhouzhehong/khtml_qjs.log");
-                f.open(QIODevice::Append);
-                QTextStream ts(&f);
-                ts << "[dbg] KEY target=" << (target?target->metaObject()->className():"null") << "\n";
-                QLineEdit *le = qobject_cast<QLineEdit*>(target);
-                if (le) ts << "[dbg] lineedit text=" << le->text() << "\n";
-                f.close();
-            }
             if (target)
                 QCoreApplication::postEvent(target, ev);
             else
@@ -622,31 +637,44 @@ public:
         if (!view) return;
         QWidget *content = view->widget();
         if (!content) return;
+        // Deliver coalesced mousemove to the viewport widget, matching the
+        // mouse press/release path. sendEvent (synchronous) with a stack
+        // event so KHTML processes the move before the frame is captured.
+        QWidget *vp = view->viewport();
 
         if (m_hasPendingMouseMove) {
             const QJsonObject &obj = m_pendingMouseMove;
             const QPoint lp(obj.value(QStringLiteral("x")).toInt(),
                             obj.value(QStringLiteral("y")).toInt());
-            const QPoint gp = content->mapToGlobal(lp);
+            const QPoint gp = vp ? vp->mapToGlobal(lp) : content->mapToGlobal(lp);
             const Qt::MouseButtons btns = (Qt::MouseButtons)obj.value(QStringLiteral("buttons")).toInt();
             const Qt::KeyboardModifiers mods = (Qt::KeyboardModifiers)obj.value(QStringLiteral("modifiers")).toInt();
-            QMouseEvent ev(QEvent::MouseMove, lp, gp, Qt::NoButton, btns, mods);
-            QCoreApplication::postEvent(content, new QMouseEvent(ev));
+            if (vp) {
+                QMouseEvent ev(QEvent::MouseMove, lp, gp, Qt::NoButton, btns, mods);
+                QCoreApplication::sendEvent(vp, &ev);
+            }
             m_hasPendingMouseMove = false;
             invalidateFull();
         }
 
         if (m_hasPendingWheel) {
-            // Dispatch the wheel event to KHTML for both scrolling and JS
-            // listeners.  Do NOT also manipulate the scrollbar directly — that
-            // caused double-scrolling (fast-path + QScrollArea::wheelEvent).
+            // Dispatch the wheel event to the viewport widget (matching the
+            // mouse press/move path) for both scrolling and JS listeners.
+            // sendEvent (synchronous) with a stack event so KHTML's
+            // QScrollArea::wheelEvent scrolls before the frame is captured.
+            // Do NOT also manipulate the scrollbar directly — that caused
+            // double-scrolling (fast-path + QScrollArea::wheelEvent).
+            // Keep the full accumulated delta; do NOT quantize by /120.
             const int dx = m_pendingWheelDeltaX;
             const int dy = m_pendingWheelDeltaY;
             const QPoint lp(m_wheelMouseX, m_wheelMouseY);
-            const QPoint gp = content->mapToGlobal(lp);
-            QWheelEvent ev(lp, gp, QPoint(dx, dy), QPoint(dx, dy),
-                           Qt::NoButton, m_wheelModifiers, Qt::NoScrollPhase, false);
-            QCoreApplication::postEvent(content, new QWheelEvent(ev));
+            const QPoint gp = vp ? vp->mapToGlobal(lp) : content->mapToGlobal(lp);
+            if (vp) {
+                QWheelEvent ev(lp, gp, QPoint(dx, dy), QPoint(dx, dy),
+                               Qt::NoButton, m_wheelModifiers,
+                               Qt::NoScrollPhase, false);
+                QCoreApplication::sendEvent(vp, &ev);
+            }
             m_hasPendingWheel = false;
             m_pendingWheelDeltaX = 0;
             m_pendingWheelDeltaY = 0;
@@ -823,6 +851,7 @@ private:
     QSharedMemory *m_shm = nullptr;
     QTimer *m_frameTimer = nullptr;
     int m_frameW = 0, m_frameH = 0;
+    bool m_frameShmReady = false;
     RendererView *m_view = nullptr;
     PageLoader *m_loader = nullptr;
     QTimer *m_stateTimer = nullptr;

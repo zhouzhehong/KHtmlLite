@@ -226,3 +226,6 @@ flex-grow
 flex-wrap
 gap
 flex
+
+# appended; gperf table is checked in, looked up via getPropertyID fallback
+box-shadow

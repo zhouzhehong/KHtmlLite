@@ -1927,6 +1927,19 @@ bool CSSStyleSelector::checkSimpleSelector(DOM::CSSSelector *sel, DOM::ElementIm
                 return true;
             }
             break;
+        case CSSSelector::PseudoFocusWithin:
+            // Matches the element itself if it has focus, or any descendant that
+            // currently holds focus.
+            addDependency(OtherStateDependency, e);
+            if (e->focused()) {
+                return true;
+            }
+            for (NodeImpl *n = e->firstChild(); n; n = n->traverseNextNode(e)) {
+                if (n->focused()) {
+                    return true;
+                }
+            }
+            break;
         case CSSSelector::PseudoLang: {
             // Set dynamic attribute dependency
             if (e == element) {
@@ -4488,6 +4501,40 @@ void CSSStyleSelector::applyRule(int id, DOM::CSSValueImpl *value)
             }
             ShadowData *shadowData = new ShadowData(x, y, blur, col);
             style->setTextShadow(shadowData, i != 0);
+        }
+
+        break;
+    }
+    case CSS_PROP_BOX_SHADOW: {
+        // box-shadow is non-inherited; inherit/initial both reset to none.
+        if (isInherit || isInitial || primitiveValue) {
+            style->setBoxShadow(nullptr);
+            return;
+        }
+
+        if (!value->isValueList()) {
+            return;
+        }
+        CSSValueListImpl *list = static_cast<CSSValueListImpl *>(value);
+        int len = list->length();
+        for (int i = 0; i < len; i++) {
+            ShadowValueImpl *item = static_cast<ShadowValueImpl *>(list->item(i));
+
+            int x = item->x->computeLength(style, m_rootStyle, logicalDpiY);
+            int y = item->y->computeLength(style, m_rootStyle, logicalDpiY);
+            int blur = item->blur ? item->blur->computeLength(style, m_rootStyle, logicalDpiY) : 0;
+            int spread = item->spread ? item->spread->computeLength(style, m_rootStyle, logicalDpiY) : 0;
+            QColor col = khtml::transparentColor;
+            if (item->color) {
+                int ident = item->color->getIdent();
+                if (ident) {
+                    col = colorForCSSValue(ident);
+                } else if (item->color->primitiveType() == CSSPrimitiveValue::CSS_RGBCOLOR) {
+                    col.setRgba(item->color->getRGBColorValue());
+                }
+            }
+            ShadowData *shadowData = new ShadowData(x, y, blur, col, spread, item->inset);
+            style->setBoxShadow(shadowData, i != 0);
         }
 
         break;

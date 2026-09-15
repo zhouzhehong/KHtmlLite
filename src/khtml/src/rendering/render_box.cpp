@@ -447,6 +447,56 @@ void RenderBox::paintRootBoxDecorations(PaintInfo &paintInfo, int _tx, int _ty)
     }
 }
 
+// Build a rounded-rectangle path with independent corner radii, mirroring the
+// corner arc math used by borderRadiusClipPath().
+static QPainterPath roundedRectPath(const QRect &rect,
+                                    const QPoint &topLeft, const QPoint &topRight,
+                                    const QPoint &bottomLeft, const QPoint &bottomRight)
+{
+    QPainterPath path;
+    if (topRight.isNull() && topLeft.isNull() && bottomLeft.isNull() && bottomRight.isNull()) {
+        path.addRect(rect);
+        return path;
+    }
+
+    // Top right corner
+    if (!topRight.isNull()) {
+        const QRect r(rect.x() + rect.width() - topRight.x() * 2, rect.y(), topRight.x() * 2, topRight.y() * 2);
+        path.arcMoveTo(r, 0);
+        path.arcTo(r, 0, 90);
+    } else {
+        path.moveTo(rect.x() + rect.width(), rect.y());
+    }
+
+    // Top left corner
+    if (!topLeft.isNull()) {
+        const QRect r(rect.x(), rect.y(), topLeft.x() * 2, topLeft.y() * 2);
+        path.arcTo(r, 90, 90);
+    } else {
+        path.lineTo(rect.x(), rect.y());
+    }
+
+    // Bottom left corner
+    if (!bottomLeft.isNull()) {
+        const QRect r(rect.x(), rect.y() + rect.height() - bottomLeft.y() * 2, bottomLeft.x() * 2, bottomLeft.y() * 2);
+        path.arcTo(r, 180, 90);
+    } else {
+        path.lineTo(rect.x(), rect.y() + rect.height());
+    }
+
+    // Bottom right corner
+    if (!bottomRight.isNull()) {
+        const QRect r(rect.x() + rect.width() - bottomRight.x() * 2, rect.y() + rect.height() - bottomRight.y() * 2,
+                      bottomRight.x() * 2, bottomRight.y() * 2);
+        path.arcTo(r, 270, 90);
+    } else {
+        path.lineTo(rect.x() + rect.width(), rect.y() + rect.height());
+    }
+
+    path.closeSubpath();
+    return path;
+}
+
 void RenderBox::paintBoxDecorations(PaintInfo &paintInfo, int _tx, int _ty)
 {
     //qCDebug(KHTML_LOG) << renderName() << "::paintDecorations()";
@@ -459,6 +509,45 @@ void RenderBox::paintBoxDecorations(PaintInfo &paintInfo, int _tx, int _ty)
     int h = height() + borderTopExtra() + borderBottomExtra();
     _ty -= borderTopExtra();
     QRect cr = QRect(_tx, _ty, w, h).intersected(paintInfo.r);
+
+    // Paint (outer) box-shadow behind the background and border. Minimum support:
+    // a single non-inset shadow with optional spread and offset. Blur is not
+    // rendered (TODO); inset shadows are skipped.
+    if (const ShadowData *shadow = style()->boxShadow()) {
+        QPainter *p = paintInfo.p;
+        for (const ShadowData *s = shadow; s; s = s->next) {
+            if (s->inset) {
+                continue; // TODO: inset shadow not supported yet.
+            }
+            int spread = s->spread;
+            if (s->blur == 0 && s->x == 0 && s->y == 0 && spread == 0) {
+                continue;
+            }
+
+            QRect box(_tx, _ty, w, h);
+            QRect shadowRect = box.adjusted(s->x - spread, s->y - spread,
+                                            s->x + spread, s->y + spread);
+
+            QPoint tl, tr, bl, br;
+            calcBorderRadii(tl, tr, bl, br, w, h);
+            // Expand radii proportionally with the spread.
+            tl += QPoint(spread, spread);
+            tr += QPoint(spread, spread);
+            bl += QPoint(spread, spread);
+            br += QPoint(spread, spread);
+
+            QPainterPath path = roundedRectPath(shadowRect, tl, tr, bl, br);
+
+            p->save();
+            p->setPen(Qt::NoPen);
+            p->setBrush(s->color);
+            if (s->blur > 0) {
+                // TODO: proper blur; for now draw without blur (solid ring).
+            }
+            p->drawPath(path);
+            p->restore();
+        }
+    }
 
     // The <body> only paints its background if the root element has defined a background
     // independent of the body.  Go through the DOM to get to the root element's render object,

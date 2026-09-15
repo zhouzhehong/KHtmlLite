@@ -250,6 +250,8 @@ void CSSSelector::extractPseudoType() const
                 _pseudoType = PseudoFirstOfType;
             } else if (value == "focus") {
                 _pseudoType = PseudoFocus;
+            } else if (value == "focus-within") {
+                _pseudoType = PseudoFocusWithin;
             }
             break;
         case 'h':

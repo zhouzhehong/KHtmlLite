@@ -122,6 +122,7 @@ public:
         PseudoVisited,
         PseudoHover,
         PseudoFocus,
+        PseudoFocusWithin,
         PseudoActive,
         PseudoTarget,
         PseudoLang,

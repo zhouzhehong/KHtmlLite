@@ -816,8 +816,8 @@ public:
 
 // This struct holds information about shadows for the text-shadow and box-shadow properties.
 struct ShadowData {
-    ShadowData(int _x, int _y, int _blur, const QColor &_color)
-        : x(_x), y(_y), blur(_blur), color(_color), next(nullptr) {}
+    ShadowData(int _x, int _y, int _blur, const QColor &_color, int _spread = 0, bool _inset = false)
+        : x(_x), y(_y), blur(_blur), color(_color), spread(_spread), inset(_inset), next(nullptr) {}
     ShadowData(const ShadowData &o);
 
     ~ShadowData()
@@ -834,6 +834,8 @@ struct ShadowData {
     int x;
     int y;
     int blur;
+    int spread;
+    bool inset;
     QColor color;
     ShadowData *next;
 };
@@ -883,7 +885,7 @@ class StyleCSS3NonInheritedData : public Shared<StyleCSS3NonInheritedData>
 {
 public:
     StyleCSS3NonInheritedData();
-    ~StyleCSS3NonInheritedData() {}
+    ~StyleCSS3NonInheritedData() { delete boxShadow; }
     StyleCSS3NonInheritedData(const StyleCSS3NonInheritedData &o);
 
     bool operator==(const StyleCSS3NonInheritedData &o) const;
@@ -896,6 +898,7 @@ public:
     DataRef<StyleFlexibleBoxData> flexibleBox; // Flexible box properties
     DataRef<StyleMarqueeData> marquee; // Marquee properties
     DataRef<BorderRadiusData> borderRadius;
+    ShadowData *boxShadow; // Our box-shadow information (non-inherited).
 };
 
 // This struct is for rarely used inherited CSS3 properties.  By grouping them together,
@@ -1785,6 +1788,10 @@ public:
     {
         return css3InheritedData->textShadow;
     }
+    ShadowData *boxShadow() const
+    {
+        return css3NonInheritedData->boxShadow;
+    }
     EWordWrap wordWrap() const
     {
         return KDE_CAST_BF_ENUM(EWordWrap, css3InheritedData->wordWrap);
@@ -2340,6 +2347,7 @@ public:
         SET_VAR(css3InheritedData, wordWrap, w);
     }
     void setTextShadow(ShadowData *val, bool add = false);
+    void setBoxShadow(ShadowData *val, bool add = false);
     void setOpacity(float f)
     {
         SET_VAR(css3NonInheritedData, opacity, f);

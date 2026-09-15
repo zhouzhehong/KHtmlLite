@@ -1028,6 +1028,7 @@ static const char * const propertyList[] = {
     "flex-wrap",
     "gap",
     "flex",
+    "box-shadow",
     nullptr
 };
 DOMString getPropertyName(unsigned short id)

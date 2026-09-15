@@ -1766,8 +1766,9 @@ QString QuotesValueImpl::closeQuote(int level) const
 
 // Used for text-shadow and box-shadow
 ShadowValueImpl::ShadowValueImpl(CSSPrimitiveValueImpl *_x, CSSPrimitiveValueImpl *_y,
-                                 CSSPrimitiveValueImpl *_blur, CSSPrimitiveValueImpl *_color)
-    : x(_x), y(_y), blur(_blur), color(_color)
+                                 CSSPrimitiveValueImpl *_blur, CSSPrimitiveValueImpl *_color,
+                                 CSSPrimitiveValueImpl *_spread, bool _inset)
+    : x(_x), y(_y), blur(_blur), color(_color), spread(_spread), inset(_inset)
 {}
 
 ShadowValueImpl::~ShadowValueImpl()
@@ -1776,12 +1777,17 @@ ShadowValueImpl::~ShadowValueImpl()
     delete y;
     delete blur;
     delete color;
+    delete spread;
 }
 
 DOMString ShadowValueImpl::cssText() const
 {
     DOMString text("");
+    if (inset) {
+        text += "inset";
+    }
     if (color) {
+        if (text.length() > 0) text += " ";
         text += color->cssText();
     }
     if (x) {
@@ -1801,6 +1807,12 @@ DOMString ShadowValueImpl::cssText() const
             text += " ";
         }
         text += blur->cssText();
+    }
+    if (spread) {
+        if (text.length() > 0) {
+            text += " ";
+        }
+        text += spread->cssText();
     }
 
     return text;

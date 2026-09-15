@@ -195,7 +195,8 @@ DOM::DOMString getPropertyName(unsigned short id) KHTML_NO_EXPORT;
 #define CSS_PROP_FLEX_WRAP 184
 #define CSS_PROP_GAP 185
 #define CSS_PROP_FLEX 186
-#define CSS_PROP_TOTAL 187
+#define CSS_PROP_BOX_SHADOW 187
+#define CSS_PROP_TOTAL 188
 const size_t maxCSSPropertyNameLength = 32;
 #endif
 

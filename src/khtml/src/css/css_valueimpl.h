@@ -530,7 +530,8 @@ class ShadowValueImpl : public CSSValueImpl
 {
 public:
     ShadowValueImpl(CSSPrimitiveValueImpl *_x, CSSPrimitiveValueImpl *_y,
-                    CSSPrimitiveValueImpl *_blur, CSSPrimitiveValueImpl *_color);
+                    CSSPrimitiveValueImpl *_blur, CSSPrimitiveValueImpl *_color,
+                    CSSPrimitiveValueImpl *_spread = nullptr, bool _inset = false);
     virtual ~ShadowValueImpl();
 
     unsigned short cssValueType() const override
@@ -544,6 +545,8 @@ public:
     CSSPrimitiveValueImpl *y;
     CSSPrimitiveValueImpl *blur;
     CSSPrimitiveValueImpl *color;
+    CSSPrimitiveValueImpl *spread;
+    bool inset;
 };
 
 // Used for counter-reset and counter-increment

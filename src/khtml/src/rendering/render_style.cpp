@@ -453,6 +453,7 @@ bool BorderRadiusData::hasBorderRadius() const
 StyleCSS3NonInheritedData::StyleCSS3NonInheritedData()
     : Shared<StyleCSS3NonInheritedData>()
     , opacity(RenderStyle::initialOpacity())
+    , boxShadow(nullptr)
 {
     marquee.init();
     borderRadius.init();
@@ -466,15 +467,19 @@ StyleCSS3NonInheritedData::StyleCSS3NonInheritedData(const StyleCSS3NonInherited
       marquee(o.marquee),
       borderRadius(o.borderRadius)
 {
+    boxShadow = o.boxShadow ? new ShadowData(*o.boxShadow) : nullptr;
 }
 
 bool StyleCSS3NonInheritedData::operator==(const StyleCSS3NonInheritedData &o) const
 {
+    bool shadowsEqual = (!boxShadow && !o.boxShadow)
+        || (boxShadow && o.boxShadow && *boxShadow == *o.boxShadow);
     return
         opacity == o.opacity &&
         flexibleBox == o.flexibleBox &&
         marquee == o.marquee &&
-        borderRadius == o.borderRadius;
+        borderRadius == o.borderRadius &&
+        shadowsEqual;
 }
 
 StyleCSS3InheritedData::StyleCSS3InheritedData()
@@ -1280,8 +1285,28 @@ void RenderStyle::setTextShadow(ShadowData *val, bool add)
     last->next = val;
 }
 
+void RenderStyle::setBoxShadow(ShadowData *val, bool add)
+{
+    StyleCSS3NonInheritedData *css3Data = css3NonInheritedData.access();
+    if (!add) {
+        delete css3Data->boxShadow;
+        css3Data->boxShadow = val;
+        return;
+    }
+
+    ShadowData *last = css3Data->boxShadow;
+    if (!last) {
+        css3Data->boxShadow = val;
+        return;
+    }
+    while (last->next) {
+        last = last->next;
+    }
+    last->next = val;
+}
+
 ShadowData::ShadowData(const ShadowData &o)
-    : x(o.x), y(o.y), blur(o.blur), color(o.color)
+    : x(o.x), y(o.y), blur(o.blur), color(o.color), spread(o.spread), inset(o.inset)
 {
     next = o.next ? new ShadowData(*o.next) : nullptr;
 }
@@ -1293,7 +1318,8 @@ bool ShadowData::operator==(const ShadowData &o) const
         return false;
     }
 
-    return x == o.x && y == o.y && blur == o.blur && color == o.color;
+    return x == o.x && y == o.y && blur == o.blur && spread == o.spread &&
+           inset == o.inset && color == o.color;
 }
 
 static bool hasCounter(const DOM::DOMString &c, CSSValueListImpl *l)

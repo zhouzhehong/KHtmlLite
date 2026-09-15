@@ -1167,6 +1167,13 @@ bool CSSParser::parseValue(int propId, bool important)
             return parseShadow(propId, important);
         }
         break;
+    case CSS_PROP_BOX_SHADOW:
+        if (id == CSS_VAL_NONE) {
+            valid_primitive = true;
+        } else {
+            return parseShadow(propId, important);
+        }
+        break;
     case CSS_PROP_OPACITY:
         valid_primitive = validUnit(value, FNumber, strict);
         break;
@@ -2898,9 +2905,10 @@ CSSPrimitiveValueImpl *CSSParser::parseColorFromValue(Value *value)
 // This class tracks parsing state for shadow values.  If it goes out of scope (e.g., due to an early return)
 // without the allowBreak bit being set, then it will clean up all of the objects and destroy them.
 struct ShadowParseContext {
-    ShadowParseContext()
-        : values(nullptr), x(nullptr), y(nullptr), blur(nullptr), color(nullptr),
-          allowX(true), allowY(false), allowBlur(false), allowColor(true),
+    ShadowParseContext(bool _forBox)
+        : values(nullptr), x(nullptr), y(nullptr), blur(nullptr), spread(nullptr), color(nullptr),
+          forBox(_forBox), inset(false),
+          allowX(true), allowY(false), allowBlur(false), allowSpread(false), allowColor(true),
           allowBreak(true)
     {}
 
@@ -2911,13 +2919,14 @@ struct ShadowParseContext {
             delete x;
             delete y;
             delete blur;
+            delete spread;
             delete color;
         }
     }
 
     bool allowLength()
     {
-        return allowX || allowY || allowBlur;
+        return allowX || allowY || allowBlur || allowSpread;
     }
 
     bool failed()
@@ -2928,19 +2937,20 @@ struct ShadowParseContext {
     void commitValue()
     {
         // Handle the ,, case gracefully by doing nothing.
-        if (x || y || blur || color) {
+        if (x || y || blur || spread || color) {
             if (!values) {
                 values = new CSSValueListImpl(CSSValueListImpl::Comma);
             }
 
             // Construct the current shadow value and add it to the list.
-            values->append(new ShadowValueImpl(x, y, blur, color));
+            values->append(new ShadowValueImpl(x, y, blur, color, spread, inset));
         }
 
         // Now reset for the next shadow value.
-        x = y = blur = color = nullptr;
+        x = y = blur = spread = color = nullptr;
+        inset = false;
         allowX = allowColor = allowBreak = true;
-        allowY = allowBlur = false;
+        allowY = allowBlur = allowSpread = false;
     }
 
     void commitLength(Value *v)
@@ -2956,6 +2966,13 @@ struct ShadowParseContext {
         } else if (allowBlur) {
             blur = val;
             allowBlur = false;
+            // A fourth length is the spread radius; only meaningful for box-shadow.
+            if (forBox) {
+                allowSpread = true;
+            }
+        } else if (allowSpread) {
+            spread = val;
+            allowSpread = false;
         } else {
             delete val;
         }
@@ -2969,25 +2986,34 @@ struct ShadowParseContext {
             allowBreak = false;
         } else {
             allowBlur = false;
+            allowSpread = false;
         }
+    }
+
+    void commitInset()
+    {
+        inset = true;
     }
 
     CSSValueListImpl *values;
     CSSPrimitiveValueImpl *x;
     CSSPrimitiveValueImpl *y;
     CSSPrimitiveValueImpl *blur;
+    CSSPrimitiveValueImpl *spread;
     CSSPrimitiveValueImpl *color;
-
+    bool forBox;
+    bool inset;
     bool allowX;
     bool allowY;
     bool allowBlur;
+    bool allowSpread;
     bool allowColor;
     bool allowBreak;
 };
 
 bool CSSParser::parseShadow(int propId, bool important)
 {
-    ShadowParseContext context;
+    ShadowParseContext context(propId == CSS_PROP_BOX_SHADOW);
     Value *val;
     while ((val = valueList->current())) {
         // Check for a comma break first.
@@ -3011,6 +3037,10 @@ bool CSSParser::parseShadow(int propId, bool important)
 
             // A length is allowed here.  Construct the value and add it.
             context.commitLength(val);
+        }
+        // box-shadow allows the 'inset' keyword (text-shadow does not).
+        else if (context.forBox && val->id == CSS_VAL_INSET) {
+            context.commitInset();
         } else {
             // The only other type of value that's ok is a color value.
             CSSPrimitiveValueImpl *parsedColor = nullptr;
