@@ -2117,7 +2117,18 @@ void NodeBaseImpl::setFocus(bool received)
     // note that we need to recalc the style
     setChanged(); // *:focus is a default style, so we just assume personal dependency
     if (isElementNode()) {
-        document()->dynamicDomRestyler().restyleDependent(static_cast<ElementImpl *>(this), OtherStateDependency);
+        ElementImpl *el = static_cast<ElementImpl *>(this);
+        document()->dynamicDomRestyler().restyleDependent(el, OtherStateDependency);
+
+        // :focus-within matches an ancestor of the focused node. The generic
+        // dependency bookkeeping above only restyles elements that registered a
+        // dependency on this node's own state; an ancestor carrying a
+        // :focus-within rule registers against itself, not against this
+        // descendant, so it would never be re-evaluated. Restyle the whole
+        // ancestor chain on every focus change so the pseudo-class re-matches.
+        for (NodeImpl *p = parentNode(); p; p = p->parentNode()) {
+            p->setChanged(true);
+        }
     }
 }
 

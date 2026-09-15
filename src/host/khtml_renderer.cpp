@@ -507,6 +507,9 @@ public:
     }
 
     // (Re)allocate shared memory to fit the given frame size.
+    // Invariant: on return, if m_frameShmReady is true,
+    //   m_shm->size() >= (qint64)m_frameW * m_frameH * 4.
+    // grabFrame() never memcpy's beyond the attached segment.
     void ensureShm(int w, int h)
     {
         if (!m_shm) { m_frameShmReady = false; return; }
@@ -514,6 +517,7 @@ public:
         if (m_shm->isAttached() && m_shm->size() >= needed &&
             m_frameW == w && m_frameH == h) {
             m_frameShmReady = true;
+            m_sizeMismatchNotified = false;
             return;
         }
         if (m_shm->isAttached()) m_shm->detach();
@@ -532,15 +536,37 @@ public:
                 // Existing segment is too small for this frame.  Cannot
                 // resize while the Browser holds it.  Mark not ready so
                 // grabFrame() skips the memcpy instead of overrunning.
+                // Tell the Browser once to detach its old segment so the
+                // next tick's create(needed) can succeed.
                 m_frameShmReady = false;
+                m_frameW = 0;
+                m_frameH = 0;
                 m_frameBuffer = QImage();
                 m_dirtyRegion = QRegion();
+                if (!m_sizeMismatchNotified) {
+                    m_sizeMismatchNotified = true;
+                    sendMessage(QStringLiteral("framesize"),
+                                QStringLiteral("%1,%2").arg(w).arg(h));
+                }
                 return;
             }
+            // Attached to an existing segment that is large enough (e.g. the
+            // Browser had pre-created it). Fall through and use it.
+        }
+        // create() succeeded, or we attached to a sufficiently large segment.
+        // Defensive invariant check before trusting the segment.
+        if (m_shm->size() < needed) {
+            m_frameShmReady = false;
+            m_frameW = 0;
+            m_frameH = 0;
+            m_frameBuffer = QImage();
+            m_dirtyRegion = QRegion();
+            return;
         }
         m_frameW = w;
         m_frameH = h;
         m_frameShmReady = true;
+        m_sizeMismatchNotified = false;
         // Size change invalidates the persistent frame buffer.
         m_frameBuffer = QImage();
         m_dirtyRegion = QRegion();
@@ -652,6 +678,14 @@ public:
             if (vp) {
                 QMouseEvent ev(QEvent::MouseMove, lp, gp, Qt::NoButton, btns, mods);
                 QCoreApplication::sendEvent(vp, &ev);
+                // Report the webpage cursor back to the Browser. KHTML's own
+                // hover hit-test (KHTMLView::mouseMoveEvent -> prepareMouseEvent
+                // -> RenderStyle::cursor()) has just applied the effective CSS
+                // cursor to this viewport (unsetCursor() == default arrow). We
+                // read back the shape KHTML determined instead of re-implementing
+                // cursor logic here. The Browser applies it to the visible
+                // PageSurface widget, which owns the only on-screen HWND.
+                sendCursor((Qt::CursorShape)vp->cursor().shape());
             }
             m_hasPendingMouseMove = false;
             invalidateFull();
@@ -844,6 +878,18 @@ private:
         m_socket->flush();
     }
 
+    // Report the webpage cursor shape to the Browser over the existing IPC
+    // channel (same line protocol as frame/title/state). Coalesced: only sent
+    // when KHTML's hover hit-test yields a shape different from the last one
+    // reported. Qt::ArrowCursor (0) is the default.
+    void sendCursor(Qt::CursorShape shape)
+    {
+        if (shape == m_lastCursorShape) return;
+        m_lastCursorShape = shape;
+        sendMessage(QStringLiteral("cursor"),
+                    QString::number(static_cast<int>(shape)));
+    }
+
     QLocalServer *m_server = nullptr;
     QLocalSocket *m_socket = nullptr;
     QString m_socketName;
@@ -852,6 +898,7 @@ private:
     QTimer *m_frameTimer = nullptr;
     int m_frameW = 0, m_frameH = 0;
     bool m_frameShmReady = false;
+    bool m_sizeMismatchNotified = false;
     RendererView *m_view = nullptr;
     PageLoader *m_loader = nullptr;
     QTimer *m_stateTimer = nullptr;
@@ -866,6 +913,8 @@ private:
     // === Input event queue (WebKit EventDispatcher, lightweight) ===
     QJsonObject m_pendingMouseMove;
     bool m_hasPendingMouseMove = false;
+    // Last webpage cursor shape reported to the Browser (-1 = not yet sent).
+    int m_lastCursorShape = -1;
     int m_pendingWheelDeltaX = 0;
     int m_pendingWheelDeltaY = 0;
     bool m_hasPendingWheel = false;

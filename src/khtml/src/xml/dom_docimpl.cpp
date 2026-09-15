@@ -2649,11 +2649,11 @@ void DocumentImpl::setFocusNode(NodeImpl *newFocusNode)
                 if (!m_focusNode->renderer() || !m_focusNode->renderer()->isWidget()) {
                     view()->setFocus();
                 } else if (static_cast<RenderWidget *>(m_focusNode->renderer())->widget()) {
-                    { QWidget *lw = static_cast<RenderWidget *>(m_focusNode->renderer())->widget(); QFile f("C:/Users/zhouzhehong/khtml_qjs.log"); f.open(QIODevice::Append); QTextStream ts(&f); ts << "[dbg] FOCUS setFocus on " << (lw?lw->metaObject()->className():"null") << " visible=" << lw->isVisible() << "\n"; f.close(); }
-                    if (view()->isVisible() || true) { // offscreen: always focus the widget
-                        static_cast<RenderWidget *>(m_focusNode->renderer())->widget()->setFocus();
-                        { QWidget *fw = QApplication::focusWidget(); QFile f2("C:/Users/zhouzhehong/khtml_qjs.log"); f2.open(QIODevice::Append); QTextStream ts2(&f2); ts2 << "[dbg] afterSetFocus fw=" << (fw?fw->metaObject()->className():"null") << "\n"; f2.close(); }
-                    }
+                    // Offscreen renderer: view()->isVisible() is always false
+                    // because there is no on-screen window, but the editable
+                    // widget (KLineEdit etc.) must still receive Qt focus so
+                    // key events reach it. Force focus unconditionally.
+                    static_cast<RenderWidget *>(m_focusNode->renderer())->widget()->setFocus();
                 }
             }
         } else {

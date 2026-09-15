@@ -93,14 +93,38 @@ public:
     // Callback set by RenderTab to forward input events to the renderer.
     void setInputCallback(std::function<void(const QJsonObject &)> cb) { m_inputCb = std::move(cb); }
 
+    // Apply the webpage-determined cursor (Qt::CursorShape as an int) reported
+    // by the renderer. This is the on-screen surface, so this is where the
+    // CSS cursor takes visible effect. Arrow (0) restores the default arrow.
+    void applyCursor(int shape) {
+        setCursor(QCursor(static_cast<Qt::CursorShape>(shape)));
+    }
+
 protected:
+    // When the pointer leaves the page surface, drop the webpage cursor and
+    // fall back to the platform default. The renderer only reports cursors
+    // while the pointer is over the page.
+    void leaveEvent(QEvent *) override {
+        unsetCursor();
+    }
+
     void paintEvent(QPaintEvent *) override {
         QPainter p(this);
         if (!m_frame.isNull()) {
-            if (m_frame.size() == size())
+            if (m_frame.size() == size()) {
                 p.drawImage(0, 0, m_frame);
-            else
+            } else {
+                // Frame/surface mismatch during a resize transition. Do NOT
+                // silently hide it: log once per distinct mismatch so the
+                // size-sync bug remains visible, not masked by scaling.
+                if (m_lastLoggedMismatch != m_frame.size() && !m_frame.isNull()) {
+                    m_lastLoggedMismatch = m_frame.size();
+                    qWarning("PageSurface: frame size %dx%d != surface size %dx%d (scaling fallback active)",
+                             m_frame.width(), m_frame.height(),
+                             width(), height());
+                }
                 p.drawImage(rect(), m_frame, m_frame.rect());
+            }
         } else {
             p.fillRect(rect(), Qt::white);
         }
@@ -129,7 +153,9 @@ protected:
         m_moveTimer->start();
     }
     void wheelEvent(QWheelEvent *e) override {
-        m_pendingWheelDelta += e->angleDelta().y();
+        // Use angleDelta() in full (both axes). Do NOT quantize by /120.
+        m_pendingWheelDeltaX += e->angleDelta().x();
+        m_pendingWheelDeltaY += e->angleDelta().y();
         m_pendingWheelPos = mapToFrame(e->pos());
         m_pendingWheelMods = e->modifiers();
         if (!m_wheelTimer) {
@@ -142,11 +168,12 @@ protected:
                 obj[QStringLiteral("type")] = QStringLiteral("wheel");
                 obj[QStringLiteral("x")] = m_pendingWheelPos.x();
                 obj[QStringLiteral("y")] = m_pendingWheelPos.y();
-                obj[QStringLiteral("deltaX")] = 0;
-                obj[QStringLiteral("deltaY")] = m_pendingWheelDelta;
+                obj[QStringLiteral("deltaX")] = m_pendingWheelDeltaX;
+                obj[QStringLiteral("deltaY")] = m_pendingWheelDeltaY;
                 obj[QStringLiteral("modifiers")] = (int)m_pendingWheelMods;
                 m_inputCb(obj);
-                m_pendingWheelDelta = 0;
+                m_pendingWheelDeltaX = 0;
+                m_pendingWheelDeltaY = 0;
             });
         }
         m_wheelTimer->start();
@@ -183,11 +210,13 @@ private:
 
     QImage m_frame;
     int m_frameW = 0, m_frameH = 0;
+    QSize m_lastLoggedMismatch;
     std::function<void(const QJsonObject &)> m_inputCb;
     QMouseEvent m_pendingMove{QEvent::MouseMove, QPointF(), Qt::NoButton, Qt::NoButton, Qt::NoModifier};
     QPoint m_pendingMovePos;
     QTimer *m_moveTimer = nullptr;
-    int m_pendingWheelDelta = 0;
+    int m_pendingWheelDeltaX = 0;
+    int m_pendingWheelDeltaY = 0;
     QPoint m_pendingWheelPos;
     Qt::KeyboardModifiers m_pendingWheelMods;
     QTimer *m_wheelTimer = nullptr;
@@ -402,6 +431,20 @@ private slots:
                     if (fw > 0 && fh > 0)
                         readFrame(fw, fh);
                 }
+            } else if (type == QLatin1String("framesize")) {
+                // Renderer needs a larger SHM segment but cannot create it
+                // while we hold the old one attached. Detach so the next
+                // renderer tick can create a segment of the new size.
+                const QStringList parts = data.split(QLatin1Char(','));
+                if (parts.size() == 2) {
+                    m_desiredFrameW = parts[0].toInt();
+                    m_desiredFrameH = parts[1].toInt();
+                }
+                if (m_shm) {
+                    m_shm->detach();
+                    m_attachedShmW = 0;
+                    m_attachedShmH = 0;
+                }
             } else if (type == QLatin1String("title")) {
                 m_title = data;
                 emit titleChanged(m_title);
@@ -413,6 +456,12 @@ private slots:
                 }
             } else if (type == QLatin1String("newtab")) {
                 emit openNewTab(QUrl(data));
+            } else if (type == QLatin1String("cursor")) {
+                // Webpage-determined CSS cursor shape (Qt::CursorShape int),
+                // produced by KHTML's hover hit-test. Apply to the visible
+                // surface.
+                if (m_container)
+                    m_container->applyCursor(data.toInt());
             } else if (type == QLatin1String("state")) {
                 const QStringList parts = data.split(QLatin1Char(','));
                 if (parts.size() >= 3)
@@ -444,19 +493,34 @@ private:
             m_shmKey = QStringLiteral("khtml_frame_%1").arg(m_socketName);
             m_shm = new QSharedMemory(m_shmKey, this);
         }
+        // If the renderer has recreated the segment at a new size, our old
+        // attachment is stale (refcount under a different object). Detach
+        // and re-attach so we pick up the new segment.
+        if (m_shm->isAttached() &&
+            (m_attachedShmW != w || m_attachedShmH != h)) {
+            m_shm->detach();
+            m_attachedShmW = 0;
+            m_attachedShmH = 0;
+        }
         if (!m_shm->isAttached()) {
             if (!m_shm->attach()) {
                 // Renderer may not have created it yet; skip this frame.
                 return;
             }
         }
-        if (m_shm->size() < (qint64)w * h * 4) return;
+        if (m_shm->size() < (qint64)w * h * 4) {
+            // Size mismatch — do not copy; the renderer will notify us via
+            // "framesize" and recreate. Leave attached for the retry.
+            return;
+        }
         if (!m_shm->lock()) return;
         QImage img((const uchar *)m_shm->constData(), w, h, w * 4,
                    QImage::Format_RGB32);
         // Copy out immediately so the renderer can overwrite the buffer.
         QImage frame = img.copy();
         m_shm->unlock();
+        m_attachedShmW = w;
+        m_attachedShmH = h;
         m_container->setFrame(frame);
     }
 
@@ -475,6 +539,10 @@ public:
     int m_connectRetries = 0;
     int m_restoreX = 0, m_restoreY = 0, m_restoreZoom = 100;
     bool m_hasRestore = false;
+    // SHM bookkeeping: track which frame dimensions we are currently attached
+    // to so a renderer-side segment recreation triggers a clean re-attach.
+    int m_attachedShmW = 0, m_attachedShmH = 0;
+    int m_desiredFrameW = 0, m_desiredFrameH = 0;
     static int m_tabCounter;
 };
 int RenderTab::m_tabCounter = 0;
