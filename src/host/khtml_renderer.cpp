@@ -488,10 +488,11 @@ public:
 
         // Copy to shared memory.
         uchar *dst = (uchar *)m_shm->data();
-        if (dst) {
+        const qint64 copyBytes = (qint64)fw * fh * 4;
+        if (dst && m_shm->size() >= copyBytes) {
             const int stride = m_frameBuffer.bytesPerLine();
             if (stride == fw * 4) {
-                memcpy(dst, m_frameBuffer.constBits(), fw * fh * 4);
+                memcpy(dst, m_frameBuffer.constBits(), copyBytes);
             } else {
                 for (int y = 0; y < fh; y++)
                     memcpy(dst + y * fw * 4, m_frameBuffer.constScanLine(y), fw * 4);
@@ -511,7 +512,22 @@ public:
             m_frameW == w && m_frameH == h)
             return;
         if (m_shm->isAttached()) m_shm->detach();
-        m_shm->create(needed);
+        if (!m_shm->create(needed)) {
+            // create() failed — on Windows the Browser may still hold the old
+            // segment open with a smaller size.  Try to attach to it.
+            if (!m_shm->attach()) {
+                m_frameW = 0;
+                m_frameH = 0;
+                return;
+            }
+            if (m_shm->size() < needed) {
+                // Existing segment is too small for this frame.  Keep the old
+                // dimensions so grabFrame() does not memcpy past the end.
+                m_frameBuffer = QImage();
+                m_dirtyRegion = QRegion();
+                return;
+            }
+        }
         m_frameW = w;
         m_frameH = h;
         // Size change invalidates the persistent frame buffer.
@@ -621,19 +637,11 @@ public:
         }
 
         if (m_hasPendingWheel) {
-            // WebKit async-scroll fast path: apply scroll offset immediately
-            // without waiting for JS/layout, then dispatch the DOM event.
+            // Dispatch the wheel event to KHTML for both scrolling and JS
+            // listeners.  Do NOT also manipulate the scrollbar directly — that
+            // caused double-scrolling (fast-path + QScrollArea::wheelEvent).
             const int dx = m_pendingWheelDeltaX;
             const int dy = m_pendingWheelDeltaY;
-            if (dy != 0) {
-                QScrollBar *sb = view->verticalScrollBar();
-                if (sb) sb->setValue(sb->value() - dy / 120 * sb->singleStep() * 3);
-            }
-            if (dx != 0) {
-                QScrollBar *sb = view->horizontalScrollBar();
-                if (sb) sb->setValue(sb->value() - dx / 120 * sb->singleStep() * 3);
-            }
-            // Also dispatch the wheel event for JS listeners.
             const QPoint lp(m_wheelMouseX, m_wheelMouseY);
             const QPoint gp = content->mapToGlobal(lp);
             QWheelEvent ev(lp, gp, QPoint(dx, dy), QPoint(dx, dy),
