@@ -424,9 +424,9 @@ public:
         m_stateTimer->start();
     }
 
-    void showAt(int x, int y, int w, int h)
+    void showAt(int w, int h)
     {
-        m_pendingX = x; m_pendingY = y; m_pendingW = w; m_pendingH = h;
+        m_pendingW = w; m_pendingH = h;
         // Offscreen mode: no visible window.  Size is applied when the browser
         // connects and sends a resize, or immediately if non-default.
         if (w > 0 && h > 0 && m_view) {
@@ -911,7 +911,7 @@ private:
     QTimer *m_stateTimer = nullptr;
     QUrl m_pendingUrl;
     bool m_jsEnabled = true;
-    int m_pendingX = 0, m_pendingY = 0, m_pendingW = 800, m_pendingH = 600;
+    int m_pendingW = 800, m_pendingH = 600;
     // Tombstone restore state, applied when the next document completes.
     int m_pendingRestoreX = 0;
     int m_pendingRestoreY = 0;
@@ -972,7 +972,7 @@ int main(int argc, char **argv)
         socketName = QStringLiteral("khtml_renderer_%1").arg(QCoreApplication::applicationPid());
 
     RendererHost host(socketName, jsEnabled);
-    host.showAt(0, 0, w, h);
+    host.showAt(w, h);
     host.loadInitial(QUrl(urlStr));
 
     return app.exec();

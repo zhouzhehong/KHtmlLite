@@ -27,6 +27,18 @@ find_package(KF5 REQUIRED COMPONENTS
     Codecs Archive Notifications Sonnet Wallet WindowSystem GlobalAccel)
 
 file(GLOB KHTML_SUBDIRS LIST_DIRECTORIES true "${KHTML_SOURCE_DIR}/*")
+# LIST_DIRECTORIES true returns regular files as well as directories. Every
+# entry ends up in KHTML_HOST_INCLUDES, so files were passed to the compiler
+# as include directories and cc1plus emitted
+#   ".../src/<file>: not a directory"
+# for each of them. Keep only the real subdirectories.
+set(KHTML_SUBDIR_DIRS "")
+foreach(_khtml_subdir IN LISTS KHTML_SUBDIRS)
+    if(IS_DIRECTORY "${_khtml_subdir}")
+        list(APPEND KHTML_SUBDIR_DIRS "${_khtml_subdir}")
+    endif()
+endforeach()
+set(KHTML_SUBDIRS ${KHTML_SUBDIR_DIRS})
 
 set(KHTML_HOST_INCLUDES
     ${KHTML_SOURCE_DIR}
@@ -38,10 +50,10 @@ set(KHTML_HOST_INCLUDES
 set(KHTML_HOST_LIBS
     ${KHTML_LIB}
     Qt5::Widgets Qt5::Gui Qt5::Network
-    KF5::Parts KF5::I18n KF5::KIOCore KF5::KIOGui KF5::XmlGui
+    KF5::Parts KF5::I18n KF5::KIOCore KF5::XmlGui
     KF5::WidgetsAddons KF5::TextWidgets KF5::IconThemes KF5::Codecs
     KF5::Archive KF5::Notifications KF5::SonnetCore KF5::SonnetUi
-    KF5::Wallet KF5::WindowSystem KF5::GlobalAccel
+    KF5::Wallet
 )
 
 set(KHTML_HOST_COMPILE_OPTS
