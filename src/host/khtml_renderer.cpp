@@ -580,23 +580,26 @@ public:
         const QString type = obj.value(QStringLiteral("type")).toString();
         KHTMLView *view = m_view ? m_view->view() : nullptr;
         if (!view) return;
-        QWidget *vp = view->viewport();
-        if (!vp) return;
+        // Mouse input must be delivered to KHTML's content widget (widget()),
+        // not to the viewport.  KHTMLView::eventFilter watches widget() and
+        // forwards its events to widgetEvent(), which dispatches through
+        // QFrame::event() into KHTMLView::mousePressEvent/mouseMoveEvent
+        // (hit-test -> DOM dispatch).  Events sent to viewport() never reach
+        // those handlers because QAbstractScrollArea::event() swallows mouse
+        // events, so clicks/focus never got established.
+        QWidget *mw = view->widget();
+        if (!mw) return;
 
         const int x = obj.value(QStringLiteral("x")).toInt();
         const int y = obj.value(QStringLiteral("y")).toInt();
         const QPoint localPos(x, y);
-        const QPoint globalPos = vp->mapToGlobal(localPos);
+        const QPoint globalPos = mw->mapToGlobal(localPos);
         const Qt::MouseButton button = (Qt::MouseButton)obj.value(QStringLiteral("button")).toInt();
         const Qt::MouseButtons buttons = (Qt::MouseButtons)obj.value(QStringLiteral("buttons")).toInt();
         const Qt::KeyboardModifiers mods = (Qt::KeyboardModifiers)obj.value(QStringLiteral("modifiers")).toInt();
 
         if (type == QLatin1String("mousepress") || type == QLatin1String("mouserelease")
             || type == QLatin1String("mousedblclick")) {
-            // Deliver to the viewport widget (not the KHTMLView/QScrollArea
-            // itself).  KHTMLView's eventFilter installed on the viewport
-            // routes QMouseEvents into viewportMousePressEvent ->
-            // prepareMouseEvent -> hit-test -> DOM dispatch.
             QEvent::Type et;
             if (type == QLatin1String("mousepress"))
                 et = QEvent::MouseButtonPress;
@@ -608,12 +611,13 @@ public:
             // dispatch complete before invalidateFull()/scheduleFrame()
             // capture the post-click render state.
             QMouseEvent ev(et, localPos, globalPos, button, buttons, mods);
-            // Ensure the viewport (or a focused child) has Qt focus. In
-            // offscreen mode the toplevel window is never active, so
-            // QApplication::focusWidget() may be stale.
-            if (et == QEvent::MouseButtonPress && !vp->focusWidget())
-                vp->setFocus();
-            QCoreApplication::sendEvent(vp, &ev);
+            // Ensure the content widget (or a focused child such as the
+            // KLineEdit of an <input>) has Qt focus.  In offscreen mode the
+            // toplevel window is never active, so QApplication::focusWidget()
+            // may be stale.
+            if (et == QEvent::MouseButtonPress && !mw->focusWidget())
+                mw->setFocus();
+            QCoreApplication::sendEvent(mw, &ev);
             invalidateFull();
             scheduleFrame();
         } else if (type == QLatin1String("mousemove")) {
@@ -663,21 +667,22 @@ public:
         if (!view) return;
         QWidget *content = view->widget();
         if (!content) return;
-        // Deliver coalesced mousemove to the viewport widget, matching the
-        // mouse press/release path. sendEvent (synchronous) with a stack
-        // event so KHTML processes the move before the frame is captured.
+        // Deliver coalesced mousemove to the content widget, matching the
+        // mouse press/release path (see dispatchInput). sendEvent
+        // (synchronous) with a stack event so KHTML processes the move
+        // before the frame is captured.
         QWidget *vp = view->viewport();
 
         if (m_hasPendingMouseMove) {
             const QJsonObject &obj = m_pendingMouseMove;
             const QPoint lp(obj.value(QStringLiteral("x")).toInt(),
                             obj.value(QStringLiteral("y")).toInt());
-            const QPoint gp = vp ? vp->mapToGlobal(lp) : content->mapToGlobal(lp);
+            const QPoint gp = content->mapToGlobal(lp);
             const Qt::MouseButtons btns = (Qt::MouseButtons)obj.value(QStringLiteral("buttons")).toInt();
             const Qt::KeyboardModifiers mods = (Qt::KeyboardModifiers)obj.value(QStringLiteral("modifiers")).toInt();
-            if (vp) {
+            {
                 QMouseEvent ev(QEvent::MouseMove, lp, gp, Qt::NoButton, btns, mods);
-                QCoreApplication::sendEvent(vp, &ev);
+                QCoreApplication::sendEvent(content, &ev);
                 // Report the webpage cursor back to the Browser. KHTML's own
                 // hover hit-test (KHTMLView::mouseMoveEvent -> prepareMouseEvent
                 // -> RenderStyle::cursor()) has just applied the effective CSS
@@ -685,7 +690,9 @@ public:
                 // read back the shape KHTML determined instead of re-implementing
                 // cursor logic here. The Browser applies it to the visible
                 // PageSurface widget, which owns the only on-screen HWND.
-                sendCursor((Qt::CursorShape)vp->cursor().shape());
+                if (vp) {
+                    sendCursor((Qt::CursorShape)vp->cursor().shape());
+                }
             }
             m_hasPendingMouseMove = false;
             invalidateFull();
