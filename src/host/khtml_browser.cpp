@@ -82,16 +82,27 @@ public:
         m_frameH = img.height();
         update();
     }
-    // Map a widget-relative point to frame coordinates (accounts for scaling
-    // when the frame size differs from the widget size).
-    QPoint mapToFrame(const QPoint &p) const {
-        if (m_frameW <= 0 || m_frameH <= 0) return p;
-        const int w = width(), h = height();
-        if (w <= 0 || h <= 0) return p;
-        return QPoint(p.x() * m_frameW / w, p.y() * m_frameH / h);
-    }
+    // Map a widget-relative point to frame coordinates.  The frame is always
+    // drawn unscaled at the surface origin (see paintEvent), so this is an
+    // identity mapping: hit testing and painting must agree on the geometry.
+    QPoint mapToFrame(const QPoint &p) const { return p; }
     // Callback set by RenderTab to forward input events to the renderer.
     void setInputCallback(std::function<void(const QJsonObject &)> cb) { m_inputCb = std::move(cb); }
+
+    // Callback set by RenderTab: fires with this surface's real size every time
+    // it actually changes.  This widget is the page viewport, so it — not the
+    // top level window — is the authoritative source for the renderer size.
+    void setResizeCallback(std::function<void(int, int)> cb) { m_resizeCb = std::move(cb); }
+
+    // Enter/leave the browser-side live-resize presentation mode. While true,
+    // resizeEvent stops pushing intermediate sizes to the renderer and
+    // paintEvent scales the last frame to fill the surface (visual continuity
+    // only). The renderer's KHTML viewport/layout size is never changed.
+    void setLiveResizing(bool on) {
+        if (m_liveResize == on) return;
+        m_liveResize = on;
+        update();
+    }
 
     // Apply the webpage-determined cursor (Qt::CursorShape as an int) reported
     // by the renderer. This is the on-screen surface, so this is where the
@@ -108,22 +119,48 @@ protected:
         unsetCursor();
     }
 
+    void resizeEvent(QResizeEvent *e) override {
+        QWidget::resizeEvent(e);
+        if (m_liveResize) {
+            // Live-resize: do NOT push intermediate pixel sizes to the
+            // renderer. Its KHTML viewport/layout stay frozen at the last
+            // committed size; paintEvent scales the last frame for visual
+            // continuity. The real, final size is committed once at
+            // WM_EXITSIZEMOVE (see KHtmlLiteWindow::endLiveResize).
+            update();
+            return;
+        }
+        // Push the new page viewport size to the renderer, so it re-lays out
+        // and re-renders for this viewport instead of leaving the browser to
+        // show a stale framebuffer.
+        if (m_resizeCb)
+            m_resizeCb(width(), height());
+    }
+
     void paintEvent(QPaintEvent *) override {
         QPainter p(this);
         if (!m_frame.isNull()) {
-            if (m_frame.size() == size()) {
-                p.drawImage(0, 0, m_frame);
+            if (m_liveResize && m_frame.size() != size()) {
+                // Live-resize: scale the last valid framebuffer to fill the
+                // surface purely for visual continuity. This is a temporary
+                // browser-side transform only — it never changes the CSS/layout
+                // viewport in the renderer. At WM_EXITSIZEMOVE the real size is
+                // committed and the renderer repaints at 1:1.
+                p.drawImage(rect(), m_frame);
             } else {
-                // Frame/surface mismatch during a resize transition. Do NOT
-                // silently hide it: log once per distinct mismatch so the
-                // size-sync bug remains visible, not masked by scaling.
-                if (m_lastLoggedMismatch != m_frame.size() && !m_frame.isNull()) {
-                    m_lastLoggedMismatch = m_frame.size();
-                    qWarning("PageSurface: frame size %dx%d != surface size %dx%d (scaling fallback active)",
-                             m_frame.width(), m_frame.height(),
-                             width(), height());
+                if (m_frame.size() != size()) {
+                    // Resize transition: the renderer has not produced a frame for
+                    // the new viewport yet.  Log it once per distinct mismatch so
+                    // the size-sync invariant stays observable.
+                    if (m_lastLoggedMismatch != m_frame.size()) {
+                        m_lastLoggedMismatch = m_frame.size();
+                        qWarning("PageSurface: frame size %dx%d != surface size %dx%d (frame drawn 1:1 until the renderer catches up)",
+                                 m_frame.width(), m_frame.height(),
+                                 width(), height());
+                    }
                 }
-                p.drawImage(rect(), m_frame, m_frame.rect());
+                // Draw the frame unscaled, anchored at the surface origin.
+                p.drawImage(0, 0, m_frame);
             }
         } else {
             p.fillRect(rect(), Qt::white);
@@ -220,6 +257,8 @@ private:
     QPoint m_pendingWheelPos;
     Qt::KeyboardModifiers m_pendingWheelMods;
     QTimer *m_wheelTimer = nullptr;
+    std::function<void(int, int)> m_resizeCb;
+    bool m_liveResize = false;
 };
 
 class RenderTab : public QObject
@@ -234,9 +273,22 @@ public:
         m_container->setInputCallback([this](const QJsonObject &obj) {
             sendInput(obj);
         });
+        // The page surface is the page viewport.  This notification — not the
+        // top level window resize — is what drives the renderer size, so the
+        // size is always read after the layout has actually been applied.
+        // Emitting a signal (rather than sending here) keeps the existing
+        // coalescing: a drag-resize still produces one IPC message per idle
+        // moment, not one per resize event.
+        m_container->setResizeCallback([this](int, int) {
+            emit pageResized();
+        });
     }
 
     ~RenderTab() {
+        // The page surface can outlive this object (it is owned by the tab
+        // widget), so drop the callback that captures `this`.
+        if (m_container)
+            m_container->setResizeCallback(nullptr);
         // Ensure the renderer process and socket are torn down non-blockingly.
         // Without this, the compiler-generated destructor deletes the QProcess
         // child, whose destructor blocks until the process fully exits — which
@@ -272,7 +324,10 @@ public:
         // receive the HWND, and the HWND to embed the window).
         m_socket = new QLocalSocket(this);
         connect(m_socket, &QLocalSocket::readyRead, this, &RenderTab::onSocketReady);
-        connect(m_socket, &QLocalSocket::connected, this, [this]() { sendRestoreIfConnected(); });
+        connect(m_socket, &QLocalSocket::connected, this, [this]() {
+            sendRestoreIfConnected();
+            flushPendingResize();
+        });
         connect(m_socket, &QLocalSocket::errorOccurred, this, [this](QLocalSocket::LocalSocketError) {
             // Server not ready yet — retry with backoff.
             if (m_connectRetries < 50) {
@@ -329,9 +384,38 @@ public:
             obj[QStringLiteral("cmd")] = QStringLiteral("resize");
             obj[QStringLiteral("w")] = w;
             obj[QStringLiteral("h")] = h;
-            m_socket->write(QJsonDocument(obj).toJson(QJsonDocument::Compact) + "\n");
-            m_socket->flush();
+                m_socket->write(QJsonDocument(obj).toJson(QJsonDocument::Compact) + "\n");
+                m_socket->flush();
+                m_resizePending = false;
+        } else {
+            // The renderer process and its IPC socket start asynchronously, so
+            // a resize that happens in the meantime cannot be delivered yet.
+            // Dropping it leaves the renderer rendering at its command-line
+            // default size while the page surface stretches that framebuffer.
+            // Remember it and push the surface's real size once the channel is
+            // usable (see flushPendingResize).
+            m_resizePending = true;
         }
+    }
+
+    // Push the page surface's current size to the renderer.  Called when the
+    // IPC channel becomes usable, so a resize issued while the renderer was
+    // still starting up is never lost.  The size is re-read here (not the
+    // value captured earlier) because the layout may have settled since.
+    void flushPendingResize()
+    {
+        if (!m_resizePending || !m_container) return;
+        if (!m_socket || !m_socket->isOpen()) return;
+        const QSize s = m_container->size();
+        if (s.width() <= 0 || s.height() <= 0) return;
+        resize(s.width(), s.height());
+    }
+
+    // Propagate the browser-side live-resize presentation flag to the visible
+    // page surface. While on, the surface scales its last frame instead of
+    // pushing intermediate sizes to the renderer (see PageSurface).
+    void setLiveResizing(bool on) {
+        if (m_container) m_container->setLiveResizing(on);
     }
 
     // Send tombstone restore (scroll + zoom) to the renderer. If the socket
@@ -391,6 +475,8 @@ Q_SIGNALS:
     void ready();          // window embedded, ready to show
     void openNewTab(const QUrl &url);
     void stateChanged(int scrollX, int scrollY, int zoom);
+    // The page surface was resized: the renderer viewport has to follow.
+    void pageResized();
 
 private slots:
     void onStdout()
@@ -418,6 +504,7 @@ private slots:
             const QString data = obj.value(QStringLiteral("data")).toString();
             if (type == QLatin1String("ready")) {
                 // Renderer is up and its offscreen surface is initialized.
+                flushPendingResize();
                 if (!m_embedded) {
                     m_embedded = true;
                     emit ready();
@@ -428,8 +515,9 @@ private slots:
                 if (parts.size() >= 2) {
                     const int fw = parts[0].toInt();
                     const int fh = parts[1].toInt();
-                    if (fw > 0 && fh > 0)
+                    if (fw > 0 && fh > 0) {
                         readFrame(fw, fh);
+                    }
                 }
             } else if (type == QLatin1String("framesize")) {
                 // Renderer needs a larger SHM segment but cannot create it
@@ -536,6 +624,9 @@ public:
     QString m_title;
     bool m_embedded = false;
     bool m_crashed = false;
+    // A resize arrived before the IPC socket was connected and still has to be
+    // delivered (see resize / flushPendingResize).
+    bool m_resizePending = false;
     int m_connectRetries = 0;
     int m_restoreX = 0, m_restoreY = 0, m_restoreZoom = 100;
     bool m_hasRestore = false;
@@ -748,6 +839,12 @@ public:
             m_tabs->setTabText(idx, QStringLiteral("已崩溃"));
         });
         connect(pg->render, &RenderTab::openNewTab, this, [this](const QUrl &u) { addTab(u); });
+        // A page surface was resized: coalesce through the existing single-shot
+        // timer, then push each renderer to its surface's current size.
+        connect(pg->render, &RenderTab::pageResized, this, [this]() {
+            if (m_resizeTimer)
+                m_resizeTimer->start(0);
+        });
         connect(pg->render, &RenderTab::stateChanged, this,
                 [pg](int x, int y, int zoom) {
                     pg->scrollX = x; pg->scrollY = y; pg->zoom = zoom;
@@ -766,22 +863,32 @@ public:
         syncChrome();
     }
 
-    // Called by the coalescing resize timer. Only resizes the currently
-    // visible tab — background tabs are resized when they become visible.
+    // Called by the coalescing resize timer once a page surface has changed
+    // size.  Every tab's surface is laid out with the window, so every running
+    // renderer is brought to its surface's current size.
     void applyPendingResize() {
-        TabPage *pg = currentPage();
-        if (!pg || !pg->render || !pg->render->isRunning())
-            return;
-        QWidget *container = pg->render->container();
-        if (!container)
-            return;
-        const QSize s = container->size();
-        pg->render->resize(s.width(), s.height());
+        for (TabPage *pg : m_pages) {
+            if (!pg || !pg->render || !pg->render->isRunning())
+                continue;
+            QWidget *container = pg->render->container();
+            if (!container)
+                continue;
+            const QSize s = container->size();
+            if (s.width() <= 0 || s.height() <= 0)
+                continue;
+            pg->render->resize(s.width(), s.height());
+        }
     }
 
 protected:
     void resizeEvent(QResizeEvent *event) override {
         QMainWindow::resizeEvent(event);
+        if (m_liveResize) {
+            // Live-resize in progress: do not ship intermediate pixel sizes to
+            // the renderer. PageSurface scales its last frame for visual
+            // continuity; the real size is committed once at WM_EXITSIZEMOVE.
+            return;
+        }
         // Coalesce: restarting an already-running single-shot timer discards
         // the previous pending resize, so only the last size in a drag is sent.
         if (m_resizeTimer)
@@ -806,6 +913,55 @@ protected:
         }
         m_pages.clear();
         QMainWindow::closeEvent(event);
+    }
+
+    // Native live-resize detection. WM_ENTERSIZEMOVE / WM_EXITSIZEMOVE bracket
+    // an interactive drag-resize (and Aero-snap), but NOT discrete geometry
+    // changes such as maximize / restore / programmatic resize. Those go
+    // straight through resizeEvent → the existing coalescing timer, so they
+    // commit the real final size immediately with no temporary transform.
+    bool nativeEvent(const QByteArray &eventType, void *message, long *result) override {
+        if (eventType == "windows_generic_MSG") {
+            MSG *msg = reinterpret_cast<MSG *>(message);
+            switch (msg->message) {
+            case WM_ENTERSIZEMOVE:
+                beginLiveResize();
+                break;
+            case WM_EXITSIZEMOVE:
+                endLiveResize();
+                break;
+            default:
+                break;
+            }
+        }
+        return QMainWindow::nativeEvent(eventType, message, result);
+    }
+
+    void beginLiveResize() {
+        if (m_liveResize) return;
+        m_liveResize = true;
+        // Cancel any in-flight coalesced resize so no stale intermediate size
+        // is committed to the renderer. The renderer keeps its last committed
+        // viewport; only the browser-side frame is scaled for continuity.
+        if (m_resizeTimer) m_resizeTimer->stop();
+        setLiveResizing(true);
+    }
+
+    void endLiveResize() {
+        if (!m_liveResize) return;
+        m_liveResize = false;
+        setLiveResizing(false);
+        // Commit the real final viewport size exactly once, reusing the
+        // existing resize path (no second resize architecture): it reads each
+        // PageSurface's final size and sends a single resize IPC per tab. The
+        // renderer then does the final layout/repaint at 1:1.
+        applyPendingResize();
+    }
+
+    void setLiveResizing(bool on) {
+        for (TabPage *pg : m_pages) {
+            if (pg && pg->render) pg->render->setLiveResizing(on);
+        }
     }
 
     void navigate(TabPage *pg, const QUrl &url, bool pushHistory) {
@@ -986,6 +1142,7 @@ protected:
     QTimer *m_memTimer = nullptr;
     QLabel *m_memLabel = nullptr;
     QTimer *m_resizeTimer = nullptr;
+    bool m_liveResize = false;
     bool m_purgingCache = false;
     QTabWidget *m_tabs = nullptr;
     QList<TabPage *> m_pages;
