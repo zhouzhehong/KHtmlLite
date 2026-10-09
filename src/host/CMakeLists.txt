@@ -81,6 +81,22 @@ target_include_directories(khtml_renderer PRIVATE ${KHTML_HOST_INCLUDES})
 target_link_libraries(khtml_renderer PRIVATE ${KHTML_HOST_LIBS} dbghelp)
 target_compile_options(khtml_renderer PRIVATE ${KHTML_HOST_COMPILE_OPTS})
 
+# Stage the project-built KHTML engine DLL next to the host executables.
+# Without this, Windows falls back to PATH lookup and may load the
+# MSYS2-packaged libKF5KHtml.dll (same soname, different build/ABI), which
+# makes the renderer die at startup with 0xC0000139 (entry point not found).
+# The application directory is always searched first, so a local copy is
+# authoritative.
+if(WIN32)
+    set(_khtml_runtime_dll "${KHTML_BUILD_DIR}/bin/libKF5KHtml.dll")
+    foreach(_t khtml_browser khtml_renderer)
+        add_custom_command(TARGET ${_t} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${_khtml_runtime_dll}" "$<TARGET_FILE_DIR:${_t}>/libKF5KHtml.dll"
+            VERBATIM)
+    endforeach()
+endif()
+
 # --- Optional diagnostic / probe tools ----------------------------------------
 option(BUILD_PROBE_TOOLS "Build network / CSS / smoke probe tools" OFF)
 if(BUILD_PROBE_TOOLS)

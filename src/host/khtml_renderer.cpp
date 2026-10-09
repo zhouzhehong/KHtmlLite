@@ -871,6 +871,12 @@ private slots:
         if (hasPendingResize && m_view) {
             m_view->widget()->resize(pendingW, pendingH);
             ensureShm(pendingW, pendingH);
+            // Request a frame immediately after the resize instead of waiting
+            // for the next 33 ms timer tick.  The synchronous relayout above
+            // is already paid; the sooner the first frame at the new size is
+            // delivered, the sooner the browser stops scaling the stale frame.
+            invalidateFull();
+            scheduleFrame();
         }
     }
 

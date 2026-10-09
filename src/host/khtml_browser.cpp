@@ -147,18 +147,22 @@ protected:
                 // viewport in the renderer. At WM_EXITSIZEMOVE the real size is
                 // committed and the renderer repaints at 1:1.
                 p.drawImage(rect(), m_frame);
-            } else {
-                if (m_frame.size() != size()) {
-                    // Resize transition: the renderer has not produced a frame for
-                    // the new viewport yet.  Log it once per distinct mismatch so
-                    // the size-sync invariant stays observable.
-                    if (m_lastLoggedMismatch != m_frame.size()) {
-                        m_lastLoggedMismatch = m_frame.size();
-                        qWarning("PageSurface: frame size %dx%d != surface size %dx%d (frame drawn 1:1 until the renderer catches up)",
-                                 m_frame.width(), m_frame.height(),
-                                 width(), height());
-                    }
+            } else if (m_frame.size() != size()) {
+                // Discrete resize transition (maximize/restore/Aero-snap commit):
+                // the renderer has not produced a frame for the new viewport
+                // yet.  Scale the last frame to fill the surface for visual
+                // continuity (same WebKit-style presentation as live-resize);
+                // drawing 1:1 in the corner over white looked frozen/broken.
+                // Log once per distinct mismatch so the size-sync invariant
+                // stays observable.
+                if (m_lastLoggedMismatch != m_frame.size()) {
+                    m_lastLoggedMismatch = m_frame.size();
+                    qWarning("PageSurface: frame size %dx%d != surface size %dx%d (frame scaled until the renderer catches up)",
+                             m_frame.width(), m_frame.height(),
+                             width(), height());
                 }
+                p.drawImage(rect(), m_frame);
+            } else {
                 // Draw the frame unscaled, anchored at the surface origin.
                 p.drawImage(0, 0, m_frame);
             }
@@ -384,9 +388,23 @@ public:
             obj[QStringLiteral("cmd")] = QStringLiteral("resize");
             obj[QStringLiteral("w")] = w;
             obj[QStringLiteral("h")] = h;
-                m_socket->write(QJsonDocument(obj).toJson(QJsonDocument::Compact) + "\n");
-                m_socket->flush();
-                m_resizePending = false;
+            // Growing resize: proactively release our SHM attachment BEFORE
+            // sending the message.  On Windows the renderer cannot
+            // QSharedMemory::create() a larger segment while we still hold
+            // the old one open, so without this the renderer's ensureShm()
+            // fails, sends "framesize", and has to wait for our detach plus
+            // a whole extra frame tick before it can render at the new size.
+            // Detaching here (before the renderer processes the resize) lets
+            // its first ensureShm() succeed immediately.
+            if (m_shm && m_shm->isAttached() &&
+                m_shm->size() < (qint64)w * (qint64)h * 4) {
+                m_shm->detach();
+                m_attachedShmW = 0;
+                m_attachedShmH = 0;
+            }
+            m_socket->write(QJsonDocument(obj).toJson(QJsonDocument::Compact) + "\n");
+            m_socket->flush();
+            m_resizePending = false;
         } else {
             // The renderer process and its IPC socket start asynchronously, so
             // a resize that happens in the meantime cannot be delivered yet.
