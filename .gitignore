@@ -87,3 +87,5 @@ src/khtml/src/html/htmltokenizer.cc
 src/khtml/src/dom/dom2.cc
 
 build-host/
+
+svg_diag.txt
