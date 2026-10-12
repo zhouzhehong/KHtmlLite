@@ -48,6 +48,11 @@ public:
     }
     void finishParsingChildren() override;
 
+    // KHTML: parse the contained CSS text into a style sheet and register it
+    // with the document (previously all commented out, so <style> rules in
+    // SVG documents never took effect).  Mirrors HTMLStyleElementImpl.
+    void parseText();
+
     // 'SVGStyleElement' functions
     DOMString xmlspace() const;
     void setXmlspace(const DOMString &, ExceptionCode &);

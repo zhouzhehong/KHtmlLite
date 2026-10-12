@@ -1,4 +1,4 @@
-﻿/**
+/**
  * This file is part of the DOM implementation for KDE.
  *
  * Copyright (C) 1999 Lars Knoll (knoll@kde.org)
@@ -1311,7 +1311,12 @@ ElementImpl *DocumentImpl::createSVGElement(const QualifiedName &name)
         n = new WebCore::SVGTitleElement(name, docPtr());
     }
 
-    if (id == makeId(svgNamespace, ID_STYLE)) {
+    if (id == WebCore::SVGNames::styleTag.localNameId().id()) {
+        // Note: must compare against localNameId() like every other tag
+        // above; comparing against makeId(svgNamespace, ID_STYLE) mixed an
+        // already-qualified id with the local one and never matched, so SVG
+        // <style> elements were created as plain SVGElements and their CSS
+        // rules silently dropped.
         n = new WebCore::SVGStyleElement(name, docPtr());
     }
 
@@ -2441,6 +2446,18 @@ void DocumentImpl::rebuildStyleSheetList(bool force)
                 // <BODY> element (doesn't contain styles as such but vlink="..." and friends
                 // are treated as style declarations)
                 sheet = static_cast<HTMLBodyElementImpl *>(n)->sheet();
+            } else if (n->isSVGElement() &&
+                       (int)n->id() == (int)WebCore::SVGNames::styleTag.id()) {
+                // SVG <style> element.  Without this branch, in-document CSS
+                // rules of SVG documents never entered the selector, so
+                // class/element rules (e.g. Bing logo fills) were dropped and
+                // shapes fell back to the default black fill.
+                WebCore::SVGStyleElement *s =
+                    static_cast<WebCore::SVGStyleElement *>(n);
+                sheet = s->sheet();
+                if (sheet) {
+                    title = s->title().string();
+                }
             }
 
             if (!title.isEmpty()) {

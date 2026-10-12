@@ -1,4 +1,4 @@
-﻿/**
+/**
  * This file is part of the CSS implementation for KDE.
  *
  * Copyright 1999-2003 Lars Knoll (knoll@kde.org)
@@ -62,10 +62,47 @@ using namespace DOM;
 #include <QUrl>
 #include <QFontDatabase>
 #include <qstandardpaths.h>
+#include <QLibraryInfo>
+#include <QStringList>
 
 #include "khtml_debug.h"
 #include <assert.h>
 #include <stdlib.h>
+
+// Locate one of the bundled KHTML stylesheets under kf5/khtml/css.
+// QStandardPaths::GenericDataLocation covers the usual install locations
+// (app dir, app dir/data, %LOCALAPPDATA%, %PROGRAMDATA%).  On Windows the
+// enumeration never consults QT_DATA_DIRS and does not know the toolchain
+// prefix, so an uninstalled MSYS2 dev run from an arbitrary build directory
+// cannot find the framework data that MSYS2 installs into
+// <prefix>/bin/data (and <prefix>/share).  Fall back to the Qt prefix —
+// derived from the Qt5Core DLL we already run against — before failing.
+static QString locateKhtmlCss(const QString &name)
+{
+    const QString rel = QStringLiteral("kf5/khtml/css/") + name;
+    QString path =
+        QStandardPaths::locate(QStandardPaths::GenericDataLocation, rel);
+#ifdef Q_OS_WIN
+    if (path.isEmpty()) {
+        const QString prefix =
+            QLibraryInfo::location(QLibraryInfo::PrefixPath);
+        const QStringList candidates = {
+            prefix + QLatin1String("/bin/data/") + rel,
+            prefix + QLatin1String("/share/") + rel,
+        };
+        for (const QString &c : candidates) {
+            if (QFile::exists(c)) {
+                path = c;
+                break;
+            }
+        }
+    }
+#endif
+    if (path.isEmpty())
+        qCWarning(KHTML_LOG) << "KHTML default stylesheet not found:" << rel
+                             << "; searched GenericDataLocation and the Qt prefix";
+    return path;
+}
 
 // keep in sync with html4.css'
 #define KHTML_STYLE_VERSION 1
@@ -400,7 +437,7 @@ void CSSStyleSelector::loadDefaultStyle(const KHTMLSettings *s, DocumentImpl *do
     MediaQueryEvaluator printEval("print");
 
     {
-        QFile f(QStandardPaths::locate(QStandardPaths::GenericDataLocation, "kf5/khtml/css/html4.css"));
+        QFile f(locateKhtmlCss(QStringLiteral("html4.css")));
         f.open(QIODevice::ReadOnly);
 
         QByteArray file(f.size() + 1, 0);
@@ -435,7 +472,7 @@ void CSSStyleSelector::loadDefaultStyle(const KHTMLSettings *s, DocumentImpl *do
         s_defaultPrintStyle->append(s_defaultSheet, &printEval, doc->styleSelector());
     }
     {
-        QFile f(QStandardPaths::locate(QStandardPaths::GenericDataLocation, "kf5/khtml/css/quirks.css"));
+        QFile f(locateKhtmlCss(QStringLiteral("quirks.css")));
         f.open(QIODevice::ReadOnly);
 
         QByteArray file(f.size() + 1, 0);
@@ -456,7 +493,7 @@ void CSSStyleSelector::loadDefaultStyle(const KHTMLSettings *s, DocumentImpl *do
         s_defaultQuirksStyle->append(s_quirksSheet, &screenEval, doc->styleSelector());
     }
     {
-        QFile f(QStandardPaths::locate(QStandardPaths::GenericDataLocation, "kf5/khtml/css/presentational.css"));
+        QFile f(locateKhtmlCss(QStringLiteral("presentational.css")));
         f.open(QIODevice::ReadOnly);
 
         QByteArray file(f.size() + 1, 0);

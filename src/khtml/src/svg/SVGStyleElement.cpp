@@ -28,6 +28,7 @@
 //#include "CSSStyleSheet.h"
 #include "Document.h"
 #include "ExceptionCode.h"
+#include "css/css_mediaquery.h"
 //#include "HTMLNames.h"
 //#include "XMLNames.h"
 
@@ -100,27 +101,28 @@ void SVGStyleElement::parseMappedAttribute(MappedAttribute *attr)
 
 void SVGStyleElement::finishParsingChildren()
 {
-    //StyleElement::sheet(this);
     m_createdByParser = false;
     SVGElement::finishParsingChildren();
+    parseText();
 }
 
 void SVGStyleElement::insertedIntoDocument()
 {
     SVGElement::insertedIntoDocument();
 
-    /*if (!m_createdByParser)
-        StyleElement::insertedIntoDocument(document(), this);*/
-    // Copy implementation from HTMLStyleElementImpl for KHTML
-    // qCDebug(KHTML_LOG) << "not implemented";
+    // If we're empty, we have to call parseText here, since we won't get
+    // childrenChanged(); we still want a CSSOM object (same as HTML).
+    if (!firstChild()) {
+        parseText();
+    }
 }
 
 void SVGStyleElement::removedFromDocument()
 {
     SVGElement::removedFromDocument();
-    /*StyleElement::removedFromDocument(document());*/
-    // Copy implementation from HTMLStyleElementImpl for KHTML
-    // qCDebug(KHTML_LOG) << "not implemented";
+    if (m_sheet) {
+        document()->updateStyleSelector();
+    }
 }
 
 void SVGStyleElement::childrenChanged(bool changedByParser, Node *beforeChange, Node *afterChange, int childCountDelta)
@@ -129,11 +131,53 @@ void SVGStyleElement::childrenChanged(bool changedByParser, Node *beforeChange, 
     Q_UNUSED(beforeChange);
     Q_UNUSED(afterChange);
     Q_UNUSED(childCountDelta);
-    //SVGElement::childrenChanged(changedByParser, beforeChange, afterChange, childCountDelta);
     SVGElement::childrenChanged();
-    /*StyleElement::process(this);*/
-    // Copy implementation from HTMLStyleElementImpl for KHTML
-    // qCDebug(KHTML_LOG) << "not implemented";
+    if (m_createdByParser) {
+        // incremental parser: children arrive in batches; parse at
+        // finishParsingChildren() instead
+        return;
+    }
+    parseText();
+}
+
+void SVGStyleElement::parseText()
+{
+    if (!document()) {
+        return;
+    }
+    DOMString text("");
+    for (DOM::NodeImpl *c = firstChild(); c != nullptr; c = c->nextSibling()) {
+        if (c->nodeType() == DOM::Node::TEXT_NODE ||
+                c->nodeType() == DOM::Node::CDATA_SECTION_NODE) {
+            text += c->nodeValue();
+        }
+    }
+
+    if (m_sheet) {
+        m_sheet->deref();
+        m_sheet = nullptr;
+    }
+
+    if (type().string() == QLatin1String("text/css")) {
+        DOM::MediaListImpl *mediaList =
+            new DOM::MediaListImpl((DOM::CSSStyleSheetImpl *)nullptr, media().string(), true);
+        mediaList->ref();
+        khtml::MediaQueryEvaluator screenEval("screen", true);
+        khtml::MediaQueryEvaluator printEval("print", true);
+        if (screenEval.eval(mediaList) || printEval.eval(mediaList)) {
+            DOM::CSSStyleSheetImpl *css = new DOM::CSSStyleSheetImpl(this);
+            css->ref();
+            css->parseString(text, !document()->inCompatMode());
+            css->setMedia(mediaList);
+            css->setTitle(title());
+            m_sheet = css;
+        }
+        mediaList->deref();
+    }
+
+    if (m_sheet) {
+        document()->updateStyleSelector();
+    }
 }
 
 StyleSheet *SVGStyleElement::sheet()

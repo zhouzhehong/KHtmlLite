@@ -146,6 +146,23 @@ void SVGElement::parseMappedAttribute(MappedAttribute *attr)
     else*/ if (attr->id() == ATTR_ID) {
             setHasID();
             document()->incDOMTreeVersion(DocumentImpl::TV_IDNameHref);
+        } else if (attr->id() == ATTR_CLASS) {
+            // class concept applies to SVG too (see XMLElementImpl comment).
+            // HTML sets the class list in HTMLElementImpl::parseAttribute;
+            // SVG elements take this path so CSS class selectors can match.
+            DOMString v(attr->value());
+            const QChar *characters = v.unicode();
+            unsigned length = v.length();
+            unsigned i = 0;
+            for (; i < length && characters[i].isSpace(); ++i) { }
+            setHasClass(i < length);
+            if (i < length) {
+                attributes()->setClass(v);
+            } else {
+                attributes()->clearClass();
+            }
+            document()->incDOMTreeVersion(DocumentImpl::TV_Class);
+            setChanged();
         } else {
             StyledElement::parseAttribute(attr);
         }

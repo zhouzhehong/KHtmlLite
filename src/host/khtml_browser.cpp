@@ -1,4 +1,4 @@
-﻿// KHtmlLite - multi-process sandboxed browser shell on KHTML.
+// KHtmlLite - multi-process sandboxed browser shell on KHTML.
 //
 // Architecture (Safari-style):
 //   UI process (this file)  — tabs, address bar, memory budget, crash recovery
@@ -527,14 +527,17 @@ private slots:
                     m_embedded = true;
                     emit ready();
                 }
-            } else if (type == QLatin1String("frame")) {
-                // Software frame: "w,h,stride" — pixels are in shared memory.
+            } else if (type == QLatin1String("tiles")) {
+                // Tiled frame: "w,h" — the shared segment holds a tile grid:
+                // 32-byte header (w,h,tilesX,tilesY,dirtyCount), a dirty-tile
+                // index list, then tilesX*tilesY 256x256 RGBA tiles.  Only the
+                // listed tiles changed; the rest of the canvas stays valid.
                 const QStringList parts = data.split(QLatin1Char(','));
                 if (parts.size() >= 2) {
                     const int fw = parts[0].toInt();
                     const int fh = parts[1].toInt();
                     if (fw > 0 && fh > 0) {
-                        readFrame(fw, fh);
+                        readTiles(fw, fh);
                     }
                 }
             } else if (type == QLatin1String("framesize")) {
@@ -591,22 +594,44 @@ private:
         m_hasRestore = false;
     }
 
-    // Read a frame from shared memory and hand it to the PageSurface.
-    void readFrame(int w, int h)
+    // === Tiled frame transport: browser-side compositing ===
+    // Mirrors the renderer's layout (khtml_renderer.cpp).  The shared
+    // segment holds a fixed tile grid; each "tiles" message means the
+    // header's dirty-tile list was rewritten with the tiles it names.
+    static constexpr int kTileSize = 256;
+    static constexpr qsizetype kTileBytes = qsizetype(kTileSize) * kTileSize * 4;
+    static constexpr int kHeaderBytes = 32;
+    static qsizetype shmNeeded(int w, int h)
+    {
+        const int tx = (w + kTileSize - 1) / kTileSize;
+        const int ty = (h + kTileSize - 1) / kTileSize;
+        return qsizetype(kHeaderBytes) + qsizetype(tx) * ty * 4
+             + qsizetype(tx) * ty * kTileBytes;
+    }
+
+    // Read the dirty tiles from shared memory into the persistent canvas and
+    // hand the canvas to the PageSurface.  Clean tiles keep their previous
+    // pixels — that is where the tiling transport saves its bandwidth.
+    void readTiles(int w, int h)
     {
         if (!m_container) return;
         if (!m_shm) {
             m_shmKey = QStringLiteral("khtml_frame_%1").arg(m_socketName);
             m_shm = new QSharedMemory(m_shmKey, this);
         }
-        // If the renderer has recreated the segment at a new size, our old
-        // attachment is stale (refcount under a different object). Detach
-        // and re-attach so we pick up the new segment.
-        if (m_shm->isAttached() &&
-            (m_attachedShmW != w || m_attachedShmH != h)) {
+        // Only detach when the attached segment can no longer hold the
+        // announced grid — i.e. the renderer actually recreated it bigger.
+        // With the renderer's grow-only reuse, a plain frame-size change
+        // (restore, then maximize again) no longer means a new segment;
+        // detaching/reattaching on every size change was pure churn and
+        // added latency to exactly the transition the user notices.
+        const qsizetype needed = shmNeeded(w, h);
+        if (m_shm->isAttached() && m_shm->size() < needed) {
             m_shm->detach();
             m_attachedShmW = 0;
             m_attachedShmH = 0;
+            // The canvas we composited against the old grid is stale.
+            m_canvas = QImage();
         }
         if (!m_shm->isAttached()) {
             if (!m_shm->attach()) {
@@ -614,20 +639,65 @@ private:
                 return;
             }
         }
-        if (m_shm->size() < (qint64)w * h * 4) {
+        if (m_shm->size() < needed) {
             // Size mismatch — do not copy; the renderer will notify us via
             // "framesize" and recreate. Leave attached for the retry.
             return;
         }
         if (!m_shm->lock()) return;
-        QImage img((const uchar *)m_shm->constData(), w, h, w * 4,
-                   QImage::Format_RGB32);
-        // Copy out immediately so the renderer can overwrite the buffer.
-        QImage frame = img.copy();
+        const uchar *base = (const uchar *)m_shm->constData();
+        const qint32 *hdr = (const qint32 *)base;
+        const int fw = hdr[0], fh = hdr[1];
+        const int tilesX = hdr[2], tilesY = hdr[3];
+        const int dirtyCount = hdr[4];
+        // Sanity-check the header before trusting the index list.
+        if (fw != w || fh != h ||
+            tilesX != (w + kTileSize - 1) / kTileSize ||
+            tilesY != (h + kTileSize - 1) / kTileSize ||
+            dirtyCount < 0 || dirtyCount > tilesX * tilesY) {
+            m_shm->unlock();
+            return;
+        }
+        const qint32 *idx = hdr + kHeaderBytes / 4;
+        const uchar *tileData = base + kHeaderBytes + qsizetype(dirtyCount) * 4;
+
+        if (m_canvas.isNull() || m_canvas.width() != w ||
+            m_canvas.height() != h) {
+            // Frame-size commit.  Start white, but carry the overlap from the
+            // old canvas: a pure height change leaves those tiles valid (the
+            // renderer only re-paints the newly exposed bottom strip), so a
+            // fresh white canvas would flash on restore/maximize.
+            QImage next(w, h, QImage::Format_RGB32);
+            next.fill(Qt::white);
+            if (!m_canvas.isNull()) {
+                QPainter cp(&next);
+                cp.drawImage(0, 0, m_canvas);
+                cp.end();
+            }
+            m_canvas = next;
+        } else {
+            // detach() so we never mutate the QImage the PageSurface may
+            // still be painting from.
+            m_canvas.detach();
+        }
+        const int stride = m_canvas.bytesPerLine();
+        for (int k = 0; k < dirtyCount; ++k) {
+            const int t = idx[k];
+            if (t < 0 || t >= tilesX * tilesY) continue;
+            const int tx = t % tilesX;
+            const int ty = t / tilesX;
+            const uchar *src = tileData + qsizetype(t) * kTileBytes;
+            // Clip right/bottom edges: the frame size is exact, tiles are not.
+            const int copyW = qMin(kTileSize, w - tx * kTileSize) * 4;
+            const int copyH = qMin(kTileSize, h - ty * kTileSize);
+            uchar *dst = m_canvas.scanLine(ty * kTileSize) + qsizetype(tx) * kTileSize * 4;
+            for (int y = 0; y < copyH; ++y)
+                memcpy(dst + y * stride, src + y * kTileSize * 4, copyW);
+        }
         m_shm->unlock();
         m_attachedShmW = w;
         m_attachedShmH = h;
-        m_container->setFrame(frame);
+        m_container->setFrame(m_canvas);
     }
 
 public:
@@ -652,6 +722,8 @@ public:
     // to so a renderer-side segment recreation triggers a clean re-attach.
     int m_attachedShmW = 0, m_attachedShmH = 0;
     int m_desiredFrameW = 0, m_desiredFrameH = 0;
+    // Persistent page canvas for tile compositing (see readTiles).
+    QImage m_canvas;
     static int m_tabCounter;
 };
 int RenderTab::m_tabCounter = 0;

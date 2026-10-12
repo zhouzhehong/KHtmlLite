@@ -435,10 +435,29 @@ public:
         }
     }
 
+    // === Tiled frame transport (WebKit/Chromium-style tile compositing) ===
+    // The shared segment holds a fixed-size tile grid: a small header, a
+    // dirty-tile index list, then tilesX*tilesY tiles of 256x256 RGBA
+    // pixels packed row-major.  Only tiles intersecting the accumulated
+    // damage region are re-rendered and copied; clean tiles keep their
+    // previous pixels, so the browser can composite from its own canvas.
+    static constexpr int kTileSize = 256;
+    static constexpr qsizetype kTileBytes = qsizetype(kTileSize) * kTileSize * 4;
+    static constexpr int kHeaderBytes = 32;
+
+    // Worst-case segment size for a frame of w x h (full dirty list).
+    static qsizetype shmNeeded(int w, int h)
+    {
+        const int tx = (w + kTileSize - 1) / kTileSize;
+        const int ty = (h + kTileSize - 1) / kTileSize;
+        return qsizetype(kHeaderBytes) + qsizetype(tx) * ty * 4
+             + qsizetype(tx) * ty * kTileBytes;
+    }
+
     // Capture the current KHTML view into shared memory and notify the
-    // browser.  Called from a 30 fps timer and from scheduleFrame() on input.
-    // Does not block the browser.  Uses dirty-region partial rendering when
-    // the changed area is small (< 60% of viewport).
+    // browser.  Called from a 30 fps timer and from scheduleFrame() on
+    // input.  Does not block the browser.  With no damage and no size
+    // change, this is a pure no-op (no render, no memcpy, no IPC).
     void grabFrame()
     {
         m_framePending = false;
@@ -453,95 +472,129 @@ public:
 
         ensureShm(fw, fh);
         if (!m_frameShmReady || !m_shm->isAttached()) return;
-        if (!m_shm->lock()) return;
 
-        // Decide full vs partial render.
-        const qint64 viewArea = (qint64)fw * fh;
-        QRect dirtyRect = m_dirtyRegion.boundingRect();
-        dirtyRect = dirtyRect.intersected(QRect(0, 0, fw, fh));
-        const bool partial = !dirtyRect.isEmpty() &&
-            ((qint64)dirtyRect.width() * dirtyRect.height() < viewArea * 6 / 10);
+        const int tilesX = (fw + kTileSize - 1) / kTileSize;
+        const int tilesY = (fh + kTileSize - 1) / kTileSize;
+        const QRect frameRect(0, 0, fw, fh);
 
-        if (partial && !m_frameBuffer.isNull() &&
-            m_frameBuffer.width() == fw && m_frameBuffer.height() == fh) {
-            // Partial: render only the dirty sub-rect into a temp image, then
-            // composite into the persistent frame buffer.
-            QImage sub(dirtyRect.size(), QImage::Format_RGB32);
-            sub.fill(Qt::white);
-            QPainter sp(&sub);
-            w->render(&sp, QPoint(), QRegion(dirtyRect));
-            sp.end();
-            QPainter fp(&m_frameBuffer);
-            fp.drawImage(dirtyRect.topLeft(), sub);
-            fp.end();
-        } else {
-            // Full frame render.
-            m_frameBuffer = QImage(fw, fh, QImage::Format_RGB32);
-            m_frameBuffer.fill(Qt::white);
-            QPainter p(&m_frameBuffer);
-            w->render(&p);
-            p.end();
-        }
-        m_dirtyRegion = QRegion();
+        // Damage policy (see resize handler): a width change forces a KHTML
+        // relayout, so every tile is dirty — this also covers segment
+        // recreation (m_tilesX reset).  A pure height growth keeps all
+        // existing rows at the same tile indices: only the newly exposed
+        // bottom strip is painted.  A pure height shrink invalidates
+        // nothing; the browser simply crops its canvas.
+        if (m_relayoutPending || tilesX != m_tilesX)
+            m_dirtyRegion = QRegion(frameRect);
+        else if (fh > m_frameH)
+            m_dirtyRegion += QRect(0, m_frameH, fw, fh - m_frameH);
+        m_relayoutPending = false;
 
-        // Copy to shared memory.
-        const qsizetype bytes = qsizetype(fw) * qsizetype(fh) * 4;
-        if (!m_shm || !m_shm->isAttached() || m_shm->size() < bytes) {
-            m_shm->unlock();
+        const QRegion dirty = m_dirtyRegion.intersected(frameRect);
+        const bool dimsChanged = (fw != m_frameW || fh != m_frameH);
+        if (dirty.isEmpty() && !dimsChanged)
+            return;  // nothing changed — browser keeps its existing canvas
+
+        // Collect dirty tile indices (ordered, row-major).
+        QVector<int> dirtyTiles;
+        for (int ty = 0; ty < tilesY; ++ty)
+            for (int tx = 0; tx < tilesX; ++tx) {
+                const QRect tileRect(tx * kTileSize, ty * kTileSize,
+                                     kTileSize, kTileSize);
+                if (dirty.intersects(tileRect))
+                    dirtyTiles.append(ty * tilesX + tx);
+            }
+
+        const int headerBytes = kHeaderBytes + int(dirtyTiles.size()) * 4;
+        if (m_shm->size() < shmNeeded(fw, fh)) {
+            // Capacity race — ensureShm() should have covered this.
             return;
         }
-        uchar *dst = (uchar *)m_shm->data();
-        const qint64 copyBytes = (qint64)fw * fh * 4;
-        if (dst && m_shm->size() >= copyBytes) {
-            const int stride = m_frameBuffer.bytesPerLine();
-            if (stride == fw * 4) {
-                memcpy(dst, m_frameBuffer.constBits(), copyBytes);
-            } else {
-                for (int y = 0; y < fh; y++)
-                    memcpy(dst + y * fw * 4, m_frameBuffer.constScanLine(y), fw * 4);
-            }
+        if (!m_shm->lock()) return;
+        uchar *base = (uchar *)m_shm->data();
+        qint32 *idx = (qint32 *)(base + kHeaderBytes);
+        uchar *tileData = base + headerBytes;
+
+        // Render and copy only the dirty tiles.
+        for (int k = 0; k < dirtyTiles.size(); ++k) {
+            const int t = dirtyTiles[k];
+            idx[k] = t;
+            const int tx = t % tilesX;
+            const int ty = t / tilesX;
+            const QRect tileRect(tx * kTileSize, ty * kTileSize,
+                                 kTileSize, kTileSize);
+            QImage tile(kTileSize, kTileSize, QImage::Format_RGB32);
+            tile.fill(Qt::white);
+            QPainter sp(&tile);
+            w->render(&sp, QPoint(), QRegion(tileRect));
+            sp.end();
+            uchar *dst = tileData + qsizetype(t) * kTileBytes;
+            if (tile.bytesPerLine() == kTileSize * 4)
+                memcpy(dst, tile.constBits(), kTileBytes);
+            else
+                for (int y = 0; y < kTileSize; y++)
+                    memcpy(dst + y * kTileSize * 4, tile.constScanLine(y),
+                           kTileSize * 4);
         }
+
+        // Header is written LAST so the reader never sees a header
+        // describing tiles that are not yet copied.
+        qint32 *hdr = (qint32 *)base;
+        hdr[0] = fw;
+        hdr[1] = fh;
+        hdr[2] = tilesX;
+        hdr[3] = tilesY;
+        hdr[4] = dirtyTiles.size();
         m_shm->unlock();
-        sendMessage(QStringLiteral("frame"),
-                    QStringLiteral("%1,%2,%3").arg(fw).arg(fh).arg(fw * 4));
+
+        m_frameW = fw;
+        m_frameH = fh;
+        m_tilesX = tilesX;
+        m_tilesY = tilesY;
+        m_dirtyRegion = QRegion();
+        sendMessage(QStringLiteral("tiles"),
+                    QStringLiteral("%1,%2").arg(fw).arg(fh));
     }
 
-    // (Re)allocate shared memory to fit the given frame size.
-    // Invariant: on return, if m_frameShmReady is true,
-    //   m_shm->size() >= (qint64)m_frameW * m_frameH * 4.
-    // grabFrame() never memcpy's beyond the attached segment.
+    // (Re)allocate shared memory to fit the tile grid for the given frame
+    // size.  Invariant: on return, if m_frameShmReady is true,
+    //   m_shm->size() >= shmNeeded(w, h).
+    // Grow-only: the segment is kept as long as it can hold the grid, so a
+    // maximize -> restore -> maximize cycle no longer destroys/recreates
+    // it per transition.  A recreated segment starts uninitialized, so the
+    // tile grid bookkeeping is reset to force a full tile re-write.
     void ensureShm(int w, int h)
     {
         if (!m_shm) { m_frameShmReady = false; return; }
-        const qsizetype needed = qsizetype(w) * qsizetype(h) * qsizetype(4);
-        if (m_shm->isAttached() && m_shm->size() >= needed &&
-            m_frameW == w && m_frameH == h) {
+        const qsizetype needed = shmNeeded(w, h);
+        if (m_shm->isAttached() && m_shm->size() >= needed) {
             m_frameShmReady = true;
             m_sizeMismatchNotified = false;
             return;
         }
         if (m_shm->isAttached()) m_shm->detach();
         if (!m_shm->create(needed)) {
-            // create() failed — on Windows the Browser may still hold the old
-            // segment open with a smaller size.  Try to attach to it.
+            // create() failed — on Windows the Browser may still hold the
+            // old segment open with a smaller size.  Try to attach to it.
             if (!m_shm->attach()) {
                 m_frameShmReady = false;
                 m_frameW = 0;
                 m_frameH = 0;
-                m_frameBuffer = QImage();
+                m_tilesX = 0;
+                m_tilesY = 0;
                 m_dirtyRegion = QRegion();
                 return;
             }
             if (m_shm->size() < needed) {
                 // Existing segment is too small for this frame.  Cannot
                 // resize while the Browser holds it.  Mark not ready so
-                // grabFrame() skips the memcpy instead of overrunning.
+                // grabFrame() skips the copy instead of overrunning.
                 // Tell the Browser once to detach its old segment so the
                 // next tick's create(needed) can succeed.
                 m_frameShmReady = false;
                 m_frameW = 0;
                 m_frameH = 0;
-                m_frameBuffer = QImage();
+                m_tilesX = 0;
+                m_tilesY = 0;
                 m_dirtyRegion = QRegion();
                 if (!m_sizeMismatchNotified) {
                     m_sizeMismatchNotified = true;
@@ -550,26 +603,15 @@ public:
                 }
                 return;
             }
-            // Attached to an existing segment that is large enough (e.g. the
-            // Browser had pre-created it). Fall through and use it.
+            // Attached to an existing segment that is large enough (e.g.
+            // the Browser had pre-created it). Fall through and use it.
         }
-        // create() succeeded, or we attached to a sufficiently large segment.
-        // Defensive invariant check before trusting the segment.
-        if (m_shm->size() < needed) {
-            m_frameShmReady = false;
-            m_frameW = 0;
-            m_frameH = 0;
-            m_frameBuffer = QImage();
-            m_dirtyRegion = QRegion();
-            return;
-        }
-        m_frameW = w;
-        m_frameH = h;
+        // Fresh segment — its tile payload is undefined.  Reset the grid
+        // bookkeeping so grabFrame() marks every tile dirty once.
+        m_tilesX = 0;
+        m_tilesY = 0;
         m_frameShmReady = true;
         m_sizeMismatchNotified = false;
-        // Size change invalidates the persistent frame buffer.
-        m_frameBuffer = QImage();
-        m_dirtyRegion = QRegion();
     }
 
     // === Input dispatch (WebKit EventDispatcher, lightweight) ===
@@ -871,11 +913,19 @@ private slots:
         if (hasPendingResize && m_view) {
             m_view->widget()->resize(pendingW, pendingH);
             ensureShm(pendingW, pendingH);
-            // Request a frame immediately after the resize instead of waiting
-            // for the next 33 ms timer tick.  The synchronous relayout above
-            // is already paid; the sooner the first frame at the new size is
-            // delivered, the sooner the browser stops scaling the stale frame.
-            invalidateFull();
+            // Damage policy for the tiled transport: a width change forces
+            // a KHTML relayout, so the whole frame must be repainted.
+            // A pure height change leaves the page layout untouched: the
+            // existing tiles stay valid and only the newly exposed bottom
+            // strip (if any) is painted — grabFrame() adds that strip from
+            // the committed-vs-new frame height.
+            if (pendingW != m_frameW)
+                m_relayoutPending = true;
+            // Request a frame immediately after the resize instead of
+            // waiting for the next 33 ms timer tick.  The synchronous
+            // relayout above is already paid; the sooner the first frame
+            // at the new size is delivered, the sooner the browser stops
+            // scaling the stale frame.
             scheduleFrame();
         }
     }
@@ -933,9 +983,14 @@ private:
     bool m_hasPendingWheel = false;
     int m_wheelMouseX = 0, m_wheelMouseY = 0;
     Qt::KeyboardModifiers m_wheelModifiers;
-    // === Dirty region + frame scheduling ===
+    // === Dirty region + frame scheduling (tiled transport) ===
     QRegion m_dirtyRegion;
-    QImage m_frameBuffer;   // persistent buffer for partial updates
+    // Tile grid dims of the segment's current payload (0 = uninitialized;
+    // forces a full tile re-write on the next grabFrame).
+    int m_tilesX = 0, m_tilesY = 0;
+    // Set when a resize changed the viewport width: KHTML relayouts, so
+    // all tiles are dirty regardless of tile-grid coincidence.
+    bool m_relayoutPending = false;
     bool m_framePending = false;
 };
 

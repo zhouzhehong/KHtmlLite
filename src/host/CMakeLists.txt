@@ -115,6 +115,11 @@ if(BUILD_PROBE_TOOLS)
     target_link_libraries(khtml_qnam PRIVATE ${KHTML_HOST_LIBS})
     target_compile_options(khtml_qnam PRIVATE ${KHTML_HOST_COMPILE_OPTS})
 
+    add_executable(probe_svg probe_svg.cpp)
+    target_include_directories(probe_svg PRIVATE ${KHTML_HOST_INCLUDES})
+    target_link_libraries(probe_svg PRIVATE ${KHTML_HOST_LIBS})
+    target_compile_options(probe_svg PRIVATE ${KHTML_HOST_COMPILE_OPTS})
+
     add_executable(khtml_csscap khtml_csscap.cpp)
     target_include_directories(khtml_csscap PRIVATE ${KHTML_HOST_INCLUDES})
     target_link_libraries(khtml_csscap PRIVATE ${KHTML_HOST_LIBS})
