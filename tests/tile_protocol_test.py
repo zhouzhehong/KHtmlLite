@@ -77,6 +77,22 @@ HEADER = 32
 TILE_BYTES = TILE * TILE
 
 
+def fnv1a_tile(rows):
+    """Must mirror the FNV-1a pass over pixel rows in khtml_renderer.cpp
+    grabFrame().  Hash input is the RGBA-ish bytes of a TILE x TILE image,
+    row by row; the exact color encoding does not matter as long as both
+    sides hash identical pixel sequences identically."""
+    h = 14695981039346656037
+    for row in rows:
+        for (r, g, b) in row:
+            for byte in (b, g, r, 255):  # BGRA32 order, as Format_RGB32
+                h ^= byte
+                h = (h * 1099511628211) & 0xFFFFFFFFFFFFFFFF
+    if h == 0:
+        h = 1  # renderer reserves 0 for "unknown slot content"
+    return h
+
+
 def grid(w, h):
     return (w + TILE - 1) // TILE, (h + TILE - 1) // TILE
 
@@ -96,6 +112,8 @@ class RendererModel:
         self.tiles_y = 0
         self.dirty = []  # list of rects (x, y, w, h)
         self.relayout_pending = False
+        # Same-tile suppression cache (mirrors m_tileHashes): 0 = unknown.
+        self.tile_hashes = []
 
     @staticmethod
     def _rects_intersect(a, b):
@@ -110,8 +128,14 @@ class RendererModel:
             self.relayout_pending = True
         self.new_size = (w, h)
 
-    def grab_frame(self):
-        """Returns (tilesX, tilesY, dirtyTiles) or None (no-op frame)."""
+    def grab_frame(self, render_tile):
+        """render_tile(t, tx, ty) -> TILE x TILE pixel rows for slot t.
+        Returns:
+          None                        — pure no-op (no damage, no size change)
+          ("suppressed", tx, ty)      — damaged, but every tile rendered
+                                        identical: no upload, no IPC either
+          (tx, ty, tiles, images)     — tiles actually uploaded this frame
+                                        (browser is notified and composes)"""
         fw, fh = self.new_size
         tx, ty = grid(fw, fh)
         if self.relayout_pending or tx != self.tiles_x:
@@ -120,8 +144,6 @@ class RendererModel:
             self.dirty.append((0, self.fh, fw, fh - self.fh))
         self.relayout_pending = False
 
-        # intersect with frame rect
-        frame = (0, 0, fw, fh)
         eff = []
         for r in self.dirty:
             x1, y1 = max(r[0], 0), max(r[1], 0)
@@ -139,10 +161,31 @@ class RendererModel:
                 if any(self._rects_intersect(r, tr) for r in eff):
                     dirty_tiles.append(yy * tx + xx)
 
+        # Same-tile suppression: render+hash each damaged tile, keep only
+        # changed ones (mirrors grabFrame pass 1 with deferred hash commit).
+        if len(self.tile_hashes) != tx * ty:
+            self.tile_hashes = [0] * (tx * ty)
+        up_tiles, up_images, up_hashes = [], [], []
+        for t in dirty_tiles:
+            img = render_tile(t, tx, ty)
+            h = fnv1a_tile(img)
+            if h == self.tile_hashes[t]:
+                continue
+            up_tiles.append(t)
+            up_images.append(img)
+            up_hashes.append(h)
+        # Hash commit happens only after a successful SHM write; in this
+        # model the write always succeeds, so commit here.
+        for t, h in zip(up_tiles, up_hashes):
+            self.tile_hashes[t] = h
+
         self.fw, self.fh = fw, fh
         self.tiles_x, self.tiles_y = tx, ty
         self.dirty = []
-        return tx, ty, dirty_tiles
+
+        if not up_tiles and not dims_changed:
+            return ("suppressed", tx, ty)
+        return (tx, ty, up_tiles, up_images)
 
 
 class BrowserModel:
@@ -151,7 +194,8 @@ class BrowserModel:
     def __init__(self):
         self.canvas = None  # 2D list of (r,g,b) tuples or None
 
-    def commit(self, w, h, tx, ty, tile_images, dirty_tiles):
+    def commit(self, w, h, tx, ty, dirty_tiles, tile_images):
+        """dirty_tiles / tile_images are parallel lists (only uploaded tiles)."""
         if self.canvas is None or len(self.canvas) != h or \
            (h and len(self.canvas[0]) != w):
             next_c = [[(255, 255, 255) for _ in range(w)] for _ in range(h)]
@@ -161,10 +205,9 @@ class BrowserModel:
                     for x in range(min(w, ow)):
                         next_c[y][x] = self.canvas[y][x]
             self.canvas = next_c
-        for t in dirty_tiles:
+        for t, src in zip(dirty_tiles, tile_images):
             assert 0 <= t < tx * ty
             cxx, cyy = t % tx, t // tx
-            src = tile_images[t]
             copy_w = min(TILE, w - cxx * TILE)
             copy_h = min(TILE, h - cyy * TILE)
             for y in range(copy_h):
@@ -172,6 +215,9 @@ class BrowserModel:
                 srow = src[y]
                 for x in range(copy_w):
                     row[cxx * TILE + x] = srow[x]
+            # Also keep the SHM-slot illusion: suppressed tiles must already
+            # match what the browser holds, which the final canvas check
+            # below verifies on every step.
 
 
 def region_color(rev, x, y):
@@ -190,9 +236,8 @@ def run_random_sequence(seed, steps=40, dim=512, verbose=False):
     true_rev = [[0 for _ in range(w)] for _ in range(h)]
     rev_counter = 0
     renderer.resize(w, h, width_changed=True)
-    tile_store = {}
 
-    def render_tile(t, tx):
+    def render_tile(t, tx, ty):
         cxx, cyy = t % tx, t // tx
         out = []
         for y in range(TILE):
@@ -208,8 +253,10 @@ def run_random_sequence(seed, steps=40, dim=512, verbose=False):
             out.append(row)
         return out
 
+    stats = {"none": 0, "suppressed": 0, "upload": 0, "noop_dmg": 0}
+
     for step in range(steps):
-        action = rnd.choice(["dmg", "dmg", "dmg", "resize", "idle"])
+        action = rnd.choice(["dmg", "dmg", "dmg-noop", "resize", "idle"])
         if action == "dmg":
             rev_counter += 1
             rx, ry = rnd.randrange(w), rnd.randrange(h)
@@ -218,6 +265,14 @@ def run_random_sequence(seed, steps=40, dim=512, verbose=False):
                 row = true_rev[py]
                 for px in range(rx, rx + rw):
                     row[px] = rev_counter
+            renderer.damage(rx, ry, rw, rh)
+        elif action == "dmg-noop":
+            # Damage without a pixel change — the real-world "click on a
+            # blank area / hover without restyle" case.  Should be fully
+            # eaten by same-tile suppression.
+            stats["noop_dmg"] += 1
+            rx, ry = rnd.randrange(w), rnd.randrange(h)
+            rw, rh = rnd.randint(1, w - rx), rnd.randint(1, h - ry)
             renderer.damage(rx, ry, rw, rh)
         elif action == "resize":
             nw = rnd.randint(TILE // 2, dim) if rnd.random() < 0.5 else w
@@ -240,12 +295,15 @@ def run_random_sequence(seed, steps=40, dim=512, verbose=False):
             w, h = nw, nh
         # idle: no damage
 
-        result = renderer.grab_frame()
-        if result is not None:
-            tx, ty, dirty_tiles = result
-            for t in dirty_tiles:
-                tile_store[t] = render_tile(t, tx)
-            browser.commit(w, h, tx, ty, tile_store, dirty_tiles)
+        result = renderer.grab_frame(render_tile)
+        if result is None:
+            stats["none"] += 1
+        elif result[0] == "suppressed":
+            stats["suppressed"] += 1
+        else:
+            tx, ty, up_tiles, up_images = result
+            stats["upload"] += 1
+            browser.commit(w, h, tx, ty, up_tiles, up_images)
 
         # Verify: browser canvas == true page, everywhere.
         if browser.canvas is None:
@@ -261,11 +319,23 @@ def run_random_sequence(seed, steps=40, dim=512, verbose=False):
         if verbose:
             print("  step %02d ok (%s, %dx%d)" % (step, action, w, h))
 
+    # Suppression must actually engage: noop damages change no pixels, so a
+    # frame containing only noop damage is always fully suppressed.
+    if stats["noop_dmg"] >= 3:
+        assert stats["suppressed"] >= 1, \
+            "same-tile suppression never fired: %s" % (stats,)
+    return stats
+
 
 def test_model():
+    total = {"none": 0, "suppressed": 0, "upload": 0, "noop_dmg": 0}
     for seed in range(20):
-        run_random_sequence(seed)
+        s = run_random_sequence(seed)
+        for k in total:
+            total[k] += s[k]
     print("  20 random sequences x 40 steps: canvas matches true page")
+    print("  frame stats: %s" % total)
+    assert total["suppressed"] > 0, "suppression path never exercised"
 
 
 def test_segment_layout():
