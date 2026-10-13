@@ -465,6 +465,11 @@ public:
     // change, this is a pure no-op (no render, no memcpy, no IPC).
     void grabFrame()
     {
+        static bool s_loggedFirstTick = false;
+        if (!s_loggedFirstTick) {
+            s_loggedFirstTick = true;
+            STARTUP_MARK("frame timer first tick");
+        }
         m_framePending = false;
         if (!m_view || !m_shm) return;
         QWidget *w = m_view->widget();
@@ -613,8 +618,10 @@ public:
         frameImage.fill(Qt::white);
         {
             QPainter fp(&frameImage);
+            STARTUP_MARK("render pass begin");
             w->render(&fp, QPoint(), QRegion(dirty));
             fp.end();
+            STARTUP_MARK("render pass done");
         }
 
         // FNV-1a over a normalized tile (frame pixels, white outside the
@@ -1053,7 +1060,10 @@ private slots:
         view->winId();
         ensureShm(view->width() > 0 ? view->width() : m_pendingW,
                   view->height() > 0 ? view->height() : m_pendingH);
-        sendMessage(QStringLiteral("ready"), QString());
+        // Carries renderer-local elapsed ms so the browser can compute an
+        // exact clock skew for startup-log alignment (report script uses it).
+        sendMessage(QStringLiteral("ready"),
+                    QString::number(StartupLog::clock().elapsed()));
         m_frameTimer->start();
     }
 

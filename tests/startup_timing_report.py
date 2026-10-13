@@ -27,6 +27,22 @@ def load(path):
     return rows
 
 
+def skew_offset(rows):
+    """Exact inter-process clock skew from the ready handshake: the renderer
+    sends its local elapsed ms; the browser logs a 'clock skew ms=N' mark.
+    N = renderer-local-ms→browser-clock offset for all renderer rows."""
+    for ms, proc, lbl in rows:
+        if proc.startswith("KHtmlLite") and lbl.startswith("clock skew ms="):
+            try:
+                # label carries N = browser_elapsed − renderer_elapsed;
+                # adding N to renderer rows approximates browser-clock times
+                # (true offset ≤ N by the one-way delivery delay).
+                return int(lbl.split("=", 1)[1])
+            except ValueError:
+                pass
+    return None
+
+
 def anchor_offset(rows):
     """Compute renderer-clock offset so its timeline lines up with the
     browser clock: the browser-side 'socket connected' corresponds to the
@@ -54,7 +70,11 @@ def main():
         print("log is empty")
         return 1
 
-    off = anchor_offset(rows)
+    off = skew_offset(rows)
+    if off is None:
+        off = anchor_offset(rows)
+        print("(renderer clock aligned via socket-connect anchor; no "
+              "ready-payload skew mark found)")
     events = []
     for ms, proc, label in rows:
         is_rend = proc.startswith("KHtmlLiteRenderer")

@@ -597,6 +597,11 @@ private slots:
 
     void onSocketReady()
     {
+        static bool s_loggedFirstData = false;
+        if (!s_loggedFirstData) {
+            s_loggedFirstData = true;
+            STARTUP_MARK("socket first data received");
+        }
         while (m_socket && m_socket->canReadLine()) {
             const QByteArray line = m_socket->readLine().trimmed();
             const QJsonDocument doc = QJsonDocument::fromJson(line);
@@ -606,6 +611,14 @@ private slots:
             const QString data = obj.value(QStringLiteral("data")).toString();
             if (type == QLatin1String("ready")) {
                 // Renderer is up and its offscreen surface is initialized.
+                // data = renderer-local ms at send → precise inter-process
+                // clock skew for the startup log (us minus renderer).
+                if (!data.isEmpty() && StartupLog::enabled()) {
+                    const qint64 rendMs = data.toLongLong();
+                    const qint64 skew = StartupLog::clock().elapsed() - rendMs;
+                    STARTUP_MARK(QStringLiteral("clock skew ms=%1")
+                                 .arg(skew).toUtf8().constData());
+                }
                 flushPendingResize();
                 if (!m_embedded) {
                     m_embedded = true;
@@ -754,6 +767,7 @@ private:
     {
         if (!m_container) return;
         if (!m_gotFirstFrame) {
+            STARTUP_MARK("tiles message dispatched");
             m_gotFirstFrame = true;
             STARTUP_MARK("first frame composited");
         }
@@ -913,7 +927,9 @@ public:
     {
         setWindowTitle(QStringLiteral("KHtmlLite"));
         resize(1024, 720);
+        STARTUP_MARK("chrome build begin");
         buildChrome();
+        STARTUP_MARK("chrome built");
         m_memLabel = new QLabel(QStringLiteral("内存 -- MB"), this);
         statusBar()->addPermanentWidget(m_memLabel);
         m_memTimer = new QTimer(this);
@@ -923,6 +939,7 @@ public:
         m_resizeTimer->setSingleShot(true);
         connect(m_resizeTimer, &QTimer::timeout, this, &KHtmlLiteWindow::applyPendingResize);
         addTab(start.isEmpty() ? QUrl(QStringLiteral("https://cn.bing.com")) : start);
+        STARTUP_MARK("first tab added");
         syncChrome();
     }
 
