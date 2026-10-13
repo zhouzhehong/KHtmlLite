@@ -504,29 +504,76 @@ public:
                     dirtyTiles.append(ty * tilesX + tx);
             }
 
-        const int headerBytes = kHeaderBytes + int(dirtyTiles.size()) * 4;
+        // Same-tile suppression cache: FNV-1a hashes of the pixels most
+        // recently uploaded for each tile slot.  Damage granularity is
+        // coarse (any input currently invalidates the full frame), so many
+        // "dirty" tiles render back pixel-identical; those are skipped
+        // below, before the memcpy and before entering the index list.  A
+        // zero entry means "unknown slot content" and never suppresses.
+        if (m_tileHashes.size() != tilesX * tilesY) {
+            m_tileHashes.fill(0, tilesX * tilesY);
+        }
+
         if (m_shm->size() < shmNeeded(fw, fh)) {
             // Capacity race — ensureShm() should have covered this.
             return;
         }
-        if (!m_shm->lock()) return;
-        uchar *base = (uchar *)m_shm->data();
-        qint32 *idx = (qint32 *)(base + kHeaderBytes);
-        uchar *tileData = base + headerBytes;
 
-        // Render and copy only the dirty tiles.
+        // Pass 1: render the damaged tiles and hash their pixels.  Damage is
+        // coarse (any input currently invalidates the full frame), so many
+        // "dirty" tiles render back pixel-identical to the previous upload;
+        // those are suppressed before any SHM write and before entering the
+        // index list, saving both the renderer's memcpy and the browser's
+        // composite repaint.  The hash compares freshly rendered pixels, so
+        // suppression can never leave a stale canvas: identical is
+        // identical, whatever the damage region claimed.
+        QVector<QImage> uploadImages;
+        QVector<int> uploadTiles;
+        QVector<quint64> uploadHashes;
+        uploadImages.reserve(dirtyTiles.size());
+        uploadTiles.reserve(dirtyTiles.size());
+        uploadHashes.reserve(dirtyTiles.size());
         for (int k = 0; k < dirtyTiles.size(); ++k) {
             const int t = dirtyTiles[k];
-            idx[k] = t;
-            const int tx = t % tilesX;
-            const int ty = t / tilesX;
-            const QRect tileRect(tx * kTileSize, ty * kTileSize,
+            const QRect tileRect((t % tilesX) * kTileSize,
+                                 (t / tilesX) * kTileSize,
                                  kTileSize, kTileSize);
             QImage tile(kTileSize, kTileSize, QImage::Format_RGB32);
             tile.fill(Qt::white);
             QPainter sp(&tile);
             w->render(&sp, QPoint(), QRegion(tileRect));
             sp.end();
+
+            // FNV-1a over the pixel rows (stride-independent).
+            quint64 h = 14695981039346656037ULL;
+            for (int y = 0; y < kTileSize; ++y) {
+                const uchar *row = tile.constScanLine(y);
+                for (int b = 0; b < kTileSize * 4; ++b) {
+                    h ^= row[b];
+                    h *= 1099511628211ULL;
+                }
+            }
+            if (h == 0) h = 1;  // reserve 0 for "unknown slot content"
+            if (h == m_tileHashes[t])
+                continue;  // pixel-identical to the last upload: skip
+            // Do NOT commit m_tileHashes yet: if the SHM lock below fails we
+            // must not believe these pixels were uploaded.
+            uploadTiles.append(t);
+            uploadImages.append(tile);
+            uploadHashes.append(h);
+        }
+        const int dirtyCount = uploadTiles.size();
+        const int headerBytes = kHeaderBytes + dirtyCount * 4;
+
+        // Pass 2: write the surviving index list and tile payloads.
+        if (!m_shm->lock()) return;
+        uchar *base = (uchar *)m_shm->data();
+        qint32 *idx = (qint32 *)(base + kHeaderBytes);
+        uchar *tileData = base + headerBytes;
+        for (int k = 0; k < dirtyCount; ++k) {
+            const int t = uploadTiles[k];
+            idx[k] = t;
+            const QImage &tile = uploadImages[k];
             uchar *dst = tileData + qsizetype(t) * kTileBytes;
             if (tile.bytesPerLine() == kTileSize * 4)
                 memcpy(dst, tile.constBits(), kTileBytes);
@@ -535,6 +582,7 @@ public:
                     memcpy(dst + y * kTileSize * 4, tile.constScanLine(y),
                            kTileSize * 4);
         }
+        uploadImages.clear();
 
         // Header is written LAST so the reader never sees a header
         // describing tiles that are not yet copied.
@@ -543,16 +591,26 @@ public:
         hdr[1] = fh;
         hdr[2] = tilesX;
         hdr[3] = tilesY;
-        hdr[4] = dirtyTiles.size();
+        hdr[4] = dirtyCount;
         m_shm->unlock();
+
+        // The upload is durable now — commit the suppression hashes.
+        for (int k = 0; k < dirtyCount; ++k)
+            m_tileHashes[uploadTiles[k]] = uploadHashes[k];
+
+        if (dirtyCount == 0 && !dimsChanged) {
+            // Every damaged tile rendered identical to the last upload — the
+            // frame content is unchanged, so skip the IPC notification too.
+        } else {
+            sendMessage(QStringLiteral("tiles"),
+                        QStringLiteral("%1,%2").arg(fw).arg(fh));
+        }
 
         m_frameW = fw;
         m_frameH = fh;
         m_tilesX = tilesX;
         m_tilesY = tilesY;
         m_dirtyRegion = QRegion();
-        sendMessage(QStringLiteral("tiles"),
-                    QStringLiteral("%1,%2").arg(fw).arg(fh));
     }
 
     // (Re)allocate shared memory to fit the tile grid for the given frame
@@ -582,6 +640,7 @@ public:
                 m_tilesX = 0;
                 m_tilesY = 0;
                 m_dirtyRegion = QRegion();
+                m_tileHashes.clear();
                 return;
             }
             if (m_shm->size() < needed) {
@@ -596,6 +655,7 @@ public:
                 m_tilesX = 0;
                 m_tilesY = 0;
                 m_dirtyRegion = QRegion();
+                m_tileHashes.clear();
                 if (!m_sizeMismatchNotified) {
                     m_sizeMismatchNotified = true;
                     sendMessage(QStringLiteral("framesize"),
@@ -607,9 +667,11 @@ public:
             // the Browser had pre-created it). Fall through and use it.
         }
         // Fresh segment — its tile payload is undefined.  Reset the grid
-        // bookkeeping so grabFrame() marks every tile dirty once.
+        // bookkeeping so grabFrame() marks every tile dirty once, and clear
+        // the suppression cache so every tile is uploaded at least once.
         m_tilesX = 0;
         m_tilesY = 0;
+        m_tileHashes.clear();
         m_frameShmReady = true;
         m_sizeMismatchNotified = false;
     }
@@ -988,9 +1050,18 @@ private:
     // Tile grid dims of the segment's current payload (0 = uninitialized;
     // forces a full tile re-write on the next grabFrame).
     int m_tilesX = 0, m_tilesY = 0;
+    // Same-tile suppression: FNV-1a hashes of the pixels most recently
+    // uploaded per tile slot (0 = unknown, never suppresses).  Sized
+    // tilesX*tilesY; cleared whenever the shared segment is recreated,
+    // because a recreated segment's tile payload is undefined.
+    QVector<quint64> m_tileHashes;
     // Set when a resize changed the viewport width: KHTML relayouts, so
     // all tiles are dirty regardless of tile-grid coincidence.
     bool m_relayoutPending = false;
+    // Same-tile suppression: FNV-1a hashes of the pixels most recently
+    // uploaded per tile slot (0 = unknown).  Cleared when the segment is
+    // recreated so a fresh segment never gets suppressed uploads.
+    QVector<quint64> m_tileHashes;
     bool m_framePending = false;
 };
 
