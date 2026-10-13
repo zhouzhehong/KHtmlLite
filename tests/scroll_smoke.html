@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>scroll smoke</title>
+<style>
+  body { margin: 0; font-family: sans-serif; }
+  .band { height: 120px; padding: 12px; font-size: 28px; color: #fff; }
+  /* Distinct colors per band so pixel sampling can detect scrolling. */
+</style>
+</head>
+<body>
+<script>
+  // Generate 40 colored bands -> page height ~ 5120px, well over any test viewport.
+  const bands = 40;
+  const hue = i => (i * 37) % 360;
+  for (let i = 0; i < bands; i++) {
+    const d = document.createElement("div");
+    d.className = "band";
+    d.style.background = `hsl(${hue(i)},70%,45%)`;
+    d.textContent = "Band " + i;
+    document.body.appendChild(d);
+  }
+</script>
+</body>
+</html>
