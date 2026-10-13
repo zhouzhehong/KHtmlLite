@@ -76,11 +76,21 @@ public:
         pal.setColor(QPalette::Window, Qt::white);
         setPalette(pal);
     }
-    void setFrame(const QImage &img) {
+    // Publish a new frame.  dirty is the union of the frame-space rects that
+    // actually changed; an empty/null rect repaints everything.  Painting is
+    // a pure function of m_frame in every branch of paintEvent, so clipping
+    // the update to dirty is always correct; the only case that must stay a
+    // full repaint is a frame-size change, where pixels may have shifted or
+    // fallen outside the old frame area.
+    void setFrame(const QImage &img, const QRect &dirty = QRect()) {
+        const bool sizeChanged = m_frame.size() != img.size();
         m_frame = img;
         m_frameW = img.width();
         m_frameH = img.height();
-        update();
+        if (sizeChanged || dirty.isNull() || !dirty.isValid())
+            update();
+        else
+            update(dirty);
     }
     // Map a widget-relative point to frame coordinates.  The frame is always
     // drawn unscaled at the surface origin (see paintEvent), so this is an
@@ -661,8 +671,10 @@ private:
         const qint32 *idx = hdr + kHeaderBytes / 4;
         const uchar *tileData = base + kHeaderBytes + qsizetype(dirtyCount) * 4;
 
-        if (m_canvas.isNull() || m_canvas.width() != w ||
-            m_canvas.height() != h) {
+        const bool dimsChanged = m_canvas.isNull() ||
+                                 m_canvas.width() != w ||
+                                 m_canvas.height() != h;
+        if (dimsChanged) {
             // Frame-size commit.  Start white, but carry the overlap from the
             // old canvas: a pure height change leaves those tiles valid (the
             // renderer only re-paints the newly exposed bottom strip), so a
@@ -681,6 +693,11 @@ private:
             m_canvas.detach();
         }
         const int stride = m_canvas.bytesPerLine();
+        // Track the union of the tile rects actually copied (frame coords,
+        // clipped) so the PageSurface only repaints that area instead of the
+        // whole window.  On a frame-size change we repaint fully (handled via
+        // QRect() passed to setFrame below).
+        QRect dirtyUnion;
         for (int k = 0; k < dirtyCount; ++k) {
             const int t = idx[k];
             if (t < 0 || t >= tilesX * tilesY) continue;
@@ -693,11 +710,15 @@ private:
             uchar *dst = m_canvas.scanLine(ty * kTileSize) + qsizetype(tx) * kTileSize * 4;
             for (int y = 0; y < copyH; ++y)
                 memcpy(dst + y * stride, src + y * kTileSize * 4, copyW);
+            dirtyUnion = dirtyUnion.isNull()
+                ? QRect(tx * kTileSize, ty * kTileSize, copyW / 4, copyH)
+                : dirtyUnion.united(QRect(tx * kTileSize, ty * kTileSize,
+                                          copyW / 4, copyH));
         }
         m_shm->unlock();
         m_attachedShmW = w;
         m_attachedShmH = h;
-        m_container->setFrame(m_canvas);
+        m_container->setFrame(m_canvas, dimsChanged ? QRect() : dirtyUnion);
     }
 
 public:
