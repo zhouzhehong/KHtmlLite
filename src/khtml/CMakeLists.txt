@@ -28,6 +28,12 @@ set(CMAKE_CXX_EXTENSIONS ON)
 # --export-all-symbols ("symbol wrong type" on std::swap specializations) and
 # multiplies link-time memory. Both are fatal on small machines, so LTO stays
 # opt-in: configure with -DKHTML_ENABLE_IPO=ON where the toolchain allows it.
+# MinGW-w64: never turn imported-target include dirs into -isystem flags.
+# GCC on Windows breaks its builtin include chain (#include_next <stdlib.h>
+# from <cstdlib> fails) when /mingw64/include is re-added via -isystem,
+# which CMake otherwise does for many imported targets (Qt/KF5/image libs).
+set(CMAKE_NO_SYSTEM_FROM_IMPORTED ON)
+
 option(KHTML_ENABLE_IPO "Enable interprocedural/LTO optimization" OFF)
 if(KHTML_ENABLE_IPO)
     include(CheckIPOSupported)

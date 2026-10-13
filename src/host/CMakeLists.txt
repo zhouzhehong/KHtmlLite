@@ -2,6 +2,10 @@ cmake_minimum_required(VERSION 3.16)
 project(KHtmlLiteHost LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
+
+# See src/khtml/CMakeLists.txt: -isystem on <prefix>/include breaks GCC's
+# #include_next chain on Windows; keep imported includes as plain -I.
+set(CMAKE_NO_SYSTEM_FROM_IMPORTED ON)
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 

@@ -7,7 +7,8 @@ import subprocess
 import sys
 import time
 
-BUILD = r"C:\Users\zhouzhehong\Desktop\KHtmlLite\build-host"
+BUILD = os.environ.get("KHTML_BUILD_DIR",
+                       r"C:\Users\zhouzhehong\Desktop\KHtmlLite\build\host")
 LOG = os.path.join(BUILD, "khtml_startup.log")
 URL = sys.argv[1] if len(sys.argv) > 1 and sys.argv[1].startswith(("http", "file")) \
     else "https://cn.bing.com"
