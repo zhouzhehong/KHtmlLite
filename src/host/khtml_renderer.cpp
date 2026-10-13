@@ -34,6 +34,7 @@
 
 #include "pageloader.h"
 #include "perflog.h"
+#include "startuplog.h"
 
 #include <windows.h>
 #include <psapi.h>
@@ -327,6 +328,7 @@ public:
             QLocalServer::removeServer(socketName);
             m_server->listen(socketName);
         }
+        STARTUP_MARK("IPC server listening");
         connect(m_server, &QLocalServer::newConnection, this, &RendererHost::onClient);
         // PerfLog is a diagnostic tool that writes synchronously to disk on
         // every event (flush() after each PERF_MARK). Keep it disabled in
@@ -339,7 +341,9 @@ public:
         // This eliminates the WS_POPUP drag/freeze problem entirely: the
         // browser owns the only visible surface and window movement never
         // touches the renderer process.
+        STARTUP_MARK("RendererHost ctor: creating KHTMLPart");
         m_view = new RendererView(m_jsEnabled, nullptr);
+        STARTUP_MARK("KHTMLPart created");
         m_view->widget()->setEnabled(true);
         m_view->widget()->setFocusPolicy(Qt::StrongFocus);
         // Do NOT show the widget.  It remains offscreen; grab() renders it
@@ -717,6 +721,10 @@ public:
             sendMessage(QStringLiteral("tiles"),
                         QStringLiteral("%1,%2,%3,%4")
                             .arg(fw).arg(fh).arg(cx).arg(cy));
+            if (!m_sentFirstFrame) {
+                m_sentFirstFrame = true;
+                STARTUP_MARK("first frame uploaded");
+            }
         }
 
         m_frameW = fw;
@@ -1021,6 +1029,7 @@ public:
 private slots:
     void onClient()
     {
+        STARTUP_MARK("browser connected");
         m_socket = m_server->nextPendingConnection();
         connect(m_socket, &QLocalSocket::readyRead, this, &RendererHost::onMessage);
         connect(m_socket, &QLocalSocket::disconnected, this, []() {
@@ -1188,11 +1197,8 @@ private:
     // Set when a resize changed the viewport width: KHTML relayouts, so
     // all tiles are dirty regardless of tile-grid coincidence.
     bool m_relayoutPending = false;
-    // Same-tile suppression: FNV-1a hashes of the pixels most recently
-    // uploaded per tile slot (0 = unknown).  Cleared when the segment is
-    // recreated so a fresh segment never gets suppressed uploads.
-    QVector<quint64> m_tileHashes;
     bool m_framePending = false;
+    bool m_sentFirstFrame = false;  // startup timing: first tiles upload
 };
 
 int main(int argc, char **argv)
@@ -1200,15 +1206,18 @@ int main(int argc, char **argv)
     // Suppress Windows error dialogs on crash so the parent can detect exit.
     SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
 
+    STARTUP_MARK("main entry");
     // Install VEH + MiniDump before any Qt/KHTML code runs.
     char exePath[MAX_PATH];
     GetModuleFileNameA(NULL, exePath, MAX_PATH);
     char *slash = strrchr(exePath, '\\');
     if (slash) *slash = '\0';
     ccInit(exePath);
+    STARTUP_MARK("crash handler installed");
 
     QApplication app(argc, argv);
     app.setApplicationName(QStringLiteral("KHtmlLiteRenderer"));
+    STARTUP_MARK("QApplication ready");
     // Renderer has no visible windows in software-frame mode; prevent Qt from
     // auto-quitting when there are no top-level windows to close.
     app.setQuitOnLastWindowClosed(false);
@@ -1234,8 +1243,10 @@ int main(int argc, char **argv)
         socketName = QStringLiteral("khtml_renderer_%1").arg(QCoreApplication::applicationPid());
 
     RendererHost host(socketName, jsEnabled);
+    STARTUP_MARK("RendererHost constructed (KHTMLPart up)");
     host.showAt(w, h);
     host.loadInitial(QUrl(urlStr));
+    STARTUP_MARK("initial load kicked");
 
     return app.exec();
 }

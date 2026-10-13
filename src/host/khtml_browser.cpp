@@ -41,6 +41,7 @@
 #include <QMouseEvent>
 #include <QWheelEvent>
 #include <QKeyEvent>
+#include "startuplog.h"
 #include <functional>
 
 #define WIN32_LEAN_AND_MEAN
@@ -401,20 +402,31 @@ public:
         m_socket = new QLocalSocket(this);
         connect(m_socket, &QLocalSocket::readyRead, this, &RenderTab::onSocketReady);
         connect(m_socket, &QLocalSocket::connected, this, [this]() {
+            STARTUP_MARK("socket connected");
             sendRestoreIfConnected();
             flushPendingResize();
         });
         connect(m_socket, &QLocalSocket::errorOccurred, this, [this](QLocalSocket::LocalSocketError) {
-            // Server not ready yet — retry with backoff.
+            // Server not ready yet — retry with a short progressive backoff:
+            // the renderer normally listens within the first few hundred ms,
+            // so early retries should be quick; fall back to 100 ms later.
             if (m_connectRetries < 50) {
+                const int delay = m_connectRetries < 10 ? 25 : 100;
                 m_connectRetries++;
-                QTimer::singleShot(100, this, [this]() {
+                QTimer::singleShot(delay, this, [this]() {
                     if (m_socket) m_socket->connectToServer(m_socketName);
                 });
             }
         });
-        m_socket->connectToServer(m_socketName);
+        // Start the renderer FIRST, then connect: connecting to a
+        // not-yet-listening server fails unconditionally, and every failed
+        // attempt costs a backoff retry before the socket is up.  Starting
+        // the process first lets its QLocalServer exist by the time our
+        // first connect attempt lands in most cases.
+        STARTUP_MARK("tab start");
         m_process->start(exe, args);
+        STARTUP_MARK("renderer process start");
+        m_socket->connectToServer(m_socketName);
     }
 
     void navigate(const QUrl &url)
@@ -741,6 +753,10 @@ private:
     void readTiles(int w, int h)
     {
         if (!m_container) return;
+        if (!m_gotFirstFrame) {
+            m_gotFirstFrame = true;
+            STARTUP_MARK("first frame composited");
+        }
         if (!m_shm) {
             m_shmKey = QStringLiteral("khtml_frame_%1").arg(m_socketName);
             m_shm = new QSharedMemory(m_shmKey, this);
@@ -849,6 +865,7 @@ public:
     QString m_title;
     bool m_embedded = false;
     bool m_crashed = false;
+    bool m_gotFirstFrame = false;  // startup timing: first tiles composited
     // A resize arrived before the IPC socket was connected and still has to be
     // delivered (see resize / flushPendingResize).
     bool m_resizePending = false;
@@ -1384,9 +1401,11 @@ protected:
 int main(int argc, char **argv)
 {
     SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
+    STARTUP_MARK("main entry");
     QApplication app(argc, argv);
     app.setApplicationName(QStringLiteral("KHtmlLite"));
     app.setOrganizationName(QStringLiteral("KHtmlLite"));
+    STARTUP_MARK("QApplication ready");
     const QString caPath = QCoreApplication::applicationDirPath()
                            + QStringLiteral("/ssl-ca-bundle.crt");
     if (QFile::exists(caPath))
@@ -1394,7 +1413,9 @@ int main(int argc, char **argv)
     QUrl start;
     if (argc > 1) start = QUrl(QString::fromLocal8Bit(argv[1]));
     KHtmlLiteWindow w(start);
+    STARTUP_MARK("window constructed");
     w.show();
+    STARTUP_MARK("window shown");
     return app.exec();
 }
 
