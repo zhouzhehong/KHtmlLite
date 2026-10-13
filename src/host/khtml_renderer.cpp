@@ -349,11 +349,12 @@ public:
         m_shmKey = QStringLiteral("khtml_frame_%1").arg(socketName);
         m_shm = new QSharedMemory(m_shmKey, this);
 
-        // Frame capture timer: ~30 fps.  Coalesced naturally — if a grab is
-        // still in progress (unlikely for software render) the next tick simply
-        // overwrites the shared-memory buffer.
+        // Frame capture timer: ~60 fps, matching the display refresh (WebKit
+        // paints once per vsync).  Coalesced naturally — if a grab is
+        // still in progress the next tick simply overwrites the shared
+        // buffer; no-op frames are pure early-outs.
         m_frameTimer = new QTimer(this);
-        m_frameTimer->setInterval(33);
+        m_frameTimer->setInterval(16);
         connect(m_frameTimer, &QTimer::timeout, this, &RendererHost::grabFrame);
 
         connect(m_view, &RendererView::navigateRequested, this, [this](const QUrl &u) {
@@ -497,14 +498,17 @@ public:
         // back to the normal path below — shifted pixels plus independent
         // damage cannot be combined safely, so we repaint fully.
         int sdx = 0, sdy = 0;
+        int cx = 0, cy = 0;  // absolute KHTML scroll offset at capture time
+        bool scrollChecked = false;
         bool scrollFast = false;
         {
             KHTMLView *kv = m_view ? m_view->view() : nullptr;
             if (kv) {
-                const int cx = kv->contentsX();
-                const int cy = kv->contentsY();
+                cx = kv->contentsX();
+                cy = kv->contentsY();
                 if (m_pendingScrollCheck) {
                     m_pendingScrollCheck = false;
+                    scrollChecked = true;
                     if (m_haveScrollPos && m_dirtyRegion.isEmpty()
                             && !m_relayoutPending
                             && fw == m_frameW && fh == m_frameH) {
@@ -521,6 +525,15 @@ public:
         if (m_pendingScrollCheck)           // no view (or first frame): drop
             m_pendingScrollCheck = false;
 
+        if (scrollChecked && !scrollFast && m_dirtyRegion.isEmpty()) {
+            // Wheel at the page edge, or wheel that produced no scroll: the
+            // browser may have applied a predictive shift, so correct it
+            // with a zero-delta authoritative scroll message.
+            sendMessage(QStringLiteral("scroll"),
+                        QStringLiteral("0,0,%1,%2").arg(cx).arg(cy));
+            return;                         // nothing else changed
+        }
+
         if (scrollFast) {
             // Damage = only the viewport strip freshly scrolled into view.
             // Everything else stays at its shifted pixels on the browser.
@@ -532,9 +545,12 @@ public:
             m_dirtyRegion = strip;
 
             // Tell the browser to shift its canvas first; the strip tiles in
-            // this frame's "tiles" message land on the shifted canvas.
+            // this frame's "tiles" message land on the shifted canvas.  The
+            // absolute scroll offset rides along so the browser can reconcile
+            // its predictive scroll (WebKit async-scrolling-style handoff).
             sendMessage(QStringLiteral("scroll"),
-                        QStringLiteral("%1,%2").arg(sdx).arg(sdy));
+                        QStringLiteral("%1,%2,%3,%4")
+                            .arg(sdx).arg(sdy).arg(cx).arg(cy));
 
             // Deferred convergence: re-render everything a short moment
             // later, in case scrolling also repainted fixed-position or
@@ -699,7 +715,8 @@ public:
             // frame content is unchanged, so skip the IPC notification too.
         } else {
             sendMessage(QStringLiteral("tiles"),
-                        QStringLiteral("%1,%2").arg(fw).arg(fh));
+                        QStringLiteral("%1,%2,%3,%4")
+                            .arg(fw).arg(fh).arg(cx).arg(cy));
         }
 
         m_frameW = fw;

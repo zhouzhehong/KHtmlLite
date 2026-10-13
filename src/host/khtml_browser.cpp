@@ -87,7 +87,10 @@ public:
         m_frame = img;
         m_frameW = img.width();
         m_frameH = img.height();
-        if (sizeChanged || dirty.isNull() || !dirty.isValid())
+        // A scroll preview offsets the frame's draw position, so frame-space
+        // dirty rects do not map while a preview is active — repaint fully.
+        if (sizeChanged || dirty.isNull() || !dirty.isValid()
+                || m_previewDX != 0 || m_previewDY != 0)
             update();
         else
             update(dirty);
@@ -119,6 +122,26 @@ private:
 public:
     // Callback set by RenderTab to forward input events to the renderer.
     void setInputCallback(std::function<void(const QJsonObject &)> cb) { m_inputCb = std::move(cb); }
+
+    // Predictive scroll, presentation-only.  On wheel we add the predicted
+    // pixel delta to a transient draw offset so the content appears to move
+    // instantly; the committed frame pixels are untouched, so a wrong
+    // prediction never drops rows off the canvas edge.  The renderer's
+    // authoritative scroll message (absolute offset) calls
+    // resetScrollPreview() once the true frame arrives.
+    void bumpScrollPreview(int dx, int dy)
+    {
+        m_previewDX += dx;
+        m_previewDY += dy;
+        update();
+    }
+    void resetScrollPreview()
+    {
+        if (m_previewDX == 0 && m_previewDY == 0) return;
+        m_previewDX = 0;
+        m_previewDY = 0;
+        update();
+    }
 
     // Callback set by RenderTab: fires with this surface's real size every time
     // it actually changes.  This widget is the page viewport, so it — not the
@@ -178,7 +201,12 @@ protected:
         // arrive.  Scaling the frame like an image made slow relayout look
         // like a photo stretch.
         if (!m_frame.isNull()) {
-            p.drawImage(0, 0, m_frame);
+            // Draw 1:1 anchored, possibly with the transient predictive
+            // scroll offset (scrolling down moves content up, hence the
+            // negative sign).  The strip this exposes below/above the frame
+            // is filled by the trailing checkerboard pass when needed, or
+            // left white otherwise.
+            p.drawImage(QPoint(-m_previewDX, -m_previewDY), m_frame);
             if (m_frame.size() != size()) {
                 if (m_lastLoggedMismatch != m_frame.size()) {
                     m_lastLoggedMismatch = m_frame.size();
@@ -226,6 +254,18 @@ protected:
         // Use angleDelta() in full (both axes). Do NOT quantize by /120.
         m_pendingWheelDeltaX += e->angleDelta().x();
         m_pendingWheelDeltaY += e->angleDelta().y();
+        // Predictive scroll: shift the visible canvas NOW (~0.5px per wheel
+        // unit, close to Qt's default 3-line scroll step); the renderer's
+        // authoritative scroll message reconciles any prediction error.
+        // Predictive scroll, presentation-only: ~0.5px per wheel unit (close
+        // to Qt's default 3-line scroll step).  Moved pixels show instantly;
+        // the renderer's authoritative scroll message re-anchors.
+        {
+            const int pdx = qRound(e->angleDelta().x() * 0.5);
+            const int pdy = qRound(e->angleDelta().y() * 0.5);
+            if (pdx || pdy)
+                bumpScrollPreview(pdx, pdy);
+        }
         m_pendingWheelPos = mapToFrame(e->pos());
         m_pendingWheelMods = e->modifiers();
         if (!m_wheelTimer) {
@@ -282,6 +322,9 @@ private:
     int m_frameW = 0, m_frameH = 0;
     QSize m_lastLoggedMismatch;
     std::function<void(const QJsonObject &)> m_inputCb;
+    // Transient predictive-scroll draw offset (pixels).  Presentation only;
+    // always returns to 0 when the renderer's authoritative offset arrives.
+    int m_previewDX = 0, m_previewDY = 0;
     QMouseEvent m_pendingMove{QEvent::MouseMove, QPointF(), Qt::NoButton, Qt::NoButton, Qt::NoModifier};
     QPoint m_pendingMovePos;
     QTimer *m_moveTimer = nullptr;
@@ -557,39 +600,33 @@ private slots:
                     emit ready();
                 }
             } else if (type == QLatin1String("tiles")) {
-                // Tiled frame: "w,h" — the shared segment holds a tile grid:
-                // 32-byte header (w,h,tilesX,tilesY,dirtyCount), a dirty-tile
-                // index list, then tilesX*tilesY 256x256 RGBA tiles.  Only the
-                // listed tiles changed; the rest of the canvas stays valid.
+                // Tiled frame: "w,h[,cx,cy]" — the shared segment holds a tile
+                // grid: 32-byte header (w,h,tilesX,tilesY,dirtyCount), a
+                // dirty-tile index list, then tilesX*tilesY 256x256 RGBA
+                // tiles.  Only the listed tiles changed; the rest of the
+                // canvas stays valid.  cx,cy carry the renderer's absolute
+                // scroll offset, letting us reconcile predictive scroll.
                 const QStringList parts = data.split(QLatin1Char(','));
                 if (parts.size() >= 2) {
                     const int fw = parts[0].toInt();
                     const int fh = parts[1].toInt();
                     if (fw > 0 && fh > 0) {
+                        if (parts.size() >= 4)
+                            applyScrollAuthority(parts[2].toInt(),
+                                                 parts[3].toInt());
                         readTiles(fw, fh);
                     }
                 }
             } else if (type == QLatin1String("scroll")) {
-                // Scroll blit (renderer scroll fast path): the page content
-                // shifted rigidly by (dx,dy).  Shift our canvas now and
-                // white-fill the exposed edge; the strip tiles that actually
-                // changed follow immediately in a "tiles" message.
+                // Scroll blit / reconciliation: "sdx,sdy,cx,cy".  The page
+                // content shifted rigidly by (sdx,sdy) and now sits at the
+                // absolute offset (cx,cy).  Rather than trusting the delta we
+                // reconcile against the absolute offset, which also corrects
+                // any predictive scroll the user applied via the wheel since
+                // the last authoritative frame.
                 const QStringList parts = data.split(QLatin1Char(','));
-                if (parts.size() == 2 && m_container && !m_canvas.isNull()) {
-                    const int dx = parts[0].toInt();
-                    const int dy = parts[1].toInt();
-                    if (dx != 0 || dy != 0) {
-                        QImage shifted(m_canvas.size(), m_canvas.format());
-                        shifted.fill(Qt::white);
-                        QPainter sp(&shifted);
-                        sp.drawImage(QPoint(-dx, -dy), m_canvas);
-                        sp.end();
-                        m_canvas = shifted;
-                        // Everything moved: full repaint (a partial dirty
-                        // rect cannot express "all pixels changed place").
-                        m_container->setFrame(m_canvas);
-                    }
-                }
+                if (parts.size() >= 4 && m_container && !m_canvas.isNull())
+                    applyScrollAuthority(parts[2].toInt(), parts[3].toInt());
             } else if (type == QLatin1String("framesize")) {
                 // Renderer needs a larger SHM segment but cannot create it
                 // while we hold the old one attached. Detach so the next
@@ -642,6 +679,45 @@ private:
         m_socket->write(QJsonDocument(obj).toJson(QJsonDocument::Compact) + "\n");
         m_socket->flush();
         m_hasRestore = false;
+    }
+
+    // === Predictive scroll (WebKit async-scrolling analogue) ===
+    // Two layers, deliberately separated:
+    //  1. PageSurface paints the canvas with a transient "preview offset"
+    //     between wheel event and the renderer's authority message — pure
+    //     presentation, provides instant feedback; committed pixels are NOT
+    //     touched, so a wrong prediction never loses rows off the canvas
+    //     edge (that was the failure the protocol test caught).
+    //  2. applyScrollAuthority() shifts the canvas by the EXACT absolute
+    //     delta reported by the renderer ((cx,cy) rides on every "scroll"
+    //     and "tiles" message) and resets the preview.  Strip tiles in the
+    //     accompanying frame then fill the newly exposed rows.
+    void shiftCanvas(int dx, int dy)
+    {
+        if (m_canvas.isNull() || (dx == 0 && dy == 0)) return;
+        QImage shifted(m_canvas.size(), m_canvas.format());
+        shifted.fill(Qt::white);
+        QPainter sp(&shifted);
+        sp.drawImage(QPoint(-dx, -dy), m_canvas);
+        sp.end();
+        m_canvas = shifted;
+    }
+
+    void applyScrollAuthority(int cx, int cy)
+    {
+        if (!m_container) return;
+        const int dx = cx - m_baseCX;
+        const int dy = cy - m_baseCY;
+        m_baseCX = cx;
+        m_baseCY = cy;
+        m_container->resetScrollPreview();
+        if (dx == 0 && dy == 0)
+            return;
+        if (!m_canvas.isNull()) {
+            shiftCanvas(dx, dy);
+            // Everything moved: full repaint.
+            m_container->setFrame(m_canvas);
+        }
     }
 
     // === Tiled frame transport: browser-side compositing ===
@@ -785,6 +861,10 @@ public:
     int m_desiredFrameW = 0, m_desiredFrameH = 0;
     // Persistent page canvas for tile compositing (see readTiles).
     QImage m_canvas;
+    // Predictive-scroll bookkeeping (see applyScrollAuthority): the content
+    // offset the committed canvas currently corresponds to.  The transient
+    // wheel prediction lives in PageSurface (presentation only).
+    int m_baseCX = 0, m_baseCY = 0;
     static int m_tabCounter;
 };
 int RenderTab::m_tabCounter = 0;

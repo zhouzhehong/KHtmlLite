@@ -67,12 +67,20 @@ def test_static_consistency():
     print("  header fields hdr[0..4] present on both sides")
 
     # The scroll-blit fast path is a paired protocol feature: the renderer
-    # must emit "scroll" and the browser must handle it.
+    # must emit "scroll" and the browser must handle it.  Both "scroll" and
+    # "tiles" now carry the renderer's ABSOLUTE scroll offset (4 fields) for
+    # predictive-scroll reconciliation.
     assert 'sendMessage(QStringLiteral("scroll")' in rend, \
         "renderer does not emit scroll messages"
     assert 'QLatin1String("scroll")' in brow, \
         "browser does not handle scroll messages"
-    print("  scroll-blit message present on both sides")
+    assert '.arg(sdx).arg(sdy).arg(cx).arg(cy)' in rend, \
+        "renderer scroll message misses absolute offset"
+    assert '.arg(fw).arg(fh).arg(cx).arg(cy)' in rend, \
+        "renderer tiles message misses absolute offset"
+    assert 'applyScrollAuthority' in brow, \
+        "browser misses scroll reconciliation"
+    print("  scroll-blit + predictive reconciliation present on both sides")
 
     # WebKit-style render-once: the renderer must paint the frame surface
     # exactly once per grabFrame (tiles are crops of it).  A per-tile
@@ -390,10 +398,10 @@ def test_scroll_blit():
         return ((cx * 3 + cy) % 256, (cy * 7) % 256, ((cx ^ cy) * 5) % 256)
 
     browser = BrowserModel()
+    rnd = random.Random(7)
 
     # Initial frame at scroll offset 0: full upload.
     tx, ty = grid(fw, fh)
-    rev0 = [[0]]  # unused; color is a function of absolute coords
 
     def render_tile_at(t, scroll_y):
         cxx, cyy = t % tx, t // tx
@@ -406,31 +414,52 @@ def test_scroll_blit():
     imgs0 = [render_tile_at(t, 0) for t in tiles0]
     browser.commit(fw, fh, tx, ty, tiles0, imgs0)
 
-    def canvas_signed():
-        return browser.canvas
-
-    # A series of scrolls, including non-tile-aligned deltas and both ways.
-    for dy_chain in (120, 60, -90, 300, -45):
-        # Renderer fast path: canvas shift + strip upload.
-        scroll_y_new_abs = getattr(browser, "_scroll_y", 0) + dy_chain
-        assert 0 <= scroll_y_new_abs <= content_h - fh
-        browser._scroll_y = scroll_y_new_abs
-
-        # browser-side canvas blit (mirrors the new "scroll" handler)
-        old = browser.canvas
+    def shift(canvas, dy):
         shifted = [[(255, 255, 255) for _ in range(fw)] for _ in range(fh)]
         for y in range(fh):
-            sy = y + dy_chain
+            sy = y + dy
             if 0 <= sy < fh:
-                shifted[y] = list(old[sy])
-        browser.canvas = shifted
+                shifted[y] = list(canvas[sy])
+        return shifted
 
-        # Strip exposure (viewport coords), matching the C++ strip math.
+    # Predictive-scroll state, mirroring the C++ design: the wheel
+    # prediction is a PRESENTATION-ONLY draw offset (never touches committed
+    # pixels — a wrong prediction can never evict rows from the canvas),
+    # and the renderer's authoritative absolute offset shifts the canvas by
+    # exactly (cx - base), then resets the preview.
+    base = 0              # content offset the canvas is committed at
+    preview = 0           # transient visual offset (PageSurface)
+    scroll_y = 0          # renderer's true absolute content offset
+
+    # A series of wheel steps.  The browser displays a (possibly wrong)
+    # prediction FIRST, then the authoritative (absolute) message re-anchors
+    # the canvas exactly and resets the preview.
+    for dy_chain in (120, 60, -90, 300, -45):
+        scroll_y += dy_chain
+        assert 0 <= scroll_y <= content_h - fh
+
+        # 1) browser preview: presentation only, arbitrarily wrong.
+        noise = rnd.choice((-40, -15, 0, 12, 33, 90))
+        preview += dy_chain + noise
+        # Transient visual position = base + preview; no canvas mutation, so
+        # no pixel information can be lost.
+
+        # 2) renderer authority "scroll sdx,sdy,cx,cy": exact canvas shift by
+        #    the true delta; preview resets to zero.
+        true_delta = scroll_y - base
+        browser.canvas = shift(browser.canvas, true_delta)
+        base = scroll_y
+        preview = 0
+        assert preview == 0 and base == scroll_y
+
+        # 3) strip tiles for the newly exposed viewport area (C++ strip math,
+        #    expressed against the TRUE delta)
         strip = []
-        if dy_chain > 0:
-            strip.append((0, fh - min(dy_chain, fh), fw, min(dy_chain, fh)))
-        elif dy_chain < 0:
-            strip.append((0, 0, fw, min(-dy_chain, fh)))
+        d = dy_chain
+        if d > 0:
+            strip.append((0, fh - min(d, fh), fw, min(d, fh)))
+        elif d < 0:
+            strip.append((0, 0, fw, min(-d, fh)))
         strip_tiles = []
         for yy in range(ty):
             for xx in range(tx):
@@ -439,18 +468,22 @@ def test_scroll_blit():
                        tr[1] < r[1] + r[3] and r[1] < tr[1] + tr[3]
                        for r in strip):
                     strip_tiles.append(yy * tx + xx)
-        imgs = [render_tile_at(t, scroll_y_new_abs) for t in strip_tiles]
+        imgs = [render_tile_at(t, scroll_y) for t in strip_tiles]
         browser.commit(fw, fh, tx, ty, strip_tiles, imgs)
 
-        # Browser canvas must equal the true page seen at the new offset.
+        # After reconciliation + strip upload the canvas must equal the true
+        # page at the new offset, no matter how badly the prediction missed.
         for y in range(fh):
             for x in range(0, fw, 13):
-                want = ccolor(x, y + scroll_y_new_abs)
+                want = ccolor(x, y + scroll_y)
                 got = browser.canvas[y][x]
                 if got != want:
-                    fail("scroll blit mismatch at (%d,%d) after dy=%d: "
-                         "got=%s want=%s" % (x, y, dy_chain, got, want))
-    print("  scroll blit chain (5 steps, mixed deltas): canvas == scrolled page")
+                    fail("predicted scroll mismatch at (%d,%d) after dy=%d "
+                         "noise=%d: got=%s want=%s"
+                         % (x, y, dy_chain, noise, got, want))
+
+    print("  predictive scroll + residual reconciliation (5 steps, noisy "
+          "predictions): canvas converges to true page")
 
 
 if __name__ == "__main__":
