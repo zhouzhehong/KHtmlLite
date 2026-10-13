@@ -18,7 +18,10 @@ project(KHtml
 # --- C++ Standard: C++20 (was implicit C++17 via KF5) ---
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS OFF)
+# MinGW-w64: with -std=c++20 (__STRICT_ANSI__) its <time.h>/<stdlib.h> hide
+# timespec_get/quick_exit, and libstdc++'s <ctime>/<cstdlib> then fail to
+# compile.  GNU extensions mode (-std=gnu++20) exposes them again.
+set(CMAKE_CXX_EXTENSIONS ON)
 
 # --- Interprocedural Optimization (opt-in, off by default) ---
 # GCC turns IPO into -flto=auto, which under MinGW collides with ld's
