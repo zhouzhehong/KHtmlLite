@@ -1,0 +1,13 @@
+@PACKAGE_INIT@
+
+# KHtml CMake package config — recreated from the canonical KF5 template
+# (this file is referenced by src/khtml/CMakeLists.txt's
+# configure_package_config_file()).
+
+include(CMakeFindDependencyMacro)
+
+find_dependency(Qt5Widgets "@REQUIRED_QT_VERSION@")
+find_dependency(KF5Parts "@KF_DEP_VERSION@")
+find_dependency(KF5KIO "@KF_DEP_VERSION@")
+
+include("${CMAKE_CURRENT_LIST_DIR}/KF5KHtmlTargets.cmake")
