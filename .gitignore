@@ -29,6 +29,9 @@ CMakeFiles/
 cmake_install.cmake
 install_manifest.txt
 *.cmake.in
+# ...but the KF5 package-config TEMPLATE is hand-written source, not a
+# generated artefact; src/khtml/CMakeLists.txt references it.
+!src/khtml/KF5KHtmlConfig.cmake.in
 CTestTestfile.cmake
 _deps/
 
