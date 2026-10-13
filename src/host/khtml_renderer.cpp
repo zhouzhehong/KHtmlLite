@@ -580,14 +580,25 @@ public:
             return;
         }
 
-        // Pass 1: render the damaged tiles and hash their pixels.  Damage is
-        // coarse (any input currently invalidates the full frame), so many
-        // "dirty" tiles render back pixel-identical to the previous upload;
-        // those are suppressed before any SHM write and before entering the
-        // index list, saving both the renderer's memcpy and the browser's
-        // composite repaint.  The hash compares freshly rendered pixels, so
-        // suppression can never leave a stale canvas: identical is
-        // identical, whatever the damage region claimed.
+        // Pass 1: render the frame ONCE into a surface, then treat tiles as
+        // CROPS of that surface.
+        //
+        // WebKit equivalence: WK renders the page into a display list once;
+        // TileController/TileGrid then paint per-tile by replaying the list
+        // with a clip — tiles never trigger independent page render passes.
+        // The old code called widget->render() per tile (up to tilesX*tilesY
+        // full render trees per frame), which was the dominant cost of every
+        // frame.  Here we do one w->render() and crop.
+        QImage frameImage(fw, fh, QImage::Format_RGB32);
+        frameImage.fill(Qt::white);
+        {
+            QPainter fp(&frameImage);
+            w->render(&fp, QPoint(), QRegion(dirty));
+            fp.end();
+        }
+
+        // FNV-1a over a normalized tile (frame pixels, white outside the
+        // frame) mirroring what the browser will composite.
         QVector<QImage> uploadImages;
         QVector<int> uploadTiles;
         QVector<quint64> uploadHashes;
@@ -596,22 +607,34 @@ public:
         uploadHashes.reserve(dirtyTiles.size());
         for (int k = 0; k < dirtyTiles.size(); ++k) {
             const int t = dirtyTiles[k];
-            const QRect tileRect((t % tilesX) * kTileSize,
-                                 (t / tilesX) * kTileSize,
-                                 kTileSize, kTileSize);
-            QImage tile(kTileSize, kTileSize, QImage::Format_RGB32);
-            tile.fill(Qt::white);
-            QPainter sp(&tile);
-            w->render(&sp, QPoint(), QRegion(tileRect));
-            sp.end();
+            const int tileX = (t % tilesX) * kTileSize;
+            const int tileY = (t / tilesX) * kTileSize;
 
-            // FNV-1a over the pixel rows (stride-independent).
+            // Hash directly over the frame-image rows (clip at edges,
+            // white pad beyond the frame so hashes stay well-defined).
             quint64 h = 14695981039346656037ULL;
             for (int y = 0; y < kTileSize; ++y) {
-                const uchar *row = tile.constScanLine(y);
-                for (int b = 0; b < kTileSize * 4; ++b) {
-                    h ^= row[b];
-                    h *= 1099511628211ULL;
+                const int fy = tileY + y;
+                if (fy >= 0 && fy < fh) {
+                    const uchar *row = frameImage.constScanLine(fy);
+                    const int xs = qBound(0, tileX, fw);
+                    const int xe = qBound(xs, tileX + kTileSize, fw);
+                    for (int b = xs * 4; b < xe * 4; ++b) {
+                        h ^= row[b];
+                        h *= 1099511628211ULL;
+                    }
+                    // Out-of-frame / left-of-crop region hashes as white.
+                    static const uchar whiteTile[4] = {0xFF, 0xFF, 0xFF, 0xFF};
+                    for (int b = 0; b < (kTileSize - (xe - xs)) * 4; ++b) {
+                        h ^= whiteTile[b % 4];
+                        h *= 1099511628211ULL;
+                    }
+                } else {
+                    // Whole row is outside the frame: hashes as white.
+                    for (int b = 0; b < kTileSize * 4; ++b) {
+                        h ^= 0xFF;
+                        h *= 1099511628211ULL;
+                    }
                 }
             }
             if (h == 0) h = 1;  // reserve 0 for "unknown slot content"
@@ -619,10 +642,22 @@ public:
                 continue;  // pixel-identical to the last upload: skip
             // Do NOT commit m_tileHashes yet: if the SHM lock below fails we
             // must not believe these pixels were uploaded.
+
+            // Materialize the tile crop only when it is actually uploaded.
+            QImage tile(kTileSize, kTileSize, QImage::Format_RGB32);
+            tile.fill(Qt::white);
+            const int copyW = qMin(kTileSize, fw - tileX);
+            const int copyH = qMin(kTileSize, fh - tileY);
+            if (copyW > 0 && copyH > 0) {
+                QPainter tp(&tile);
+                tp.drawImage(0, 0, frameImage, tileX, tileY, copyW, copyH);
+                tp.end();
+            }
             uploadTiles.append(t);
             uploadImages.append(tile);
             uploadHashes.append(h);
         }
+        frameImage = QImage();  // release the frame surface before SHM write
         const int dirtyCount = uploadTiles.size();
         const int headerBytes = kHeaderBytes + dirtyCount * 4;
 

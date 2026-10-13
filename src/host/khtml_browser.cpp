@@ -96,6 +96,27 @@ public:
     // drawn unscaled at the surface origin (see paintEvent), so this is an
     // identity mapping: hit testing and painting must agree on the geometry.
     QPoint mapToFrame(const QPoint &p) const { return p; }
+
+private:
+    // WebKit-style checkerboard for surface area that has no committed
+    // pixels yet (during/after resize, before the renderer catches up).
+    // Cached; painted via a texture brush.
+    static QBrush checkerBoard()
+    {
+        static QPixmap pm;
+        if (pm.isNull()) {
+            const int c = 16;  // checker cell size, same spirit as WebKit's
+            pm = QPixmap(c * 2, c * 2);
+            pm.fill(QColor(245, 245, 245));
+            QPainter p(&pm);
+            p.fillRect(0, 0, c, c, QColor(225, 225, 225));
+            p.fillRect(c, c, c, c, QColor(225, 225, 225));
+            p.end();
+        }
+        return QBrush(pm);
+    }
+
+public:
     // Callback set by RenderTab to forward input events to the renderer.
     void setInputCallback(std::function<void(const QJsonObject &)> cb) { m_inputCb = std::move(cb); }
 
@@ -149,32 +170,30 @@ protected:
 
     void paintEvent(QPaintEvent *) override {
         QPainter p(this);
+        // Safari/WebKit presentation during resize: the content NEVER
+        // scales.  It stays 1:1, anchored at the top-left; newly exposed
+        // surface area the renderer has not painted yet shows a
+        // checkerboard ("unpainted tiles" in WebKit speak), until the
+        // renderer's relayout finishes and true pixels for the new size
+        // arrive.  Scaling the frame like an image made slow relayout look
+        // like a photo stretch.
         if (!m_frame.isNull()) {
-            if (m_liveResize && m_frame.size() != size()) {
-                // Live-resize: scale the last valid framebuffer to fill the
-                // surface purely for visual continuity. This is a temporary
-                // browser-side transform only — it never changes the CSS/layout
-                // viewport in the renderer. At WM_EXITSIZEMOVE the real size is
-                // committed and the renderer repaints at 1:1.
-                p.drawImage(rect(), m_frame);
-            } else if (m_frame.size() != size()) {
-                // Discrete resize transition (maximize/restore/Aero-snap commit):
-                // the renderer has not produced a frame for the new viewport
-                // yet.  Scale the last frame to fill the surface for visual
-                // continuity (same WebKit-style presentation as live-resize);
-                // drawing 1:1 in the corner over white looked frozen/broken.
-                // Log once per distinct mismatch so the size-sync invariant
-                // stays observable.
+            p.drawImage(0, 0, m_frame);
+            if (m_frame.size() != size()) {
                 if (m_lastLoggedMismatch != m_frame.size()) {
                     m_lastLoggedMismatch = m_frame.size();
-                    qWarning("PageSurface: frame size %dx%d != surface size %dx%d (frame scaled until the renderer catches up)",
+                    qWarning("PageSurface: frame size %dx%d != surface size %dx%d (checkerboard until the renderer catches up)",
                              m_frame.width(), m_frame.height(),
                              width(), height());
                 }
-                p.drawImage(rect(), m_frame);
-            } else {
-                // Draw the frame unscaled, anchored at the surface origin.
-                p.drawImage(0, 0, m_frame);
+                const int rw = qMax(0, width() - m_frame.width());
+                const int bh = qMax(0, height() - m_frame.height());
+                if (rw > 0)
+                    p.fillRect(QRect(m_frame.width(), 0, rw, height()),
+                               checkerBoard());
+                if (bh > 0)
+                    p.fillRect(QRect(0, m_frame.height(), width(), bh),
+                               checkerBoard());
             }
         } else {
             p.fillRect(rect(), Qt::white);

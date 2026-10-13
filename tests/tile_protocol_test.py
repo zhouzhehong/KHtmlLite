@@ -74,6 +74,21 @@ def test_static_consistency():
         "browser does not handle scroll messages"
     print("  scroll-blit message present on both sides")
 
+    # WebKit-style render-once: the renderer must paint the frame surface
+    # exactly once per grabFrame (tiles are crops of it).  A per-tile
+    # widget->render() loop was a 40x render cost bug; keep it from
+    # creeping back.
+    n_render = len(re.findall(r"\bw->render\(&", rend))
+    assert n_render == 1, "expected exactly 1 frame render call, got %d" % n_render
+    print("  frame rendered exactly once per grabFrame (tiles are crops)")
+
+    # Safari-style resize presentation: no stretchy scaling in PageSurface;
+    # content stays 1:1 anchored, unpainted area shows a checkerboard.
+    assert "p.drawImage(rect(), m_frame)" not in brow, \
+        "PageSurface still scales the frame like an image"
+    assert "checkerBoard" in brow, "checkerboard helper missing"
+    print("  PageSurface draws 1:1 with checkerboard (no image stretching)")
+
     global TILE, HEADER
     TILE = parse_const(rend, "kTileSize")
     HEADER = parse_const(rend, "kHeaderBytes")
