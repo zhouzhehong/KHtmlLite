@@ -66,6 +66,14 @@ def test_static_consistency():
             assert re.search(r"hdr\[%d\]" % i, text), (side, i)
     print("  header fields hdr[0..4] present on both sides")
 
+    # The scroll-blit fast path is a paired protocol feature: the renderer
+    # must emit "scroll" and the browser must handle it.
+    assert 'sendMessage(QStringLiteral("scroll")' in rend, \
+        "renderer does not emit scroll messages"
+    assert 'QLatin1String("scroll")' in brow, \
+        "browser does not handle scroll messages"
+    print("  scroll-blit message present on both sides")
+
     global TILE, HEADER
     TILE = parse_const(rend, "kTileSize")
     HEADER = parse_const(rend, "kHeaderBytes")
@@ -353,11 +361,90 @@ def test_segment_layout():
     print("  shmNeeded covers header + full index list + tile payload for all sizes")
 
 
+def test_scroll_blit():
+    """Deterministic scroll-blit scenario mirroring the fast path:
+    content is a tall page; the frame is a viewport over it.  The renderer
+    shifts the browser canvas by (0, dy) via a scroll message and uploads
+    only the newly exposed strip tiles.  Assert the composited canvas then
+    equals the scrolled true page everywhere."""
+    import itertools
+    fw, fh = 512, 300           # viewport (not tile-aligned on y on purpose)
+    content_h = 4000            # tall page
+    # True content: rev-like pattern indexed by absolute content coords.
+    def ccolor(cx, cy):
+        return ((cx * 3 + cy) % 256, (cy * 7) % 256, ((cx ^ cy) * 5) % 256)
+
+    browser = BrowserModel()
+
+    # Initial frame at scroll offset 0: full upload.
+    tx, ty = grid(fw, fh)
+    rev0 = [[0]]  # unused; color is a function of absolute coords
+
+    def render_tile_at(t, scroll_y):
+        cxx, cyy = t % tx, t // tx
+        return [[ccolor(cxx * TILE + x, cyy * TILE + y + scroll_y)
+                 if (cyy * TILE + y) < fh and (cxx * TILE + x) < fw
+                 else (255, 255, 255)
+                 for x in range(TILE)] for y in range(TILE)]
+
+    tiles0 = list(range(tx * ty))
+    imgs0 = [render_tile_at(t, 0) for t in tiles0]
+    browser.commit(fw, fh, tx, ty, tiles0, imgs0)
+
+    def canvas_signed():
+        return browser.canvas
+
+    # A series of scrolls, including non-tile-aligned deltas and both ways.
+    for dy_chain in (120, 60, -90, 300, -45):
+        # Renderer fast path: canvas shift + strip upload.
+        scroll_y_new_abs = getattr(browser, "_scroll_y", 0) + dy_chain
+        assert 0 <= scroll_y_new_abs <= content_h - fh
+        browser._scroll_y = scroll_y_new_abs
+
+        # browser-side canvas blit (mirrors the new "scroll" handler)
+        old = browser.canvas
+        shifted = [[(255, 255, 255) for _ in range(fw)] for _ in range(fh)]
+        for y in range(fh):
+            sy = y + dy_chain
+            if 0 <= sy < fh:
+                shifted[y] = list(old[sy])
+        browser.canvas = shifted
+
+        # Strip exposure (viewport coords), matching the C++ strip math.
+        strip = []
+        if dy_chain > 0:
+            strip.append((0, fh - min(dy_chain, fh), fw, min(dy_chain, fh)))
+        elif dy_chain < 0:
+            strip.append((0, 0, fw, min(-dy_chain, fh)))
+        strip_tiles = []
+        for yy in range(ty):
+            for xx in range(tx):
+                tr = (xx * TILE, yy * TILE, TILE, TILE)
+                if any(tr[0] < r[0] + r[2] and r[0] < tr[0] + tr[2] and
+                       tr[1] < r[1] + r[3] and r[1] < tr[1] + tr[3]
+                       for r in strip):
+                    strip_tiles.append(yy * tx + xx)
+        imgs = [render_tile_at(t, scroll_y_new_abs) for t in strip_tiles]
+        browser.commit(fw, fh, tx, ty, strip_tiles, imgs)
+
+        # Browser canvas must equal the true page seen at the new offset.
+        for y in range(fh):
+            for x in range(0, fw, 13):
+                want = ccolor(x, y + scroll_y_new_abs)
+                got = browser.canvas[y][x]
+                if got != want:
+                    fail("scroll blit mismatch at (%d,%d) after dy=%d: "
+                         "got=%s want=%s" % (x, y, dy_chain, got, want))
+    print("  scroll blit chain (5 steps, mixed deltas): canvas == scrolled page")
+
+
 if __name__ == "__main__":
-    print("[1/3] static protocol consistency (renderer vs browser)")
+    print("[1/4] static protocol consistency (renderer vs browser)")
     test_static_consistency()
-    print("[2/3] segment layout worst-case bounds")
+    print("[2/4] segment layout worst-case bounds")
     test_segment_layout()
-    print("[3/3] reference model property tests (random damage/resize)")
+    print("[3/4] reference model property tests (random damage/resize)")
     test_model()
+    print("[4/4] scroll blit scenario")
+    test_scroll_blit()
     print("TILE PROTOCOL PASS")

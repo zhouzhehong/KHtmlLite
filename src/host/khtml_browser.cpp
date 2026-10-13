@@ -550,6 +550,27 @@ private slots:
                         readTiles(fw, fh);
                     }
                 }
+            } else if (type == QLatin1String("scroll")) {
+                // Scroll blit (renderer scroll fast path): the page content
+                // shifted rigidly by (dx,dy).  Shift our canvas now and
+                // white-fill the exposed edge; the strip tiles that actually
+                // changed follow immediately in a "tiles" message.
+                const QStringList parts = data.split(QLatin1Char(','));
+                if (parts.size() == 2 && m_container && !m_canvas.isNull()) {
+                    const int dx = parts[0].toInt();
+                    const int dy = parts[1].toInt();
+                    if (dx != 0 || dy != 0) {
+                        QImage shifted(m_canvas.size(), m_canvas.format());
+                        shifted.fill(Qt::white);
+                        QPainter sp(&shifted);
+                        sp.drawImage(QPoint(-dx, -dy), m_canvas);
+                        sp.end();
+                        m_canvas = shifted;
+                        // Everything moved: full repaint (a partial dirty
+                        // rect cannot express "all pixels changed place").
+                        m_container->setFrame(m_canvas);
+                    }
+                }
             } else if (type == QLatin1String("framesize")) {
                 // Renderer needs a larger SHM segment but cannot create it
                 // while we hold the old one attached. Detach so the next

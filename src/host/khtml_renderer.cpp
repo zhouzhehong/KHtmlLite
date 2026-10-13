@@ -489,6 +489,67 @@ public:
             m_dirtyRegion += QRect(0, m_frameH, fw, fh - m_frameH);
         m_relayoutPending = false;
 
+        // === Scroll fast path (blit) ===
+        // If the wheel was the sole cause of this frame and KHTML's scroll
+        // offset actually moved, the whole page content shifted rigidly:
+        // tell the browser to shift its canvas and only upload the newly
+        // exposed strip.  Any frame that ALSO carries other damage falls
+        // back to the normal path below — shifted pixels plus independent
+        // damage cannot be combined safely, so we repaint fully.
+        int sdx = 0, sdy = 0;
+        bool scrollFast = false;
+        {
+            KHTMLView *kv = m_view ? m_view->view() : nullptr;
+            if (kv) {
+                const int cx = kv->contentsX();
+                const int cy = kv->contentsY();
+                if (m_pendingScrollCheck) {
+                    m_pendingScrollCheck = false;
+                    if (m_haveScrollPos && m_dirtyRegion.isEmpty()
+                            && !m_relayoutPending
+                            && fw == m_frameW && fh == m_frameH) {
+                        sdx = cx - m_lastCX;
+                        sdy = cy - m_lastCY;
+                        scrollFast = (sdx != 0 || sdy != 0);
+                    }
+                }
+                m_lastCX = cx;
+                m_lastCY = cy;
+                m_haveScrollPos = true;
+            }
+        }
+        if (m_pendingScrollCheck)           // no view (or first frame): drop
+            m_pendingScrollCheck = false;
+
+        if (scrollFast) {
+            // Damage = only the viewport strip freshly scrolled into view.
+            // Everything else stays at its shifted pixels on the browser.
+            QRegion strip;
+            if (sdy > 0) strip += QRect(0, fh - qMin(sdy, fh), fw, qMin(sdy, fh));
+            else if (sdy < 0) strip += QRect(0, 0, fw, qMin(-sdy, fh));
+            if (sdx > 0) strip += QRect(fw - qMin(sdx, fw), 0, qMin(sdx, fw), fh);
+            else if (sdx < 0) strip += QRect(0, 0, qMin(-sdx, fw), fh);
+            m_dirtyRegion = strip;
+
+            // Tell the browser to shift its canvas first; the strip tiles in
+            // this frame's "tiles" message land on the shifted canvas.
+            sendMessage(QStringLiteral("scroll"),
+                        QStringLiteral("%1,%2").arg(sdx).arg(sdy));
+
+            // Deferred convergence: re-render everything a short moment
+            // later, in case scrolling also repainted fixed-position or
+            // script-driven content outside the strip.  The suppression
+            // cache makes this cheap whenever nothing else changed (tiles
+            // render back identical → no upload, no IPC).  Postponed while
+            // the user is still scrolling.
+            const quint32 epoch = ++m_scrollEpoch;
+            QTimer::singleShot(250, this, [this, epoch]() {
+                if (epoch != m_scrollEpoch || !m_view) return;
+                invalidateFull();
+                scheduleFrame();
+            });
+        }
+
         const QRegion dirty = m_dirtyRegion.intersected(frameRect);
         const bool dimsChanged = (fw != m_frameW || fh != m_frameH);
         if (dirty.isEmpty() && !dimsChanged)
@@ -823,7 +884,14 @@ public:
             m_hasPendingWheel = false;
             m_pendingWheelDeltaX = 0;
             m_pendingWheelDeltaY = 0;
-            invalidateFull();
+            // Wheel = likely pure scroll.  Do NOT invalidateFull here; instead
+            // ask grabFrame() to compare the scroll offset and, when nothing
+            // else was damaged this frame, blit-shift the browser canvas and
+            // re-render only the newly exposed strip.  Pages with
+            // position:fixed / scroll listeners could change pixels outside
+            // the strip; a deferred convergence frame heals those (see
+            // grabFrame).
+            m_pendingScrollCheck = true;
         }
     }
 
@@ -1055,6 +1123,16 @@ private:
     // tilesX*tilesY; cleared whenever the shared segment is recreated,
     // because a recreated segment's tile payload is undefined.
     QVector<quint64> m_tileHashes;
+    // === Scroll fast path (canvas blit) ===
+    // Set by the wheel handler instead of invalidateFull(): grabFrame()
+    // compares the KHTML scroll offset against the last captured frame and,
+    // when the wheel was the sole cause of the frame, shifts the browser's
+    // canvas and uploads only the newly exposed strip.
+    bool m_pendingScrollCheck = false;
+    bool m_haveScrollPos = false;
+    int m_lastCX = 0, m_lastCY = 0;
+    // Debounce for the post-scroll convergence frame (see grabFrame).
+    quint32 m_scrollEpoch = 0;
     // Set when a resize changed the viewport width: KHTML relayouts, so
     // all tiles are dirty regardless of tile-grid coincidence.
     bool m_relayoutPending = false;
