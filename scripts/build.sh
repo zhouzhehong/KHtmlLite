@@ -41,6 +41,9 @@ cd "${BUILD_DIR}/khtml"
 cmake "${ROOT_DIR}/src/khtml" \
     -G Ninja \
     -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
+    -DCMAKE_PREFIX_PATH=/mingw64 \
+    -DCMAKE_C_COMPILER=/mingw64/bin/cc.exe \
+    -DCMAKE_CXX_COMPILER=/mingw64/bin/c++.exe \
     -DCMAKE_INSTALL_PREFIX=/mingw64 \
     -DBUILD_TESTING=OFF \
     -DKHTML_BUILD_TESTS=OFF
@@ -54,6 +57,9 @@ cd "${BUILD_DIR}/host"
 cmake "${ROOT_DIR}/src/host" \
     -G Ninja \
     -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
+    -DCMAKE_PREFIX_PATH=/mingw64 \
+    -DCMAKE_C_COMPILER=/mingw64/bin/cc.exe \
+    -DCMAKE_CXX_COMPILER=/mingw64/bin/c++.exe \
     -DKHTML_SOURCE_DIR="${ROOT_DIR}/src/khtml/src" \
     -DKHTML_BUILD_DIR="${BUILD_DIR}/khtml" \
     -DKHTML_LIB="${BUILD_DIR}/khtml/lib/libKF5KHtml.dll.a"
