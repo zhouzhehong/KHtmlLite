@@ -24,6 +24,8 @@ KHTML（5.116）改造的双进程浏览器：`khtml_browser.exe`（UI/合成）
 - QuickJS 静态库在 `src/quickjs/libquickjs.a`，build.sh 每次 `make` 自动补装。
 
 ## 4. 已完成 & 测量的账目（commit 时间倒序）
+- `fbe17fb` — 冷启动修复：字体枚举缓存(khtml_fonts.ini)+图标懒加载；KHTMLPart 构造 1.1s→~0.35s，TTFF 2.0s→~1.1s
+- `b52ee6d` — KHTMLPart/KHTMLView/Settings/Cache/CSS 插桩（STARTUP_MARK 细分）
 - `9466dc7` — 架构章程（章程优先：墓碑/帧钟/隔离/红线）
 - `7989c1e` — 构建修复 + 采集脚本 `tests/run_startup_capture.py`
 - `634bdd5` — 启动时间线基建：ready 消息带 renderer 自身时钟 → 双进程时钟零误差
