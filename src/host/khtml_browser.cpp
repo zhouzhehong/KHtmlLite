@@ -547,6 +547,13 @@ public:
     }
 
     QWidget *container() const { return m_container; }
+    // Last committed page pixels; used for the tombstone snapshot when the
+    // tab is suspended (Safari keeps the frozen page visible as an anchor).
+    QImage canvasImage() const { return m_canvas; }
+    // Prefill the surface with a previous snapshot while the new renderer
+    // is still starting/loading — the user keeps a visual anchor instead
+    // of staring at a white surface.  Real tiles overwrite it seamlessly.
+    void seedFrame(const QImage &img) { if (m_container && !img.isNull()) m_container->setFrame(img); }
     QUrl currentUrl() const { return m_current; }
     QString title() const { return m_title; }
     bool isCrashed() const { return m_crashed; }
@@ -904,6 +911,7 @@ int RenderTab::m_tabCounter = 0;
 struct TabPage {
     RenderTab *render = nullptr;
     QWidget *crashWidget = nullptr;  // shown when renderer crashed
+    QWidget *tombstoneWidget = nullptr;  // shown while suspended (owns snapshot view)
     QUrl current;
     QList<QUrl> back;
     QList<QUrl> fwd;
@@ -916,6 +924,48 @@ struct TabPage {
     int scrollX = 0;
     int scrollY = 0;
     int zoom = 100;
+    // Last displayed frame, captured at suspend.  Shown while the tab is
+    // tombstoned and as the seed canvas during resume (mechanism: Safari's
+    // frozen-page snapshot — memory is freed, pixels remain).
+    QImage snapshot;
+};
+
+// Tombstone placeholder: paints the last snapshot (top-left anchored, scaled
+// to fit) under a light veil, with the tab title centred.  Interactive input
+// is intentionally NOT forwarded — the renderer is dead; clicking the tab
+// itself triggers resume via currentChanged.
+class TombstoneWidget : public QWidget
+{
+public:
+    TombstoneWidget(const QImage &snap, const QString &title, QWidget *parent = nullptr)
+        : QWidget(parent), m_snap(snap), m_title(title)
+    {
+        setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    }
+protected:
+    void paintEvent(QPaintEvent *) override
+    {
+        QPainter p(this);
+        p.fillRect(rect(), QColor(247, 247, 247));
+        if (!m_snap.isNull()) {
+            const QImage scaled = m_snap.scaled(size(), Qt::KeepAspectRatio,
+                                                Qt::SmoothTransformation);
+            p.drawImage(QPoint(0, 0), scaled);
+            // Frozen signal: faint white veil + grey title badge.
+            p.fillRect(scaled.rect(), QColor(255, 255, 255, 60));
+        }
+        if (!m_title.isEmpty()) {
+            p.setPen(QColor(120, 120, 120));
+            QFont f = font();
+            f.setPointSize(12);
+            p.setFont(f);
+            p.drawText(rect(), Qt::AlignCenter,
+                       QStringLiteral("%1\n（已挂起 · 点击标签恢复）").arg(m_title));
+        }
+    }
+private:
+    QImage m_snap;
+    QString m_title;
 };
 
 class KHtmlLiteWindow : public QMainWindow
@@ -1123,6 +1173,7 @@ public:
         m_tabs->removeTab(idx);
         if (pg->render) pg->render->terminate();
         if (pg->crashWidget) delete pg->crashWidget;
+        if (pg->tombstoneWidget) delete pg->tombstoneWidget;
         delete pg;
         if (m_pages.isEmpty()) addTab(QUrl(QStringLiteral("https://cn.bing.com")));
         syncChrome();
@@ -1300,8 +1351,10 @@ protected:
         if (!pg || pg->suspended) return;
         pg->savedTitle = m_tabs->tabText(m_pages.indexOf(pg));
         if (pg->savedTitle.isEmpty()) pg->savedTitle = pg->current.host();
+        // Snapshot BEFORE killing the renderer: keep the page's last pixels.
+        if (pg->render) pg->snapshot = pg->render->canvasImage();
         // Kill the renderer process — this frees ALL engine memory (KHTML DLL,
-        // JS heap, caches). Only URL + title remain.
+        // JS heap, caches). Only URL + title + snapshot remain.
         if (pg->render) { pg->render->terminate(); pg->render = nullptr; }
         if (pg->crashWidget) { delete pg->crashWidget; pg->crashWidget = nullptr; }
         pg->suspended = true;
@@ -1309,10 +1362,9 @@ protected:
         const int idx = m_pages.indexOf(pg);
         if (idx >= 0) {
             m_tabs->removeTab(idx);
-            QLabel *ph = new QLabel(QStringLiteral("  [标签已挂起]  %1\n  点击恢复").arg(pg->savedTitle));
-            ph->setAlignment(Qt::AlignCenter);
-            ph->setStyleSheet(QStringLiteral("color:#999;font-size:13px;"));
-            m_tabs->insertTab(idx, ph, pg->savedTitle + QStringLiteral(" [挂起]"));
+            pg->tombstoneWidget = new TombstoneWidget(pg->snapshot, pg->savedTitle);
+            m_tabs->insertTab(idx, pg->tombstoneWidget,
+                              pg->savedTitle + QStringLiteral(" [挂起]"));
         }
     }
 
@@ -1323,10 +1375,14 @@ protected:
         if (pg->render) { delete pg->render; pg->render = nullptr; }
         if (pg->crashWidget) { delete pg->crashWidget; pg->crashWidget = nullptr; }
         startRenderer(pg, pg->current);
+        if (pg->tombstoneWidget) { delete pg->tombstoneWidget; pg->tombstoneWidget = nullptr; }
         // Restore tombstone scroll + zoom. Sent when the renderer socket
         // connects; applied by the renderer after the document completes.
         if (pg->scrollX != 0 || pg->scrollY != 0 || pg->zoom != 100)
             pg->render->setRestoreState(pg->scrollX, pg->scrollY, pg->zoom);
+        // Visual continuity while the new renderer loads: seed the surface
+        // with the tombstone snapshot until real tiles arrive.
+        pg->render->seedFrame(pg->snapshot);
         pg->suspended = false;
         if (idx >= 0) {
             m_tabs->insertTab(idx, pg->render->container() ? pg->render->container() : new QWidget, pg->savedTitle);
