@@ -32,18 +32,34 @@ KHTML（5.116）改造的双进程浏览器：`khtml_browser.exe`（UI/合成）
 - `037c022` — 渲染-once-全帧 + tile 裁剪 + 1:1 checkerboard resize（对齐 Safari 显示管线）
 - `fc308c4` `...`（见 `git log`）— tile 哈希抑制、60fps 帧钟、滚动 blit
 
-## 5. 当前测量值（2025-10-13，本机）
-冷启动 → 首帧 **~2.0s**：
-- `0→62ms` EXE+Qt 壳加载
-- `63→192` UI chrome/tab 搭建（130ms，健康）
-- `244→645` 渲染子进程起 + socket 连接（~400ms 镜像加载）
-- `620→1725` **★ KHTMLPart/RendererView 构造 1.1s**（唯一的巨型时间块）
-- `1827→1965` load→首帧（渲染仅 ~4ms，IPC ~10ms）
-结论：引擎**渲染速度足够**，慢的是冷启初始化与重型现代站的 JS/CSS 处理能力天花板。
+## 5. 当前测量值（2025-10-14，本机，热跑）
+冷启动 → 首帧 **~1.1s**（修前 ~2.0s）：
+- `0→~170` EXE+Qt 壳 + chrome 搭建
+- `188→684` 渲染子进程起 + socket 连接
+- KHTMLPart 构造 **~350ms**（修前 ~1.1s；详见下方任务 A 战果）
+- load→首帧 ~200ms
+
+**任务 A 战果（1.1s 拆解，已完成测量+修复）：**
+- `KHTMLSettings::init` 的 4 个 `QFontInfo(QFont(serif/...))` 解析触发 Qt 全库字体枚举
+  = **556–800ms**（全坑的 80%）。修复：解析结果写入 `applicationDirPath()/khtml_fonts.ini`，
+  此后每个渲染进程直接读表；显式 khtmlrc 条目仍优先。首台机器只付一次。
+- `Cache::init` 里 KIconLoader 找 "image-missing" 图标 = 66–123ms → 已改懒加载
+  （`ensureBrokenPixmap/ensureBlockedPixmap`，首个图片加载失败时才付）。
+- html4.css/quirks.css/presentational.css 全解析只占 ~10ms，不是瓶颈；KConfig 读盘本身 2ms。
+- 新探针 `probe_kconfig`（`-DBUILD_PROBE_TOOLS=ON` 构建）复现/诊断 KConfig、字体、图标成本。
+关键学会（新坑，2025-10-14）：
+- **startuplog 是 header inline：EXE 与 libKF5KHtml.dll 各持一份静态 QElapsedTimer**。
+  跨模块比较绝对时间戳会冒出 ~340ms 的"空洞"假象；只有同一时钟内的差值可信。
+- **%LOCALAPPDATA% 对未签名 exe 写入被拒**（CreateFileW gle=5、QLockFile/KConfig
+  "couldn't lock local file"、QSettings sync AccessError）：cmd/bash 能写、未签名 exe 不行。
+  需要进程级持久化时放 `applicationDirPath()` 旁边（如 `build/host/khtml_fonts.ini`）。
 
 ## 6. 正在/马上要做的
-A. 拆那 1.1s：RendererView 构造内部分块（html4.css 解析 / 字体枚举 / KJS / 缺省样式 / 插件）。
+A. ~~拆那 1.1s~~ **已完成**（字体枚举缓存 + 图标懒加载，构造 1.1s→~0.35s，TTFF 2.0→1.1s）。
+   下一步同部位残账：渲染进程镜像加载+socket 连接 ~500ms（每次新标签都付），
+   可做渲染进程预热/常驻待命池（对齐 WebKit 的 process pre-warm）。
 B. **墓碑机制落地**：挂起标签 → 缩略图+scroll/zoom/标题落 QSettings；冷重启可"秒回"。
+   （注意：QSettings 写 AppData 在本开发机被 ACL 沙箱拒，落盘路径选 applicationDirPath。）
 C. 空闲 CPU 归零（挂起标签的计时器/渲染进程冻结）。
 D. 必应等现代重型站的 JS 转译流水线开销（Bublé 嵌入，异步/缓存化）。
 

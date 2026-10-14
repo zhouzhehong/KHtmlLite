@@ -131,4 +131,10 @@ if(BUILD_PROBE_TOOLS)
 
     add_executable(kio_job_test kio_job_test.cpp)
     target_link_libraries(kio_job_test PRIVATE Qt5::Core Qt5::Network KF5::KIOCore KF5::I18n)
+
+    # Cold-start micro-benchmark for the KConfig/KIconLoader hot spots found
+    # by KHTMLPart ctor instrumentation (see git history: khtmlrc read ~0.8 s).
+    add_executable(probe_kconfig probe_kconfig.cpp)
+    target_link_libraries(probe_kconfig PRIVATE Qt5::Core Qt5::Gui
+        KF5::ConfigCore KF5::ConfigGui KF5::IconThemes)
 endif()

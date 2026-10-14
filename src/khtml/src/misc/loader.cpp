@@ -1,4 +1,4 @@
-﻿/*
+/*
     This file is part of the KDE libraries
 
     Copyright (C) 1998 Lars Knoll (knoll@mpi-hd.mpg.de)
@@ -90,6 +90,12 @@
 #include "blocked_icon.cpp"
 
 #include <QPaintEngine>
+// Cold-start instrumentation (no-op unless KHTML_STARTUP_TIMING=1).
+#ifdef Q_OS_WIN
+#include "../../host/startuplog.h"
+#else
+#define STARTUP_MARK(label) do {} while (0)
+#endif
 
 using namespace khtml;
 using namespace DOM;
@@ -647,14 +653,36 @@ QPixmap *CachedImage::scaled_pixmap(int xWidth, int xHeight)
     return scaled;
 }
 
+// The broken/blocked placeholder pixmaps are only needed when an image
+// actually fails or is blocked.  Creating the broken one eagerly in
+// Cache::init() costs a KIconLoader theme lookup (~60-120 ms cold on
+// Windows) on every renderer process start, so both are now created lazily
+// on first use instead.
+static QPixmap *ensureBrokenPixmap()
+{
+    if (!Cache::brokenPixmap) {
+        Cache::brokenPixmap = new QPixmap(KHTMLGlobal::iconLoader()->loadIcon("image-missing", KIconLoader::Desktop, 16, KIconLoader::DisabledState));
+    }
+    return Cache::brokenPixmap;
+}
+
+static QPixmap *ensureBlockedPixmap()
+{
+    if (!Cache::blockedPixmap) {
+        Cache::blockedPixmap = new QPixmap();
+        Cache::blockedPixmap->loadFromData(blocked_icon_data, blocked_icon_len);
+    }
+    return Cache::blockedPixmap;
+}
+
 QPixmap CachedImage::pixmap() const
 {
     if (m_hadError) {
-        return *Cache::brokenPixmap;
+        return *ensureBrokenPixmap();
     }
 
     if (m_wasBlocked) {
-        return *Cache::blockedPixmap;
+        return *ensureBlockedPixmap();
     }
 
     int w = i->size().width();
@@ -686,10 +714,10 @@ QPixmap CachedImage::pixmap() const
 QSize CachedImage::pixmap_size() const
 {
     if (m_wasBlocked) {
-        return Cache::blockedPixmap->size();
+        return ensureBlockedPixmap()->size();
     }
     if (m_hadError) {
-        return Cache::brokenPixmap->size();
+        return ensureBrokenPixmap()->size();
     }
     if (i) {
         return i->size();
@@ -1479,15 +1507,6 @@ void Cache::init()
 
     if (!nullPixmap) {
         nullPixmap = new QPixmap;
-    }
-
-    if (!brokenPixmap) {
-        brokenPixmap = new QPixmap(KHTMLGlobal::iconLoader()->loadIcon("image-missing", KIconLoader::Desktop, 16, KIconLoader::DisabledState));
-    }
-
-    if (!blockedPixmap) {
-        blockedPixmap = new QPixmap();
-        blockedPixmap->loadFromData(blocked_icon_data, blocked_icon_len);
     }
 
     if (!m_loader) {

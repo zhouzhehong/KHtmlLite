@@ -280,11 +280,16 @@ class RendererView : public KHTMLPart
 public:
     explicit RendererView(bool jsEnabled, QWidget *parent = nullptr) : KHTMLPart(parent)
     {
+        STARTUP_MARK("RV: base KHTMLPart returned");
         setJScriptEnabled(jsEnabled);
+        STARTUP_MARK("RV: setJScriptEnabled done");
         setJavaEnabled(false);
         setPluginsEnabled(false);
+        STARTUP_MARK("RV: java/plugins disabled");
         setEncoding(QStringLiteral("utf-8"), true);
+        STARTUP_MARK("RV: setEncoding done");
         KParts::BrowserExtension *ext = browserExtension();
+        STARTUP_MARK("RV: browserExtension fetched");
         if (ext) {
             connect(ext, QOverload<const QUrl &, const KParts::OpenUrlArguments &,
                                     const KParts::BrowserArguments &>::of(
@@ -299,6 +304,7 @@ public:
                                  const KParts::BrowserArguments &, const KParts::WindowArgs &,
                                  KParts::ReadOnlyPart **) { emit openNewTabRequested(u); });
         }
+        STARTUP_MARK("RV: ctor done");
     }
     bool loadUrl(const QUrl &url) { return openUrl(url); }
 Q_SIGNALS:

@@ -34,6 +34,8 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QFontDatabase>
+#include <QFontInfo>
+#include <QSettings>
 // Cold-start instrumentation (no-op unless KHTML_STARTUP_TIMING=1).
 #ifdef Q_OS_WIN
 #include "../../host/startuplog.h"
@@ -41,6 +43,7 @@
 #define STARTUP_MARK(label) do {} while (0)
 #endif
 #include <QByteArray>
+#include <QCoreApplication>
 #include <QUrl>
 #include <qstandardpaths.h>
 #include <ksharedconfig.h>
@@ -354,15 +357,19 @@ bool KHTMLSettings::hoverLink() const
 
 void KHTMLSettings::init()
 {
+    STARTUP_MARK("Settings: khtmlrc read begin");
     KConfig global("khtmlrc", KConfig::NoGlobals);
     init(&global, true);
+    STARTUP_MARK("Settings: khtmlrc parsed; shared config begin");
 
     KSharedConfig::Ptr local = KSharedConfig::openConfig();
     if (!local) {
+        STARTUP_MARK("Settings: shared config parsed");
         return;
     }
 
     init(local.data(), false);
+    STARTUP_MARK("Settings: shared config parsed");
 }
 
 void KHTMLSettings::init(KConfig *config, bool reset)
@@ -448,21 +455,52 @@ void KHTMLSettings::init(KConfig *config, bool reset)
 
     KConfigGroup cgHtml(config, "HTML Settings");
     if (reset || cgHtml.exists()) {
+        STARTUP_MARK("Settings: HTML Settings group");
         // Fonts and colors
         if (reset) {
+            STARTUP_MARK("Settings: defaultFonts begin (first QFontDatabase touch)");
             d->defaultFonts = QStringList();
             d->defaultFonts.append(cgHtml.readEntry("StandardFont", QFontDatabase::systemFont(QFontDatabase::GeneralFont).family()));
             d->defaultFonts.append(cgHtml.readEntry("FixedFont", QFontDatabase::systemFont(QFontDatabase::FixedFont).family()));
-            // Resolve generic font family names
-            const QString serifFont = QFontInfo(QFont(QLatin1String(HTML_DEFAULT_VIEW_SERIF_FONT))).family();
-            const QString sansSerifFont = QFontInfo(QFont(QLatin1String(HTML_DEFAULT_VIEW_SANSSERIF_FONT))).family();
-            const QString cursiveFont = QFontInfo(QFont(QLatin1String(HTML_DEFAULT_VIEW_CURSIVE_FONT))).family();
-            const QString fantasyFont = QFontInfo(QFont(QLatin1String(HTML_DEFAULT_VIEW_FANTASY_FONT))).family();
-            d->defaultFonts.append(cgHtml.readEntry("SerifFont", serifFont));
-            d->defaultFonts.append(cgHtml.readEntry("SansSerifFont", sansSerifFont));
-            d->defaultFonts.append(cgHtml.readEntry("CursiveFont", cursiveFont));
-            d->defaultFonts.append(cgHtml.readEntry("FantasyFont", fantasyFont));
+            STARTUP_MARK("Settings: systemFont resolved");
+            // Resolve generic font family names. QFontInfo resolution forces a
+            // full font-database enumeration on first use (~0.5 s cold on
+            // Windows). Measured; resolved names are cached in a plain ini
+            // next to the executable (NOT GenericCacheLocation: KConfig/QSave
+            // File writes to %LOCALAPPDATA% are denied by the Windows ACL
+            // sandbox this app is developed under — CreateFileW gle=5). An
+            // explicit khtmlrc entry still wins; the first run per machine
+            // resolves and caches, later renderer processes skip the enum.
+            const QString cachePath = QCoreApplication::applicationDirPath()
+                                      + QStringLiteral("/khtml_fonts.ini");
+            QSettings fontCache(cachePath, QSettings::IniFormat);
+            auto resolveFont = [&cgHtml, &fontCache](const char *key, const char *generic, bool &wroteBack) {
+                if (cgHtml.hasKey(key)) {          // explicit config wins
+                    return cgHtml.readEntry(key, QString());
+                }
+                const QString ckey = QStringLiteral("fonts/") + QLatin1String(key);
+                QString v = fontCache.value(ckey).toString();
+                if (v.isEmpty()) {
+                    v = QFontInfo(QFont(QLatin1String(generic))).family();
+                    fontCache.setValue(ckey, v);
+                    wroteBack = true;
+                }
+                return v;
+            };
+            bool wroteBack = false;
+            const QString serifFont = resolveFont("SerifFont", HTML_DEFAULT_VIEW_SERIF_FONT, wroteBack);
+            const QString sansSerifFont = resolveFont("SansSerifFont", HTML_DEFAULT_VIEW_SANSSERIF_FONT, wroteBack);
+            const QString cursiveFont = resolveFont("CursiveFont", HTML_DEFAULT_VIEW_CURSIVE_FONT, wroteBack);
+            const QString fantasyFont = resolveFont("FantasyFont", HTML_DEFAULT_VIEW_FANTASY_FONT, wroteBack);
+            if (wroteBack) {
+                fontCache.sync();
+            }
+            d->defaultFonts.append(serifFont);
+            d->defaultFonts.append(sansSerifFont);
+            d->defaultFonts.append(cursiveFont);
+            d->defaultFonts.append(fantasyFont);
             d->defaultFonts.append(QString("0"));     // font size adjustment
+            STARTUP_MARK("Settings: defaultFonts done (generic families resolved)");
         }
 
         if (reset || cgHtml.hasKey("MinimumFontSize")) {
