@@ -345,6 +345,14 @@ public:
         // opt in with KHTML_PERF=1.
         PerfLog::instance().setEnabled(qEnvironmentVariableIntValue("KHTML_PERF") != 0);
 
+        // Orphan watchdog: a pre-warmed renderer only ever becomes useful
+        // when a browser adopts it.  If the browser died (crash/kill), this
+        // process would idle forever and leak a Qt+KHTML process; exit if no
+        // client ever shows up.
+        QTimer::singleShot(10 * 60 * 1000, this, [this]() {
+            if (!m_socket) QCoreApplication::quit();
+        });
+
         // Software-frame transport: the renderer never owns a visible window.
         // KHTML renders to an offscreen widget; frames are captured and sent
         // to the browser via QSharedMemory + a small JSON "frame" message.
@@ -516,6 +524,7 @@ public:
     // change, this is a pure no-op (no render, no memcpy, no IPC).
     void grabFrame()
     {
+        if (!m_visible) return;  // hidden tab: throttled, damage accumulates
         static bool s_loggedFirstTick = false;
         if (!s_loggedFirstTick) {
             s_loggedFirstTick = true;
@@ -1171,6 +1180,21 @@ private slots:
                 pendingW = obj.value(QStringLiteral("w")).toInt(800);
                 pendingH = obj.value(QStringLiteral("h")).toInt(600);
                 hasPendingResize = true;
+            } else if (cmd == QLatin1String("visible")) {
+                // Background-tab throttling (WebKit: hidden pages get no
+                // DisplayRefreshMonitor ticks).  The 60 Hz frame timer is
+                // stopped while the tab is invisible; damage that arrives
+                // while hidden is accumulated and flushed with one full
+                // frame when the tab becomes visible again.
+                const bool vis = obj.value(QStringLiteral("v")).toInt(1) != 0;
+                m_visible = vis;
+                if (vis) {
+                    if (!m_frameTimer->isActive()) m_frameTimer->start();
+                    invalidateFull();
+                    scheduleFrame();
+                } else {
+                    m_frameTimer->stop();
+                }
             } else if (cmd == QLatin1String("reload")) {
                 if (m_pendingUrl.isValid()) m_loader->load(m_pendingUrl);
             } else if (cmd == QLatin1String("restore")) {
@@ -1284,6 +1308,7 @@ private:
     // all tiles are dirty regardless of tile-grid coincidence.
     bool m_relayoutPending = false;
     bool m_framePending = false;
+    bool m_visible = true;  // hidden tabs skip the 60 Hz frame path entirely
     bool m_sentFirstFrame = false;  // startup timing: first tiles upload
 };
 

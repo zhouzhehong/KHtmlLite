@@ -376,29 +376,47 @@ public:
     void start(const QUrl &url, int w, int h, bool disableJs = false)
     {
         m_current = url;
-        m_socketName = QStringLiteral("khtml_rt_%1_%2")
-            .arg(QCoreApplication::applicationPid()).arg(++m_tabCounter);
+        QString exe;
+        // === Process pre-warm (WebKit precedent): one renderer is spawned
+        // idle at browser startup (about:blank, socket listening).  The tab
+        // that arrives while it is warm ADOPTS it — skipping the ~500 ms
+        // process+Qt+KHTMLPart construction path entirely.  The adopted
+        // process then navigates once the socket handshake completes.
+        if (!disableJs && s_warmProcess
+                && s_warmProcess->state() != QProcess::NotRunning) {
+            m_socketName = s_warmSocket;
+            m_process = s_warmProcess;
+            s_warmProcess = nullptr;
+            m_process->setParent(this);
+            m_adopted = true;
+            STARTUP_MARK("tab start (warm-hit)");
+        } else {
+            m_socketName = QStringLiteral("khtml_rt_%1_%2")
+                .arg(QCoreApplication::applicationPid()).arg(++m_tabCounter);
+            m_process = new QProcess(this);
+            m_process->setProcessChannelMode(QProcess::MergedChannels);
+            exe = QCoreApplication::applicationDirPath()
+                  + QStringLiteral("/khtml_renderer.exe");
+            QStringList args;
+            args << QStringLiteral("--url") << url.toString()
+                 << QStringLiteral("--socket") << m_socketName
+                 << QStringLiteral("--width") << QString::number(w)
+                 << QStringLiteral("--height") << QString::number(h);
+            if (disableJs) args << QStringLiteral("--disable-js");
+            STARTUP_MARK("tab start (cold)");
+            m_process->start(exe, args);
+            STARTUP_MARK("renderer process start");
+        }
+        // Keep one warm renderer standing by for the NEXT tab.  Delayed a
+        // beat so the very first (cold) tab is not competing with the warm
+        // spawn for cold-start I/O — WebKit pre-warms off an idle timer for
+        // the same reason.
+        QTimer::singleShot(600, []() { prewarm(); });
 
-        m_process = new QProcess(this);
-        m_process->setProcessChannelMode(QProcess::MergedChannels);
-        const QString exe = QCoreApplication::applicationDirPath()
-                            + QStringLiteral("/khtml_renderer.exe");
-        QStringList args;
-        args << QStringLiteral("--url") << url.toString()
-             << QStringLiteral("--socket") << m_socketName
-             << QStringLiteral("--width") << QString::number(w)
-             << QStringLiteral("--height") << QString::number(h);
-        if (disableJs) args << QStringLiteral("--disable-js");
-
-        connect(m_process, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
-                this, &RenderTab::onFinished);
-        // Drain renderer stdout/stderr (MergedChannels) so the pipe buffer
-        // never fills and blocks the renderer process on write.
         connect(m_process, &QProcess::readyReadStandardOutput,
                 this, &RenderTab::onStdout);
-        // Connect IPC socket immediately — the renderer sends its HWND through
-        // it as soon as we connect (chicken-and-egg: we need the socket to
-        // receive the HWND, and the HWND to embed the window).
+        connect(m_process, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
+                this, &RenderTab::onFinished);
         m_socket = new QLocalSocket(this);
         connect(m_socket, &QLocalSocket::readyRead, this, &RenderTab::onSocketReady);
         connect(m_socket, &QLocalSocket::connected, this, [this]() {
@@ -418,14 +436,6 @@ public:
                 });
             }
         });
-        // Start the renderer FIRST, then connect: connecting to a
-        // not-yet-listening server fails unconditionally, and every failed
-        // attempt costs a backoff retry before the socket is up.  Starting
-        // the process first lets its QLocalServer exist by the time our
-        // first connect attempt lands in most cases.
-        STARTUP_MARK("tab start");
-        m_process->start(exe, args);
-        STARTUP_MARK("renderer process start");
         m_socket->connectToServer(m_socketName);
     }
 
@@ -446,6 +456,21 @@ public:
         if (m_socket && m_socket->isOpen()) {
             QJsonObject obj;
             obj[QStringLiteral("cmd")] = QStringLiteral("reload");
+            m_socket->write(QJsonDocument(obj).toJson(QJsonDocument::Compact) + "\n");
+            m_socket->flush();
+        }
+    }
+
+    // Background-tab frame throttling: hidden tabs tell their renderer to
+    // stop the 60 Hz frame timer; damage accumulates there and one full
+    // frame is rendered when the tab becomes visible again (WebKit: hidden
+    // pages get no DisplayRefreshMonitor ticks).
+    void setVisible(bool vis)
+    {
+        if (m_socket && m_socket->isOpen()) {
+            QJsonObject obj;
+            obj[QStringLiteral("cmd")] = QStringLiteral("visible");
+            obj[QStringLiteral("v")] = vis ? 1 : 0;
             m_socket->write(QJsonDocument(obj).toJson(QJsonDocument::Compact) + "\n");
             m_socket->flush();
         }
@@ -577,6 +602,30 @@ public:
         return ok ? (qint64)(pmc.WorkingSetSize / 1024) : 0;
     }
 
+    // === Renderer pre-warm pool (WebKit WebProcessPool::prewarmedWebProcess) ===
+    // One spare renderer process sits paused-after-init, about:blank loaded,
+    // socket listening.  start() adopts it when a real tab appears, avoiding
+    // ~500 ms of process+Qt+KHTMLPart construction per new tab.
+    static void prewarm()
+    {
+        if (s_warmProcess && s_warmProcess->state() != QProcess::NotRunning)
+            return;
+        if (s_warmProcess) { s_warmProcess->deleteLater(); s_warmProcess = nullptr; }
+        const QString exe = QCoreApplication::applicationDirPath()
+                            + QStringLiteral("/khtml_renderer.exe");
+        s_warmSocket = QStringLiteral("khtml_warm_%1_%2")
+            .arg(QCoreApplication::applicationPid()).arg(++m_tabCounter);
+        QProcess *p = new QProcess(qApp);
+        p->setProcessChannelMode(QProcess::MergedChannels);
+        // Drain stdout/stderr so the pipe buffer never blocks the child.
+        connect(p, &QProcess::readyReadStandardOutput, p, [p]() { (void)p->readAll(); });
+        p->start(exe, QStringList() << QStringLiteral("--url") << QStringLiteral("about:blank")
+                 << QStringLiteral("--socket") << s_warmSocket
+                 << QStringLiteral("--width") << QStringLiteral("800")
+                 << QStringLiteral("--height") << QStringLiteral("560"));
+        s_warmProcess = p;
+    }
+
 Q_SIGNALS:
     void titleChanged(const QString &title);
     void urlChanged(const QUrl &url);
@@ -629,6 +678,10 @@ private slots:
                 flushPendingResize();
                 if (!m_embedded) {
                     m_embedded = true;
+                    // Adopted (pre-warmed) renderer loaded about:blank; the
+                    // real URL arrives now, as soon as the pipe works.
+                    if (m_adopted && m_current.isValid())
+                        navigate(m_current);
                     emit ready();
                 }
             } else if (type == QLatin1String("tiles")) {
@@ -904,8 +957,14 @@ public:
     // wheel prediction lives in PageSurface (presentation only).
     int m_baseCX = 0, m_baseCY = 0;
     static int m_tabCounter;
+    // Pre-warm pool state.
+    static QProcess *s_warmProcess;
+    static QString s_warmSocket;
+    bool m_adopted = false;   // renderer came from prewarm; navigates after ready
 };
 int RenderTab::m_tabCounter = 0;
+QProcess *RenderTab::s_warmProcess = nullptr;
+QString RenderTab::s_warmSocket;
 
 // One tab's state: renderer process + history + tombstone metadata.
 struct TabPage {
@@ -1056,6 +1115,9 @@ public:
             // of the QTabWidget stack — no show/hide of renderer windows needed.
             TabPage *pg = (idx >= 0 && idx < m_pages.size()) ? m_pages.at(idx) : nullptr;
             if (pg) pg->lastActive = QDateTime::currentMSecsSinceEpoch();
+            // Throttle frame clocks of background tabs (and wake the new one).
+            for (TabPage *p2 : m_pages)
+                if (p2->render) p2->render->setVisible(p2 == pg);
             if (pg && pg->suspended) resumeTab(pg);
             else {
                 syncChrome();

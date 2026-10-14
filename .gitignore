@@ -92,3 +92,7 @@ src/khtml/src/dom/dom2.cc
 build-host/
 
 svg_diag.txt
+tests/quick_shot.png
+tests/quick_shot_stderr.txt
+tests/bg_smoke_err.txt
+tests/bg_smoke_dump_*.png

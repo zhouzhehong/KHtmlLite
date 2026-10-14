@@ -78,6 +78,15 @@ KHTML（5.116）改造的双进程浏览器：`khtml_browser.exe`（UI/合成）
 - 验证：bg_smoke PASS；tile_protocol PASS；bing 启动时间线无回归（Settings init
   36ms；渲染进程持续产出 repaint 帧而非一帧即哑）。
 
+## 5c. 高优 gap 三项（2026-10-14 同批）
+- **墓碑缩略图**：snapshot 在 suspend 前留存、挂起态绘制、resume 时 seed（63c358b）。
+- **渲染进程预热池**：RenderTab::prewarm 待命 about:blank 进程，start() 收养
+  （warm-hit），收养后 600ms 补位；孤儿 10 分钟看门狗。收养路径走
+  `--url about:blank` + ready 后 `navigate`（迁移自 --url 直喂）。
+- **后台帧钟节流**：`visible` IPC，非当前标签停 60Hz 帧钟；回前台全量一帧。
+- 注意 pwsh 测试技巧：若 build 报 `cannot open output file ... Permission denied`，
+  先看是否有孤儿 khtml_renderer.exe 锁着 exe（测试 kill 浏览器不杀子进程）。
+
 ## 6. 正在/马上要做的
 A. ~~拆那 1.1s~~ **已完成**（字体枚举缓存 + 图标懒加载，构造 1.1s→~0.35s，TTFF 2.0→1.1s）。
    下一步同部位残账：渲染进程镜像加载+socket 连接 ~500ms（每次新标签都付），

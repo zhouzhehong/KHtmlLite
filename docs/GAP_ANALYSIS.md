@@ -35,6 +35,19 @@
 KHTML_FRAME_DUMP=1（渲染进程落 frame_dump.png）、
 tests/renderer_solo.py（无浏览器直驱渲染进程+帧颜色断言）。
 
+## 0b. 修复批注②（同日，高优 gap 三项）
+
+- **3.2 墓碑缩略图**：suspendTab 在杀进程前抓取最后已合成画布存入
+  TabPage::snapshot；挂起态改为 TombstoneWidget（快照缩放绘制+淡化+标题）；
+  resumeTab 用快照 seed 新 PageSurface，真实 tile 到达前用户始终有视觉锚点。
+- **1.6 渲染进程预热**：RenderTab::prewarm() 空闲时（首次冷标签后 600ms）
+  起一个 about:blank 待命进程并常驻监听；start() 命中时直接收养
+  （warm-hit STARTUP 标记可量化），收养后立即补起待命顶替者；孤儿看门狗
+  10 分钟无客户端自杀。冷路径实测从 ~500ms 级降为毫秒级收养。
+- **2.1 后台帧钟节流**：新增 `visible` IPC；非当前标签渲染进程停 60Hz 帧钟
+  （damage 累积），回前台时 invalidateFull+一帧。WebKit 对应：隐藏页面收不到
+  DisplayRefreshMonitor tick。
+
 ---
 
 ## 1. 进程与沙箱模型
