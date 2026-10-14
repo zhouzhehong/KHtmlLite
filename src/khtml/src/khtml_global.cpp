@@ -1,4 +1,4 @@
-﻿/* This file is part of the KDE project
+/* This file is part of the KDE project
  *
  * Copyright (C) 2000 Simon Hausmann <hausmann@kde.org>
  * Copyright (C) 2007 David Faure <faure@kde.org>
@@ -43,6 +43,12 @@
 #include <assert.h>
 
 #include "khtml_debug.h"
+// Cold-start instrumentation (no-op unless KHTML_STARTUP_TIMING=1).
+#ifdef Q_OS_WIN
+#include "../../host/startuplog.h"
+#else
+#define STARTUP_MARK(label) do {} while (0)
+#endif
 
 // SVG
 #include "svg/SVGNames.h"
@@ -62,7 +68,9 @@ KHTMLGlobal::KHTMLGlobal()
     s_self = this;
     ref();
 
+    STARTUP_MARK("KG: cache init begin");
     khtml::Cache::init();
+    STARTUP_MARK("KG: cache init done; id tables + SVG names begin");
 
     khtml::NamespaceFactory::initIdTable();
     khtml::PrefixFactory::initIdTable();
@@ -71,6 +79,7 @@ KHTMLGlobal::KHTMLGlobal()
     DOM::emptyPrefixName = DOM::PrefixName::fromId(0);
     DOM::emptyNamespaceName = DOM::NamespaceName::fromId(DOM::emptyNamespace);
     WebCore::SVGNames::init();
+    STARTUP_MARK("KG: id tables + SVG names done");
 }
 
 KHTMLGlobal::~KHTMLGlobal()

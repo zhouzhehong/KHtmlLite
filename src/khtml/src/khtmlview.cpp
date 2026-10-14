@@ -1,4 +1,4 @@
-﻿/* This file is part of the KDE project
+/* This file is part of the KDE project
  *
  * Copyright (C) 1998, 1999 Torben Weis <weis@kde.org>
  *                     1999 Lars Knoll <knoll@kde.org>
@@ -30,6 +30,12 @@
 #include "khtml_part.h"
 #include "khtml_events.h"
 #include <config-khtml.h>
+// Cold-start instrumentation (no-op unless KHTML_STARTUP_TIMING=1).
+#ifdef Q_OS_WIN
+#include "../../host/startuplog.h"
+#else
+#define STARTUP_MARK(label) do {} while (0)
+#endif
 #if HAVE_X11
 #include <qx11info_x11.h>
 #endif
@@ -577,11 +583,13 @@ KHTMLView::KHTMLView(KHTMLPart *part, QWidget *parent)
 
     m_part = part;
 
+    STARTUP_MARK("KV: ctor begin (private ready)");
     QScrollArea::setVerticalScrollBarPolicy(d->vpolicy);
     QScrollArea::setHorizontalScrollBarPolicy(d->hpolicy);
 
     initWidget();
     widget()->setMouseTracking(true);
+    STARTUP_MARK("KV: ctor done");
 }
 
 KHTMLView::~KHTMLView()

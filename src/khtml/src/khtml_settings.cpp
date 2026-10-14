@@ -34,6 +34,12 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QFontDatabase>
+// Cold-start instrumentation (no-op unless KHTML_STARTUP_TIMING=1).
+#ifdef Q_OS_WIN
+#include "../../host/startuplog.h"
+#else
+#define STARTUP_MARK(label) do {} while (0)
+#endif
 #include <QByteArray>
 #include <QUrl>
 #include <qstandardpaths.h>
@@ -314,7 +320,9 @@ void KHTMLSettings::readDomainSettings(const KConfigGroup &config, bool reset,
 KHTMLSettings::KHTMLSettings()
     : d(new KHTMLSettingsPrivate())
 {
+    STARTUP_MARK("Settings: init begin");
     init();
+    STARTUP_MARK("Settings: init done");
 }
 
 KHTMLSettings::KHTMLSettings(const KHTMLSettings &other)
@@ -1010,6 +1018,7 @@ QString KHTMLSettings::settingsToCSS() const
 const QString &KHTMLSettings::availableFamilies()
 {
     if (!avFamilies) {
+        STARTUP_MARK("Settings: font enumeration begin");
         avFamilies = new QString;
         QFontDatabase db;
         QStringList families = db.families();
@@ -1029,6 +1038,7 @@ const QString &KHTMLSettings::availableFamilies()
         s.sort();
 
         *avFamilies = ',' + s.join(",") + ',';
+        STARTUP_MARK("Settings: font enumeration done");
     }
 
     return *avFamilies;

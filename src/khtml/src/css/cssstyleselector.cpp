@@ -68,6 +68,12 @@ using namespace DOM;
 #include "khtml_debug.h"
 #include <assert.h>
 #include <stdlib.h>
+// Cold-start instrumentation (no-op unless KHTML_STARTUP_TIMING=1).
+#ifdef Q_OS_WIN
+#include "../../../host/startuplog.h"
+#else
+#define STARTUP_MARK(label) do {} while (0)
+#endif
 
 // Locate one of the bundled KHTML stylesheets under kf5/khtml/css.
 // QStandardPaths::GenericDataLocation covers the usual install locations
@@ -432,6 +438,7 @@ void CSSStyleSelector::loadDefaultStyle(const KHTMLSettings *s, DocumentImpl *do
     if (s_defaultStyle) {
         return;
     }
+    STARTUP_MARK("CSS: loadDefaultStyle begin (html4.css read+parse)");
 
     MediaQueryEvaluator screenEval("screen");
     MediaQueryEvaluator printEval("print");
@@ -471,6 +478,7 @@ void CSSStyleSelector::loadDefaultStyle(const KHTMLSettings *s, DocumentImpl *do
         s_defaultPrintStyle = new CSSStyleSelectorList();
         s_defaultPrintStyle->append(s_defaultSheet, &printEval, doc->styleSelector());
     }
+    STARTUP_MARK("CSS: html4.css parsed");
     {
         QFile f(locateKhtmlCss(QStringLiteral("quirks.css")));
         f.open(QIODevice::ReadOnly);
@@ -492,6 +500,7 @@ void CSSStyleSelector::loadDefaultStyle(const KHTMLSettings *s, DocumentImpl *do
         s_defaultQuirksStyle = new CSSStyleSelectorList();
         s_defaultQuirksStyle->append(s_quirksSheet, &screenEval, doc->styleSelector());
     }
+    STARTUP_MARK("CSS: quirks.css parsed");
     {
         QFile f(locateKhtmlCss(QStringLiteral("presentational.css")));
         f.open(QIODevice::ReadOnly);
@@ -512,6 +521,7 @@ void CSSStyleSelector::loadDefaultStyle(const KHTMLSettings *s, DocumentImpl *do
         s_defaultNonCSSHintsStyle = new CSSStyleSelectorList();
         s_defaultNonCSSHintsStyle->append(s_defaultNonCSSHintsSheet, &screenEval, doc->styleSelector());
     }
+    STARTUP_MARK("CSS: presentational.css parsed; default style ready");
     //qCDebug(KHTML_LOG) << "CSSStyleSelector: default style has " << defaultStyle->count() << " elements";
 }
 

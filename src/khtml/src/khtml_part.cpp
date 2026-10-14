@@ -136,6 +136,12 @@ using namespace DOM;
 // SVG
 #include <svg/SVGDocument.h>
 #include <qstandardpaths.h>
+// Cold-start instrumentation (no-op unless KHTML_STARTUP_TIMING=1).
+#ifdef Q_OS_WIN
+#include "../../host/startuplog.h"
+#else
+#define STARTUP_MARK(label) do {} while (0)
+#endif
 
 bool KHTMLPartPrivate::s_dnsInitialised = false;
 
@@ -187,9 +193,14 @@ KHTMLPart::KHTMLPart(QWidget *parentWidget, QObject *parent, GUIProfile prof)
     : KParts::ReadOnlyPart(parent)
 {
     d = nullptr;
+    STARTUP_MARK("KP: before KHTMLGlobal::registerPart");
     KHTMLGlobal::registerPart(this);
+    STARTUP_MARK("KP: KHTMLGlobal ready");
     setComponentData(KHTMLGlobal::aboutData(), false);
-    init(new KHTMLView(this, parentWidget), prof);
+    KHTMLView *v = new KHTMLView(this, parentWidget);
+    STARTUP_MARK("KP: KHTMLView constructed");
+    init(v, prof);
+    STARTUP_MARK("KP: init done");
 }
 
 KHTMLPart::KHTMLPart(KHTMLView *view, QObject *parent, GUIProfile prof)
@@ -207,13 +218,16 @@ KHTMLPart::KHTMLPart(KHTMLView *view, QObject *parent, GUIProfile prof)
 
 void KHTMLPart::init(KHTMLView *view, GUIProfile prof)
 {
+    STARTUP_MARK("KP init: begin");
     if (prof == DefaultGUI) {
         setXMLFile("khtml.rc");
     } else if (prof == BrowserViewGUI) {
         setXMLFile("khtml_browser.rc");
     }
+    STARTUP_MARK("KP init: xmlfile set");
 
     d = new KHTMLPartPrivate(this, parent());
+    STARTUP_MARK("KP init: part private (settings) ready");
 
     d->m_view = view;
 
@@ -236,6 +250,7 @@ void KHTMLPart::init(KHTMLView *view, GUIProfile prof)
     } else {
         setWidget(view);
     }
+    STARTUP_MARK("KP init: widget/viewbars");
 
     d->m_guiProfile = prof;
     d->m_extension = new KHTMLPartBrowserExtension(this);
@@ -245,6 +260,7 @@ void KHTMLPart::init(KHTMLView *view, GUIProfile prof)
     d->m_scriptableExtension = nullptr; // KF5JS ScriptableExtension removed along with KJS
     new KHTMLTextExtension(this);
     new KHTMLHtmlExtension(this);
+    STARTUP_MARK("KP init: extensions");
     d->m_statusBarPopupLabel = nullptr;
     d->m_openableSuppressedPopups = 0;
 
@@ -320,6 +336,7 @@ void KHTMLPart::init(KHTMLView *view, GUIProfile prof)
 
     d->m_paSetEncoding = new KCodecAction(QIcon::fromTheme("character-set"), i18n("Set &Encoding"), this, true);
     actionCollection()->addAction("setEncoding", d->m_paSetEncoding);
+    STARTUP_MARK("KP init: codec action");
 //   d->m_paSetEncoding->setDelayed( false );
 
     connect(d->m_paSetEncoding, &KSelectAction::textTriggered, this, &KHTMLPart::slotSetEncoding);
@@ -463,6 +480,7 @@ void KHTMLPart::init(KHTMLView *view, GUIProfile prof)
     }
 
     // set the default java(script) flags according to the current host.
+    STARTUP_MARK("KP init: actions created");
     d->m_bOpenMiddleClick = d->m_settings->isOpenMiddleClickEnabled();
     d->m_bJScriptEnabled = d->m_settings->isJavaScriptEnabled();
     setDebugScript(d->m_settings->isJavaScriptDebugEnabled());
@@ -503,6 +521,7 @@ void KHTMLPart::init(KHTMLView *view, GUIProfile prof)
         action->setShortcutContext(Qt::WidgetWithChildrenShortcut);
     }
     actionCollection()->associateWidget(view);
+    STARTUP_MARK("KP init: widget associated");
 
     connect(view, SIGNAL(zoomView(int)), SLOT(slotZoomView(int)));
 
@@ -541,8 +560,11 @@ void KHTMLPart::init(KHTMLView *view, GUIProfile prof)
     }
 
     if (prof == BrowserViewGUI && !parentPart()) {
+        STARTUP_MARK("KP init: before loadPlugins");
         loadPlugins();
+        STARTUP_MARK("KP init: loadPlugins done");
     }
+    STARTUP_MARK("KP init: end");
 }
 
 KHTMLPart::~KHTMLPart()

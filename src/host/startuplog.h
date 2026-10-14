@@ -10,6 +10,9 @@
 // Use tests/startup_timing_report.py to render a timeline from the log.
 #pragma once
 
+// <cstdio> must come from us: this header is also included inside the KHTML
+// library sources, where stdio is not guaranteed to be pulled in earlier.
+#include <cstdio>
 #include <QCoreApplication>
 #include <QElapsedTimer>
 #include <QFile>

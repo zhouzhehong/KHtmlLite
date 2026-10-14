@@ -42,6 +42,12 @@
 #include <QQueue>
 
 #include "html/html_formimpl.h"
+// Cold-start instrumentation (no-op unless KHTML_STARTUP_TIMING=1).
+#ifdef Q_OS_WIN
+#include "../../host/startuplog.h"
+#else
+#define STARTUP_MARK(label) do {} while (0)
+#endif
 #include "html/html_objectimpl.h"
 #include "khtml_run.h"
 #include "khtml_global.h"
@@ -110,7 +116,9 @@ public:
         m_bLoadEventEmitted = true;
         m_cachePolicy = KIO::CC_Verify;
         m_manager = nullptr;
+        STARTUP_MARK("KP priv: before defaultHTMLSettings");
         m_settings = new KHTMLSettings(*KHTMLGlobal::defaultHTMLSettings());
+        STARTUP_MARK("KP priv: settings copied");
         m_bClearing = false;
         m_bCleared = false;
         m_zoomFactor = 100;
