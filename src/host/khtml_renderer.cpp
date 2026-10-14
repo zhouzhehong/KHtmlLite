@@ -339,7 +339,11 @@ public:
         // PerfLog is a diagnostic tool that writes synchronously to disk on
         // every event (flush() after each PERF_MARK). Keep it disabled in
         // production to avoid main-thread disk I/O jank during page load.
-        PerfLog::instance().setEnabled(false);
+        // PerfLog is a diagnostic tool that writes synchronously to disk on
+        // every event (flush() after each PERF_MARK). Keep it disabled in
+        // production to avoid main-thread disk I/O jank during page load;
+        // opt in with KHTML_PERF=1.
+        PerfLog::instance().setEnabled(qEnvironmentVariableIntValue("KHTML_PERF") != 0);
 
         // Software-frame transport: the renderer never owns a visible window.
         // KHTML renders to an offscreen widget; frames are captured and sent
@@ -366,6 +370,20 @@ public:
         m_frameTimer = new QTimer(this);
         m_frameTimer->setInterval(16);
         connect(m_frameTimer, &QTimer::timeout, this, &RendererHost::grabFrame);
+
+        // Engine damage → frame invalidation.  The KHTML view is offscreen
+        // (WA_DontShowOnScreen), so QWidget::update() is a no-op and without
+        // this hook every content repaint would be invisible: pages land
+        // white, later images never appear.  contentsUpdated() carries the
+        // damaged rect in viewport coordinates — WebKit TileController
+        // damage plumbing, not per-input full invaliens.
+        connect(m_view->view(), &KHTMLView::contentsUpdated, this,
+                [this](const QRect &r) {
+            QWidget *w = m_view ? m_view->widget() : nullptr;
+            if (!w) return;
+            m_dirtyRegion += r.intersected(QRect(0, 0, w->width(), w->height()));
+            scheduleFrame();
+        });
 
         connect(m_view, &RendererView::navigateRequested, this, [this](const QUrl &u) {
             m_pendingUrl = u;
@@ -409,6 +427,33 @@ public:
                     QStringLiteral("Cached document is empty: %1").arg(localPath));
                 return;
             }
+            m_view->begin(localFile);
+            m_view->write(html.constData(), html.size());
+            m_view->end();
+        });
+        // Progressive delivery, phase 2: once PageLoader has every sub-resource
+        // on disk and has rewritten index.html, re-feed the complete document.
+        // The initial parse permanently failed images/CSS whose file did not
+        // exist yet; re-feeding after all resources landed heals them
+        // (engine-side DocLoader now evicts hadError() cache entries).
+        // Scroll/zoom are preserved so the swap is visually lossless — this
+        // is our "final consistency" step, same job as WebKit's incremental
+        // subresource load replacing placeholders.
+        connect(m_loader, &PageLoader::refreshed, this,
+                [this](const QUrl &localFile, const QUrl &finalUrl) {
+            Q_UNUSED(finalUrl);
+            PERF_MARK("refreshed_received");
+            if (!m_view || !m_view->view()) return;
+            KHTMLView *v = m_view->view();
+            m_pendingRestoreX = v->contentsX();
+            m_pendingRestoreY = v->contentsY();
+            m_pendingRestoreZoom = m_view->zoomFactor();
+            m_hasPendingRestore = true;
+            QFile f(localFile.toLocalFile());
+            if (!f.open(QIODevice::ReadOnly)) return;
+            const QByteArray html = f.readAll();
+            f.close();
+            if (html.isEmpty()) return;
             m_view->begin(localFile);
             m_view->write(html.constData(), html.size());
             m_view->end();
@@ -628,6 +673,30 @@ public:
             w->render(&fp, QPoint(), QRegion(dirty));
             fp.end();
             STARTUP_MARK("render pass done");
+        }
+
+        // Debug: KHTML_FRAME_DUMP=1 makes the renderer save its grabbed
+        // frame to <appDir>/frame_dump.png roughly once per second, so a
+        // headless/CI-style check can see what the renderer actually painted
+        // without peer-reviewing tile plumbing.
+        if (qEnvironmentVariableIsSet("KHTML_FRAME_DUMP")) {
+            static QElapsedTimer s_dumpTimer;
+            static int s_dumpCount = 0;
+            static bool s_dumpStarted = [] { s_dumpTimer.start(); return true; }();
+            if (s_dumpCount < 10 || s_dumpTimer.elapsed() >= 1000) {
+                ++s_dumpCount;
+                s_dumpTimer.restart();
+                frameImage.save(QCoreApplication::applicationDirPath()
+                                + QStringLiteral("/frame_dump.png"));
+                // Diagnostic: is the document actually laid out?
+                KHTMLView *kv = m_view->view();
+                QVariant t = m_view->executeScript(QStringLiteral(
+                    "document.title + '|' + document.URL + '|' + (document.body ? document.body.innerHTML.length : -1)"));
+                STARTUP_MARK(QStringLiteral("dump cw=%1 ch=%2 info=%3")
+                             .arg(kv ? kv->contentsWidth() : -1)
+                             .arg(kv ? kv->contentsHeight() : -1)
+                             .arg(t.toString()).toUtf8().constData());
+            }
         }
 
         // FNV-1a over a normalized tile (frame pixels, white outside the
@@ -1091,6 +1160,7 @@ private slots:
                 const QUrl u(obj.value(QStringLiteral("url")).toString());
                 if (u.isValid()) {
                     PERF_BEGIN(u.toString().toUtf8().constData());
+                    StartupLog::mark(("navigate_received " + u.toString()).toUtf8().constData());
                     m_pendingUrl = u;
                     const QString sc = u.scheme().toLower();
                     if (sc == QLatin1String("about")) { PERF_MARK("khtmlpart_load_start"); loadBlankPage(); }

@@ -5,6 +5,36 @@
 > `docs/HANDOVER.md`，2025-10-14 本机热跑），没测量标"需测量"。
 > 对齐成本分档：**小** ≤ 1 天；**中** ≈ 1 周；**大** > 1 周或动协议/引擎。
 
+## 0. 修复批注（2026-10-14，竞态/文件层大修）
+
+本批修复了一起三层叠加的"页面白/图全丢"故障，全部有像素级实测
+（tests/bg_smoke.py：红背景 tile + 320×240 绿图权重断言，1.4s 内 PASS）：
+
+1. **PageLoader 子资源时序竞态** → 初始文档引用的 file:// 尚不存在，
+   CachedImage::error() 状态永久卡死，且渲染进程从不二次加载最终文档。
+   修：engine `DocLoader::needReload` 对 `hadError()` 条目视为过期驱逐
+   （misc/loader.cpp）；PageLoader 全量下载完成后发 `refreshed` 信号，
+   渲染进程保滚动/缩放重喂最终文档（旧行为是每个资源完成时把 200KB 文档
+   全文 regex 重写一遍——O(资源数) 次全页重写，一并改为恰好一次）。
+2. **KIO file:// 全军覆没** → kioslave5.exe 在 MSYS2 部署中不存在，
+   KIO 的 D-Bus worker 模型本来就被判出范围，所有 file:// 子资源加载
+   永久失败。修：misc/loader.cpp `Loader::scheduleRequest` 对本地文件
+   走 QFile 直读快路径（保持 KIO 异步契约：延迟一事件循环拍派发）。
+3. **离屏渲染无损伤信号** → 渲染 widget 挂 WA_DontShowOnScreen，
+   QWidget::update() 变 no-op，首帧后 KHTML 内部 repaint 全部无声丢失，
+   页面可能永远停白。修：KHTMLView 新增 `contentsUpdated(QRect)` 信号
+   （viewport 坐标，zoom/scroll 变换后），renderer 直连
+   `m_dirtyRegion += r; scheduleFrame()` —— 这就是 WebKit 的
+   damage-rect 上传机制，顺带把 2.2"输入路径 invalidateFull 造假"
+   过渡到真脏矩形。
+
+附：build.sh 现部署 Qt imageformats 插件（qwebp/qico/qsvg/qgif/qjpeg）
+到 build/host/imageformats/；PageLoader cacheRoot 改写探针选路
+（TEMP → exe 旁兜底），MSYS2 shell 把 TMP 重写成 /tmp 时缓存不再丢失。
+诊断开关：KHTML_PERF=1（PageLoader 全链路 PERF_MARK）、
+KHTML_FRAME_DUMP=1（渲染进程落 frame_dump.png）、
+tests/renderer_solo.py（无浏览器直驱渲染进程+帧颜色断言）。
+
 ---
 
 ## 1. 进程与沙箱模型

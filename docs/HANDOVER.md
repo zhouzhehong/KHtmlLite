@@ -56,6 +56,28 @@ KHTML（5.116）改造的双进程浏览器：`khtml_browser.exe`（UI/合成）
   "couldn't lock local file"、QSettings sync AccessError）：cmd/bash 能写、未签名 exe 不行。
   需要进程级持久化时放 `applicationDirPath()` 旁边（如 `build/host/khtml_fonts.ini`）。
 
+## 5b. 页面内容渲染通路大修（2026-10-14，像素级实测）
+用户报"卡 + 背景缺失"的根因不是一条，是三层叠加，全部修复并验证：
+
+- **PageLoader 时序竞态**：初始文档把资源改写成尚不存在的 file:// → 渲染端从不二次
+  加载 → image 永久 error（且 hadError 缓存条目不被重取）。修复三件套：
+  misc/loader.cpp `needReload` 驱逐 hadError 条目；PageLoader 全量下载后发
+  `refreshed` 信号 → renderer 保滚动/缩放重喂最终文档；rewriteAndSave 从"每资源
+  完成一次全文重写"降为每导航恰好一次（旧行为是 O(资源数)×200KB regex，是真实
+  卡顿源之一）。
+- **KIO file:// 全灭**：MSYS2 部署里没有 kioslave5.exe → 一切 file:// 子资源加载
+  必然失败（这就是用户眼里"背景缺失"的物理解释）。misc/loader.cpp 加 QFile
+  直读快路径（延迟一事件循环拍，保持 KIO 异步契约）。
+- **离屏渲染无 repaint 信号**：WA_DontShowOnScreen 下 QWidget::update() 是 no-op，
+  首帧后页面永白。KHTMLView 新增 `contentsUpdated(QRect)`（viewport 坐标）→
+  renderer 累积脏区+排帧。这是 WebKit damage rect 的对应物。
+- 配套：build.sh 部署 Qt imageformats 插件；PageLoader cacheRoot 改写探针选路
+  （TEMP 被 MSYS2 重写成 /tmp 不可写时退到 exe 旁）；诊断开关 `KHTML_PERF=1`、
+  `KHTML_FRAME_DUMP=1`；新测试 `tests/renderer_solo.py`（直驱渲染进程）、
+  `tests/bg_smoke.py`（像素断言：红背景平铺+320×240 绿图，1.4s PASS）。
+- 验证：bg_smoke PASS；tile_protocol PASS；bing 启动时间线无回归（Settings init
+  36ms；渲染进程持续产出 repaint 帧而非一帧即哑）。
+
 ## 6. 正在/马上要做的
 A. ~~拆那 1.1s~~ **已完成**（字体枚举缓存 + 图标懒加载，构造 1.1s→~0.35s，TTFF 2.0→1.1s）。
    下一步同部位残账：渲染进程镜像加载+socket 连接 ~500ms（每次新标签都付），

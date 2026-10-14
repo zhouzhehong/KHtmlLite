@@ -7,6 +7,7 @@
 #include <QFile>
 #include <QTextStream>
 #include <QStandardPaths>
+#include <QCoreApplication>
 #include <QDir>
 #include <QColor>
 #include <QDebug>
@@ -513,10 +514,40 @@ PageLoader::PageLoader(QObject *parent)
 
 QString PageLoader::cacheRoot()
 {
-    QString base = QStandardPaths::writableLocation(QStandardPaths::TempLocation)
-                   + QStringLiteral("/khtml_cache");
-    QDir().mkpath(base);
-    // Sweep cache directories older than one hour so the temp folder does not
+    // Writable-cache probe.  The TEMP-based default is not reliable for this
+    // app: shells like MSYS2 rewrite TMP/TEMP to POSIX paths ("/tmp" →
+    // C:/msys64/tmp) that a Windows-native exe may fail to write, and some
+    // sandboxes deny AppData writes.  Directory listing success is not proof
+    // of write access, so each candidate must accept a real probe file.
+    static QString s_root;
+    if (!s_root.isEmpty() && QDir(s_root).exists()) {
+        return s_root;
+    }
+    const QStringList candidates = {
+        QStandardPaths::writableLocation(QStandardPaths::TempLocation),
+        QStandardPaths::writableLocation(QStandardPaths::TempLocation) + QStringLiteral("/khtmllite"),
+        QCoreApplication::applicationDirPath(),
+        QStandardPaths::writableLocation(QStandardPaths::AppDataLocation),
+    };
+    QString base;
+    for (const QString &cand : candidates) {
+        if (cand.isEmpty()) continue;
+        const QString b = cand + QStringLiteral("/khtml_cache");
+        if (!QDir().mkpath(b)) continue;
+        QFile probe(b + QStringLiteral("/.write_test"));
+        if (!probe.open(QIODevice::WriteOnly)) continue;
+        probe.write("x");
+        probe.close();
+        probe.remove();
+        base = b;
+        break;
+    }
+    if (base.isEmpty()) {
+        qWarning("PageLoader: no writable cache location found");
+        return QString();
+    }
+    s_root = base;
+    // Sweep cache directories older than one hour so the folder does not
     // fill up after extended browsing. Each page gets its own subdirectory.
     const QDir d(base);
     const qint64 now = QDateTime::currentSecsSinceEpoch();
@@ -566,6 +597,7 @@ void PageLoader::load(const QUrl &url)
     m_pending = 0;
     m_criticalPending = 0;
     m_finished = false;
+    m_rewritten = false;
     m_timeout->start(15000);
 
     QNetworkRequest req(url);
@@ -775,8 +807,12 @@ void PageLoader::onResourceFinished()
             outData = t.toUtf8();
         }
         QFile f(m_cacheDir + QLatin1Char('/') + res.localName);
-        if (f.open(QIODevice::WriteOnly))
-            f.write(outData.isEmpty() && !looksJs ? data : outData);
+        const bool wok = f.open(QIODevice::WriteOnly);
+        if (wok) f.write(outData.isEmpty() && !looksJs ? data : outData);
+        PERF_MARK_D("resource_cached", res.localName + (wok ? QStringLiteral(" OK bytes=")
+                                                          : QStringLiteral(" WRITE_FAIL path="))
+                    + (wok ? QString::number(data.size())
+                           : (m_cacheDir + QLatin1Char('/') + res.localName)));
 
         // If this is a stylesheet, dig into it for background images, fonts
         // and @import sheets. Those references are relative to the CSS URL,
@@ -1443,31 +1479,45 @@ void PageLoader::deliverInitialDocument()
     // Write the initial document.
     QDir().mkpath(m_cacheDir);
     QFile f(m_cacheDir + QStringLiteral("/index.html"));
-    if (f.open(QIODevice::WriteOnly)) {
+    const bool wok = f.open(QIODevice::WriteOnly);
+    if (wok) {
         QTextStream ts(&f);
         ts.setCodec("UTF-8");
         ts << html;
     }
+    PERF_MARK_D("initial_doc_write", (wok ? QStringLiteral("OK ") : QStringLiteral("FAIL ")) + m_cacheDir);
 
     PERF_MARK("initial_document_delivered");
     const QUrl local = QUrl::fromLocalFile(m_cacheDir + QStringLiteral("/index.html"));
     emit finished(local, m_finalUrl, QString());
 }
 
-// Called as subresources finish.  Keeps the existing cache write and
-// bookkeeping (done by the caller).  When all critical resources are in,
-// runs the full rewriteAndSave() to update the cached copy with CSS/JS
-// processing — but never emits finished() a second time.
+// Called as subresources finish.  Bookkeeping (cache write of the resource)
+// is done by the caller.  The FULL rewrite (CSS var expansion, JS transpile,
+// polyfill injection, gradient simplification, inline-SVG extraction) used to
+// run after EVERY resource completion once critical resources were in — that
+// is O(resources) full-page regex passes per navigation.  It now runs exactly
+// once, when every pending download has settled (or the watchdog fired),
+// and then notifies the renderer via refreshed() so a second, complete
+// document replaces the initial one (which referenced not-yet-downloaded
+// local files and permanently failed their images/stylesheets).
 void PageLoader::finalizeSubresources()
 {
-    if (m_failed) return;
+    if (m_failed || m_rewritten) return;
     if (m_criticalPending > 0 && !m_timedOut) return;
+    if (m_pending > 0 && !m_timedOut) return;   // wait for images too
     m_timeout->stop();
-    // Full rewrite updates the cached index.html with gradient simplification,
-    // CSS var expansion, JS transpile, etc.  KHTML already has the initial
-    // document; this improves the cached copy for future reloads.
-    if (m_initialDelivered && m_criticalPending == 0)
-        rewriteAndSave();
+    m_rewritten = true;
+    PERF_MARK("rewrite_save_final_begin");
+    rewriteAndSave();
+    PERF_MARK("rewrite_save_final_done");
+    // If the initial (pre-download) document was already handed to the
+    // renderer, tell it the final cached copy is ready so it can re-feed.
+    if (m_initialDelivered) {
+        const QUrl local = QUrl::fromLocalFile(m_cacheDir + QStringLiteral("/index.html"));
+        PERF_MARK("refreshed_emitted");
+        emit refreshed(local, m_finalUrl);
+    }
 }
 
 void PageLoader::maybeFinish()

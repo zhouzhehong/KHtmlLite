@@ -368,6 +368,15 @@ Q_SIGNALS:
     void hideAccessKeys();
     void repaintAccessKeys();
     void findAheadActive(bool);
+    /**
+     * KHtmlLite addition: engine damage notification, in VIEWPORT (widget)
+     * coordinates, after zoom/scroll transforms.  In a visible window this
+     * signal is redundant with QWidget::update(); in software-frame hosts
+     * the view is offscreen so update() is a no-op and this is the ONLY
+     * way the compositor learns which region of the canvas is stale —
+     * the analogue of a WebKit damage rect reaching the UI process.
+     */
+    void contentsUpdated(const QRect &r);
 
 protected:
     void clear();

@@ -817,6 +817,9 @@ void KHTMLView::updateContents(int x, int y, int w, int h)
         pview->updateContents(x + off.x(), y + off.y(), w, h);
     } else {
         widget()->update(x, y, w, h);
+        // (x,y,w,h) here are already in viewport coordinates; one signal
+        // covers both windowed and offscreen (KHtmlLite) hosts.
+        emit contentsUpdated(QRect(x, y, w, h));
     }
 }
 
@@ -834,6 +837,7 @@ void KHTMLView::repaintContents(int x, int y, int w, int h)
         pview->repaintContents(x + off.x(), y + off.y(), w, h);
     } else {
         widget()->repaint(x, y, w, h);
+        emit contentsUpdated(QRect(x, y, w, h));
     }
 }
 

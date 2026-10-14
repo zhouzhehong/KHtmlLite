@@ -1046,7 +1046,16 @@ bool DocLoader::needReload(CachedObject *existing, const QString &fullURL)
     bool reload = false;
     if (m_cachePolicy == KIO::CC_Verify) {
         if (!m_reloadedURLs.contains(fullURL)) {
-            if (existing && existing->isExpired() && !existing->isPreloaded()) {
+            // KHtmlLite: also evict entries whose load previously FAILED.
+            // PageLoader delivers the initial document before the local files
+            // its subresource URLs point at have been downloaded; those loads
+            // fail and the sticky m_hadError flag would otherwise serve the
+            // broken entry forever — even after the renderer re-feeds the
+            // final document once the files exist.  Errored entries are
+            // worthless as cache hits, so evicting them here is behavior-
+            // preserving for healthy loads and heals the race.
+            if (existing && (existing->isExpired() || existing->hadError())
+                && !existing->isPreloaded()) {
                 Cache::removeCacheEntry(existing);
                 m_reloadedURLs.append(fullURL);
                 reload = true;
@@ -1304,6 +1313,37 @@ void Loader::scheduleRequest(Request *req)
 #endif
 
     QUrl u(req->object->url().string());
+
+    // KHtmlLite: local files are read directly, bypassing KIO's worker
+    // model entirely.  kioslave5.exe is not deployed (KIO's D-Bus worker
+    // launch machinery is intentionally out of scope for this port), so
+    // every file:// subresource — the cached images/CSS/JS that PageLoader
+    // produces — would otherwise fail forever and pages render without
+    // pictures.  Delivery is deferred by one event-loop turn to preserve
+    // KIO's asynchronous contract for callers of requestObject().
+    if (u.isLocalFile()) {
+        const QString path = u.toLocalFile();
+        QTimer::singleShot(0, this, [this, req, path]() {
+            QFile f(path);
+            if (!f.open(QIODevice::ReadOnly)) {
+                req->object->error(QFile::OpenError, "file open failed");
+                emit requestFailed(req->m_docLoader, req->object);
+                req->object->finish();
+                delete req;
+                return;
+            }
+            const QByteArray data = f.readAll();
+            if (!req->m_buffer.isOpen())
+                req->m_buffer.open(QIODevice::WriteOnly);
+            req->m_buffer.write(data.data(), data.size());
+            req->object->data(req->m_buffer, true);
+            emit requestDone(req->m_docLoader, req->object);
+            req->object->finish();
+            delete req;
+        });
+        return;
+    }
+
     KIO::TransferJob *job = KIO::get(u, KIO::NoReload, KIO::HideProgressInfo /*no GUI*/);
 
     job->addMetaData("cache", KIO::getCacheControlString(req->object->cachePolicy()));

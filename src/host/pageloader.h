@@ -33,6 +33,12 @@ public:
 
 Q_SIGNALS:
     void finished(const QUrl &localFileUrl, const QUrl &finalUrl, const QString &error);
+    // Emitted at most once per navigation, after ALL sub-resources (critical
+    // or not) have landed on disk and rewriteAndSave() has produced the final
+    // cached index.html.  The renderer listens for this to re-feed the
+    // document, healing images/stylesheets that failed during the initial
+    // (pre-download) parse.  See ARCHITECTURE.md §2 (final consistency).
+    void refreshed(const QUrl &localFileUrl, const QUrl &finalUrl);
 
 private Q_SLOTS:
     void onMainFinished();
@@ -52,6 +58,11 @@ private:
     bool m_timedOut = false;
     bool m_finished = false;
     bool m_initialDelivered = false;
+    // One-shot guard: rewriteAndSave() used to run after EVERY resource
+    // completion once critical resources were in (a full-page regex rewrite
+    // per arriving image!) — now it runs exactly once per navigation, when
+    // all pending downloads are done (or the timeout fired).
+    bool m_rewritten = false;
     int m_navGeneration = 0;
     QTimer *m_timeout = nullptr;
 

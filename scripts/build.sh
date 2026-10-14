@@ -66,6 +66,22 @@ cmake "${ROOT_DIR}/src/host" \
 ninja khtml_browser khtml_renderer
 echo "  Browser + renderer built."
 
+# --- Step 3b: Deploy Qt imageformat plugins next to the host EXEs -----------
+# KHTML decodes PNG/JPEG/GIF internally, but WebP/ICO/SVG go through Qt's
+# QImage plugin system.  Deploying the plugins beside the exe makes decoding
+# work in any environment (and mirrors the portable release layout).
+QT_PLUGIN_DIR="${QT_PLUGIN_DIR:-/mingw64/share/qt5/plugins}"
+if [ -d "${QT_PLUGIN_DIR}/imageformats" ]; then
+    mkdir -p "${BUILD_DIR}/host/imageformats"
+    cp -f "${QT_PLUGIN_DIR}/imageformats/qgif.dll" \
+          "${QT_PLUGIN_DIR}/imageformats/qjpeg.dll" \
+          "${QT_PLUGIN_DIR}/imageformats/qico.dll" \
+          "${QT_PLUGIN_DIR}/imageformats/qsvg.dll" \
+          "${QT_PLUGIN_DIR}/imageformats/qwebp.dll" \
+          "${BUILD_DIR}/host/imageformats/" 2>/dev/null || true
+    echo "  Qt imageformats plugins deployed."
+fi
+
 echo ""
 echo "=== Build complete ==="
 echo "Output: ${BUILD_DIR}/host/"

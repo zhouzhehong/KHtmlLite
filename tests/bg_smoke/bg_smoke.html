@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>bg smoke</title>
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; }
+  /* The CSS background image must appear AFTER the refresh hand-off:
+     it points at a subresource that is NOT on disk when the initial
+     document is delivered. */
+  body { background: #ffffff url("red.png") repeat; }
+</style>
+</head>
+<body>
+  <img src="green.png" width="320" height="240" alt="g">
+</body>
+</html>
