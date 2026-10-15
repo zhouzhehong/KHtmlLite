@@ -51,6 +51,7 @@
 #include <QDateTime>
 #include <QMessageBox>
 #include <QStandardPaths>
+#include <QThread>
 
 // Per-tab renderer process manager. Starts khtml_renderer.exe, embeds its
 // window, relays navigation via QLocalSocket, and detects crashes.
@@ -97,28 +98,14 @@ public:
             update(dirty);
     }
     // Map a widget-relative point to frame coordinates.  The frame is always
-    // drawn unscaled at the surface origin (see paintEvent), so this is an
-    // identity mapping: hit testing and painting must agree on the geometry.
+    // Drawn unscaled at the surface origin except during the short
+    // size-mismatch transition (see paintEvent), where the whole frame is
+    // briefly scaled to the surface.  Hit testing stays identity-mapped:
+    // during the <1-frame transition the sub-pixel click offset is below
+    // the perception threshold (WebKit makes no live-resize hit-test
+    // compensation either — input during that window targets the next
+    // committed frame's geometry).
     QPoint mapToFrame(const QPoint &p) const { return p; }
-
-private:
-    // WebKit-style checkerboard for surface area that has no committed
-    // pixels yet (during/after resize, before the renderer catches up).
-    // Cached; painted via a texture brush.
-    static QBrush checkerBoard()
-    {
-        static QPixmap pm;
-        if (pm.isNull()) {
-            const int c = 16;  // checker cell size, same spirit as WebKit's
-            pm = QPixmap(c * 2, c * 2);
-            pm.fill(QColor(245, 245, 245));
-            QPainter p(&pm);
-            p.fillRect(0, 0, c, c, QColor(225, 225, 225));
-            p.fillRect(c, c, c, c, QColor(225, 225, 225));
-            p.end();
-        }
-        return QBrush(pm);
-    }
 
 public:
     // Callback set by RenderTab to forward input events to the renderer.
@@ -194,36 +181,32 @@ protected:
 
     void paintEvent(QPaintEvent *) override {
         QPainter p(this);
-        // Safari/WebKit presentation during resize: the content NEVER
-        // scales.  It stays 1:1, anchored at the top-left; newly exposed
-        // surface area the renderer has not painted yet shows a
-        // checkerboard ("unpainted tiles" in WebKit speak), until the
-        // renderer's relayout finishes and true pixels for the new size
-        // arrive.  Scaling the frame like an image made slow relayout look
-        // like a photo stretch.
+        // Safari presentation contract for resize (WebKit2 mac / Windows
+        // follow the same rule): while the committed frame does not match
+        // the surface size — meaning the renderer has not caught up with a
+        // viewport change yet — the OLD frame is SCALED to fill the widget
+        // (in WebKit this is the UI process stretching its existing
+        // backing store / tiled surface), instead of a 1:1 crop plus
+        // checkerboard.  Scaling keeps the page visually attached to the
+        // window edges during interactive drags and maximize/restore
+        // without paying a synchronous relayout per WM_SIZE; the first
+        // true-size frame silently replaces the stretched one below.
+        const bool sameSize = !m_frame.isNull() && m_frame.size() == size();
+        if (!m_frame.isNull() && !sameSize
+                && m_previewDX == 0 && m_previewDY == 0) {
+            // Live drag-resize repaints at WM_SIZE rate; smooth interpolation
+            // of a full-surface stretch each time is pure CPU burn there, so
+            // it is reserved for the short discrete transitions
+            // (maximize/restore) where it is actually visible for a moment.
+            p.setRenderHint(QPainter::SmoothPixmapTransform, !m_liveResize);
+            p.drawImage(QRect(QPoint(0, 0), size()), m_frame);
+            return;
+        }
         if (!m_frame.isNull()) {
-            // Draw 1:1 anchored, possibly with the transient predictive
-            // scroll offset (scrolling down moves content up, hence the
-            // negative sign).  The strip this exposes below/above the frame
-            // is filled by the trailing checkerboard pass when needed, or
-            // left white otherwise.
+            // Draw 1:1 anchored (frame size already matches), possibly with
+            // the transient predictive scroll offset (scrolling down moves
+            // content up, hence the negative sign).
             p.drawImage(QPoint(-m_previewDX, -m_previewDY), m_frame);
-            if (m_frame.size() != size()) {
-                if (m_lastLoggedMismatch != m_frame.size()) {
-                    m_lastLoggedMismatch = m_frame.size();
-                    qWarning("PageSurface: frame size %dx%d != surface size %dx%d (checkerboard until the renderer catches up)",
-                             m_frame.width(), m_frame.height(),
-                             width(), height());
-                }
-                const int rw = qMax(0, width() - m_frame.width());
-                const int bh = qMax(0, height() - m_frame.height());
-                if (rw > 0)
-                    p.fillRect(QRect(m_frame.width(), 0, rw, height()),
-                               checkerBoard());
-                if (bh > 0)
-                    p.fillRect(QRect(0, m_frame.height(), width(), bh),
-                               checkerBoard());
-            }
         } else {
             p.fillRect(rect(), Qt::white);
         }
@@ -321,7 +304,6 @@ private:
 
     QImage m_frame;
     int m_frameW = 0, m_frameH = 0;
-    QSize m_lastLoggedMismatch;
     std::function<void(const QJsonObject &)> m_inputCb;
     // Transient predictive-scroll draw offset (pixels).  Presentation only;
     // always returns to 0 when the renderer's authoritative offset arrives.
@@ -492,6 +474,14 @@ public:
 
     void resize(int w, int h)
     {
+        // Redundancy guard: a same-size resize would trigger a synchronous
+        // KHTML relayout in the renderer for nothing (tab switches re-fire
+        // surface resizes, and drags that end on the start size).  Only a
+        // genuinely new viewport is shipped.  A fresh renderer (resume,
+        // crash-restart) starts at m_lastSentW=0, so its first size always
+        // goes out.
+        if (w == m_lastSentW && h == m_lastSentH)
+            return;
         if (m_socket && m_socket->isOpen()) {
             QJsonObject obj;
             obj[QStringLiteral("cmd")] = QStringLiteral("resize");
@@ -514,6 +504,8 @@ public:
             m_socket->write(QJsonDocument(obj).toJson(QJsonDocument::Compact) + "\n");
             m_socket->flush();
             m_resizePending = false;
+            m_lastSentW = w;
+            m_lastSentH = h;
         } else {
             // The renderer process and its IPC socket start asynchronously, so
             // a resize that happens in the meantime cannot be delivered yet.
@@ -600,6 +592,31 @@ public:
         BOOL ok = GetProcessMemoryInfo(h, &pmc, sizeof(pmc));
         CloseHandle(h);
         return ok ? (qint64)(pmc.WorkingSetSize / 1024) : 0;
+    }
+
+    // Cumulative kernel+user CPU time of the renderer process in
+    // milliseconds (0 = not running / handle refused). The memory/CPU
+    // watchdog samples this every tick and turns the delta into a
+    // per-core utilization figure, which drives the CPU-adaptive half
+    // of the tombstone policy (Safari suspends busy background tabs to
+    // enforce its "background CPU ~ 0" rule even while memory is free).
+    qint64 cpuTimeMs() const {
+        if (!m_process || m_process->state() == QProcess::NotRunning)
+            return 0;
+        const qint64 pid = m_process->processId();
+        if (pid <= 0)
+            return 0;
+        HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, (DWORD)pid);
+        if (!h)
+            return 0;
+        FILETIME ftCreate, ftExit, ftKernel, ftUser;
+        BOOL ok = GetProcessTimes(h, &ftCreate, &ftExit, &ftKernel, &ftUser);
+        CloseHandle(h);
+        if (!ok)
+            return 0;
+        const qint64 k = (qint64(ftKernel.dwHighDateTime) << 32) | ftKernel.dwLowDateTime;
+        const qint64 u = (qint64(ftUser.dwHighDateTime) << 32) | ftUser.dwLowDateTime;
+        return (k + u) / 10000;  // FILETIME 100ns units -> ms
     }
 
     // === Renderer pre-warm pool (WebKit WebProcessPool::prewarmedWebProcess) ===
@@ -943,6 +960,9 @@ public:
     // A resize arrived before the IPC socket was connected and still has to be
     // delivered (see resize / flushPendingResize).
     bool m_resizePending = false;
+    // Last viewport size actually shipped to the renderer (see resize()):
+    // same-size requests are dropped instead of re-triggering a relayout.
+    int m_lastSentW = 0, m_lastSentH = 0;
     int m_connectRetries = 0;
     int m_restoreX = 0, m_restoreY = 0, m_restoreZoom = 100;
     bool m_hasRestore = false;
@@ -987,6 +1007,13 @@ struct TabPage {
     // tombstoned and as the seed canvas during resume (mechanism: Safari's
     // frozen-page snapshot — memory is freed, pixels remain).
     QImage snapshot;
+    // CPU-adaptive tombstone bookkeeping (sampled by checkMemoryBudget):
+    // cumulative renderer CPU ms at the last tick, per-core utilization
+    // (per-mille) over the last tick window, and how many consecutive
+    // ticks the background tab has been "hot".
+    qint64 cpuTimeMs = 0;
+    int cpuPerMill = 0;
+    int hotStreak = 0;
 };
 
 // Tombstone placeholder: paints the last snapshot (top-left anchored, scaled
@@ -1044,6 +1071,7 @@ public:
         m_memTimer = new QTimer(this);
         connect(m_memTimer, &QTimer::timeout, this, &KHtmlLiteWindow::checkMemoryBudget);
         m_memTimer->start(10000);
+        startMemoryPressureWatch();
         m_resizeTimer = new QTimer(this);
         m_resizeTimer->setSingleShot(true);
         connect(m_resizeTimer, &QTimer::timeout, this, &KHtmlLiteWindow::applyPendingResize);
@@ -1242,20 +1270,25 @@ public:
     }
 
     // Called by the coalescing resize timer once a page surface has changed
-    // size.  Every tab's surface is laid out with the window, so every running
-    // renderer is brought to its surface's current size.
+    // size.  ONLY the current tab's renderer is brought to the new size
+    // right away; background tabs relayout lazily on activation instead.
+    // (WebKit: hidden pages get no layout/display work.  A window resize
+    // used to re-layout EVERY open tab's renderer in the same instant —
+    // with N tabs that is N full-page relayout/render passes competing
+    // for CPU exactly when the visible tab races to deliver its new-size
+    // frame, which is the multi-tab resize "re-render" lag.)
     void applyPendingResize() {
-        for (TabPage *pg : m_pages) {
-            if (!pg || !pg->render || !pg->render->isRunning())
-                continue;
-            QWidget *container = pg->render->container();
-            if (!container)
-                continue;
-            const QSize s = container->size();
-            if (s.width() <= 0 || s.height() <= 0)
-                continue;
-            pg->render->resize(s.width(), s.height());
-        }
+        TabPage *cur = currentPage();
+        TabPage *pg = cur;
+        if (!pg || !pg->render || !pg->render->isRunning())
+            return;
+        QWidget *container = pg->render->container();
+        if (!container)
+            return;
+        const QSize s = container->size();
+        if (s.width() <= 0 || s.height() <= 0)
+            return;
+        pg->render->resize(s.width(), s.height());
     }
 
 protected:
@@ -1491,11 +1524,43 @@ protected:
         }
     }
 
+    // === Load-adaptive tab eviction (Safari: MemoryPressureHandler) ===
+    // Tombstoning follows SYSTEM load, never our own absolute footprint
+    // (a 400 MB browser is harmless on an idle 32 GB machine and fatal on
+    // a 4 GB one).  Two independent signals, mirroring WebKit's
+    // MemoryPressureHandler design on Windows:
+    //
+    //  1. Memory pressure LEVELS, polled with the 10 s watchdog timer
+    //     (GlobalMemoryStatusEx.dwMemoryLoad):
+    //       normal  : < 70%      -> nothing
+    //       pressure: 70-85%     -> purge disk cache
+    //       warning : 85-93%     -> purge + suspend LRU background tab
+    //       critical: >= 93%     -> purge + suspend ALL background tabs now
+    //  2. The kernel's LowMemoryResourceNotification (same API WebKit's
+    //     Windows MemoryPressureHandler waits on): a dedicated thread
+    //     blocks on the event at zero CPU and escalates a check
+    //     immediately, so we react when the SYSTEM declares pressure
+    //     instead of waiting out the poll interval (see
+    //     startMemoryPressureWatch).
+    //
+    // CPU-adaptive pillar: every tick also samples each renderer's CPU
+    // time (GetProcessTimes).  A BACKGROUND tab that keeps burning >= 50%
+    // of a core for 3+ consecutive ticks (~30 s) is tombstoned even while
+    // memory is free — Safari's "background CPU ~ 0" discipline, aimed at
+    // runaway page JS/timers rather than at RAM.  A suspended tab costs
+    // exactly 0 CPU by construction (process gone).
     void checkMemoryBudget() {
-        // Measure browser UI process + every active renderer process.
-        // Previously only the browser process was counted, which made the
-        // 400 MB threshold meaningless since KHTML/JS memory lives in the
-        // out-of-process renderer.
+        MEMORYSTATUSEX mem = {};
+        mem.dwLength = sizeof(mem);
+        GlobalMemoryStatusEx(&mem);
+        const DWORD loadPct = mem.dwMemoryLoad;  // 0-100 physical in use
+
+        const qint64 now = QDateTime::currentMSecsSinceEpoch();
+        const qint64 wallMs = m_lastMemTickMs > 0 ? qMax<qint64>(1, now - m_lastMemTickMs)
+                                                  : 10000;
+        m_lastMemTickMs = now;
+
+        // Report OUR footprint for the chrome label (informational only).
         const qint64 browserKB = currentMemKB();
         qint64 rendererKB = 0;
         for (TabPage *pg : m_pages) {
@@ -1503,17 +1568,75 @@ protected:
                 rendererKB += pg->render->memoryKB();
         }
         const qint64 memKB = browserKB + rendererKB;
-        const qint64 limitKB = 400 * 1024;
-        if (m_memLabel)
-            m_memLabel->setText(QStringLiteral("内存 %1 MB (UI %2 / 渲染 %3)")
-                .arg(memKB / 1024).arg(browserKB / 1024).arg(rendererKB / 1024));
-        if (memKB > limitKB) {
-            for (TabPage *pg : m_pages) {
-                if (pg != currentPage() && !pg->suspended) { suspendTab(pg); break; }
+
+        int level = 0;                                        // 0 normal
+        if (loadPct >= 93)      level = 3;                    // critical
+        else if (loadPct >= 85) level = 2;                    // warning
+        else if (loadPct >= 70) level = 1;                    // pressure
+
+        // Per-tab CPU utilization over the last tick window (per-mille of
+        // one core) + hot-streak bookkeeping for background tabs.
+        TabPage *hotTab = nullptr;
+        for (TabPage *pg : m_pages) {
+            if (!pg || pg->suspended)
+                continue;
+            const qint64 cpu = pg->render ? pg->render->cpuTimeMs() : 0;
+            const qint64 dCpu = qMax<qint64>(0, cpu - pg->cpuTimeMs);
+            pg->cpuTimeMs = cpu;
+            pg->cpuPerMill = int(dCpu * 1000 / wallMs);
+            if (pg == currentPage() || !pg->render) {
+                pg->hotStreak = 0;
+                continue;
             }
-            purgeCache();
+            if (pg->cpuPerMill >= 500) {          // >= 50% of one core
+                if (++pg->hotStreak >= 3 && pg->lastActive > 0)
+                    hotTab = hotTab && hotTab->cpuPerMill >= pg->cpuPerMill
+                            ? hotTab : pg;
+            } else {
+                pg->hotStreak = 0;
+            }
         }
-        const qint64 now = QDateTime::currentMSecsSinceEpoch();
+
+        static const char *names[] = {"正常", "低压", "高压", "危急"};
+        if (m_memLabel) {
+            QString text = QStringLiteral("内存 %1 MB | 系统%2% (%3)")
+                .arg(memKB / 1024).arg(loadPct).arg(QLatin1String(names[level]));
+            if (hotTab)
+                text += QStringLiteral(" · 后台高CPU %1‰").arg(hotTab->cpuPerMill);
+            m_memLabel->setText(text);
+        }
+
+        if (level >= 1)
+            purgeCache();
+
+        // Tab eviction: warning suspends the least-recently-active
+        // background tab (true LRU by lastActive); critical suspends
+        // every background tab in one pass — one-tab-per-tick would lag
+        // the system by N×10 s exactly when reclaim must be immediate.
+        if (level == 2) {
+            TabPage *victim = nullptr;
+            for (TabPage *pg : m_pages) {
+                if (pg == currentPage() || pg->suspended)
+                    continue;
+                if (!victim || pg->lastActive < victim->lastActive)
+                    victim = pg;
+            }
+            if (victim) suspendTab(victim);
+        } else if (level >= 3) {
+            for (TabPage *pg : m_pages) {
+                if (pg != currentPage() && !pg->suspended)
+                    suspendTab(pg);
+            }
+        }
+
+        // CPU-adaptive eviction independent of memory pressure (Safari
+        // suspends busy background tabs to keep background CPU/energy at
+        // zero even when RAM is free).
+        if (hotTab)
+            suspendTab(hotTab);
+
+        // Idle eviction is independent of system pressure (Safari discards
+        // long-idle tabs even when memory is free to keep RAM/energy low).
         const qint64 idleMs = 5 * 60 * 1000;
         for (TabPage *pg : m_pages) {
             if (pg != currentPage() && !pg->suspended && pg->lastActive > 0
@@ -1522,11 +1645,41 @@ protected:
         }
     }
 
+    // Kernel low-memory event -> immediate pressure check (WebKit's
+    // MemoryPressureHandler mechanism on Windows).  The thread spends its
+    // whole life blocked in WaitForSingleObject: 0% CPU until the kernel
+    // signals real system pressure, at which point the check runs on the
+    // UI thread within one event-loop turn instead of at the next 10 s
+    // poll.  The handle is never closed before process exit by design —
+    // the wait thread dies with the process, exactly like WebKit's.
+    void startMemoryPressureWatch() {
+        m_lowMemEvent = CreateMemoryResourceNotification(LowMemoryResourceNotification);
+        if (!m_lowMemEvent)
+            return;  // pre-Vista? poll-only mode
+        QThread *watch = QThread::create([this]() {
+            for (;;) {
+                if (WaitForSingleObject(m_lowMemEvent, INFINITE) != WAIT_OBJECT_0)
+                    return;
+                QMetaObject::invokeMethod(this, [this]() {
+                    checkMemoryBudget();
+                }, Qt::QueuedConnection);
+                QThread::msleep(1000);  // batch repeated signals under sustained pressure
+            }
+        });
+        watch->setObjectName(QStringLiteral("memory-pressure-watch"));
+        watch->start(QThread::LowPriority);
+    }
+
     QTimer *m_memTimer = nullptr;
     QLabel *m_memLabel = nullptr;
     QTimer *m_resizeTimer = nullptr;
     bool m_liveResize = false;
     bool m_purgingCache = false;
+    // Load-adaptive tombstone state: kernel low-memory event handle (see
+    // startMemoryPressureWatch) + the wall clock of the previous watchdog
+    // tick, used to convert per-tab CPU deltas into utilization.
+    HANDLE m_lowMemEvent = nullptr;
+    qint64 m_lastMemTickMs = 0;
     QTabWidget *m_tabs = nullptr;
     QList<TabPage *> m_pages;
     QLineEdit *m_addr = nullptr;

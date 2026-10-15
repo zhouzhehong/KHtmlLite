@@ -23,7 +23,19 @@
 
 #include "qjs_dom_bridge.h"
 #include <cstdio>
-static void kjlog(const char *m) { FILE *f = fopen("C:/Users/zhouzhehong/khtml_qjs.log", "a"); if (f) { fprintf(f, "%s\n", m); fclose(f); } }
+// Trace log for the QuickJS execution path. OFF by default: the old
+// unconditional fopen here wrote khtml_qjs.log on EVERY script evaluation —
+// measurable per-eval latency plus a file that grows forever on user
+// machines. KHTML_QJS_TRACE=1 turns it back on for debugging.
+static void kjlog(const char *m) {
+    static const bool s_trace = [] {
+        const char *v = getenv("KHTML_QJS_TRACE");
+        return v && v[0] == '1';
+    }();
+    if (!s_trace) return;
+    FILE *f = fopen("C:/Users/zhouzhehong/khtml_qjs.log", "a");
+    if (f) { fprintf(f, "%s\n", m); fclose(f); }
+}
 
 #include "dom/dom2_events.h"
 #include <xml/dom_nodeimpl.h>

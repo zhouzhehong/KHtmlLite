@@ -96,3 +96,7 @@ tests/quick_shot.png
 tests/quick_shot_stderr.txt
 tests/bg_smoke_err.txt
 tests/bg_smoke_dump_*.png
+tests/*_out.txt
+tests/*_run2.txt
+tests/resize_probe_stderr.txt
+tests/quick_shot_stderr.txt

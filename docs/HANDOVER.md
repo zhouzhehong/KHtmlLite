@@ -87,6 +87,27 @@ KHTML（5.116）改造的双进程浏览器：`khtml_browser.exe`（UI/合成）
 - 注意 pwsh 测试技巧：若 build 报 `cannot open output file ... Permission denied`，
   先看是否有孤儿 khtml_renderer.exe 锁着 exe（测试 kill 浏览器不杀子进程）。
 
+## 5d. UI/渲染质量轮（2026-10-15，四项全实测）
+- **resize 贴合**：PageSurface 尺寸失配期间拉伸旧帧铺满（WebKit2 UI 进程
+  backing-store 拉伸的对应实现），真实帧静默替换。resize_probe 实测：
+  content 达标 0.0s（修复前 NEVER）、白闪 0.00%（前 62.89%）、新帧 0.17-0.19s。
+- **滚轮死路**：渲染端原把 QWheelEvent 发 viewport()——KHTMLView::viewportEvent
+  对 Wheel 显式 return false，40 格 0px；改发 content widget。引擎平滑滚动
+  （SSMWhenEfficient）与浏览器预测滚动打架 → SSMDisabled 一步到位。
+  scroll_smoke（HTTP+静态色带页）PASS，回滚签名精确还原。
+- **墓碑压力分级**：GlobalMemoryStatusEx.dwMemoryLoad 四级（<70/70-85/85-93/≥93），
+  warning 起按 lastActive 真 LRU 驱逐后台标签；固定 400MB 阈值废除。
+- **KJS 残留清理**：kjs_proxy 早已 QuickJS-only；本轮 (a) kjlog 每次求值
+  fopen 写盘改为 KHTML_QJS_TRACE=1 才开；(b) PageLoader 停止 ES2015→ES3
+  降级（QuickJS 原生解析，外链 256KB 上限解除，Khtml_Transpile=1 可回退）。
+  bing TTFF 1694ms 在历史区间内，现代脚本确认真实执行。
+- **探针工程教训**：给 KHTML 写测试页严禁 flex/gradient/hsl()/模板字符串/
+  JS 建 DOM——旧 resize_probe 页因此纯白且 90% 阈值永不可达（rgba 边框落
+  other 桶）；采样须剔除工具栏（#f0f0f0 会被判成 checkerboard）。
+- 新测试：tests/resize_probe.py（最大化/还原白闪量化，带预检门）、
+  scroll_smoke.py 改 HTTP+静态页。全绿：bg_smoke/tile_protocol/
+  scroll_smoke/resize_probe。
+
 ## 6. 正在/马上要做的
 A. ~~拆那 1.1s~~ **已完成**（字体枚举缓存 + 图标懒加载，构造 1.1s→~0.35s，TTFF 2.0→1.1s）。
    下一步同部位残账：渲染进程镜像加载+socket 连接 ~500ms（每次新标签都付），

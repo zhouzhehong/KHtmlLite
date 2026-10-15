@@ -364,6 +364,20 @@ public:
         STARTUP_MARK("KHTMLPart created");
         m_view->widget()->setEnabled(true);
         m_view->widget()->setFocusPolicy(Qt::StrongFocus);
+        // Instant wheel scrolling: disable KHTML's engine-side smooth-scroll
+        // animation (default SSMWhenEfficient animates every wheel notch over
+        // ~128 ms in 16 ms steps).  In the dual-process compositing pipeline
+        // the instant visual feedback is the BROWSER's predictive scroll
+        // (PageSurface preview); the engine must commit the FINAL offset in
+        // one step so the authoritative convergence reconciles the
+        // prediction within a single frame tick.  An engine-side animation
+        // fights the prediction with intermediate offsets — measured as a
+        // ~260 ms convergence tail (tests/scroll_probe.py) and felt as
+        // rubber-banding.  (WebKit analogue: async scrolling moves content
+        // on the compositor immediately; the engine never animates wheel
+        // scrolls by itself.)
+        if (m_view->view())
+            m_view->view()->setSmoothScrollingMode(KHTMLView::SSMDisabled);
         // Do NOT show the widget.  It remains offscreen; grab() renders it
         // into a pixmap on demand.  Resize is applied via IPC from the browser.
 
@@ -376,7 +390,16 @@ public:
         // still in progress the next tick simply overwrites the shared
         // buffer; no-op frames are pure early-outs.
         m_frameTimer = new QTimer(this);
-        m_frameTimer->setInterval(16);
+        // Fixed 60 Hz cadence: the north-star metric is stable 60 fps
+        // scrolling, so the frame clock is NOT scaled down by core count —
+        // weak machines must drop frames, not the budget (the frame is
+        // damage-driven and no-op ticks are pure early-outs, so idle cost
+        // is nil).  KHTML_FPS_MS overrides the interval for diagnostics.
+        {
+            bool fpsOk = false;
+            const int envMs = qEnvironmentVariableIntValue("KHTML_FPS_MS", &fpsOk);
+            m_frameTimer->setInterval(fpsOk && envMs > 0 ? envMs : 16);
+        }
         connect(m_frameTimer, &QTimer::timeout, this, &RendererHost::grabFrame);
 
         // Engine damage → frame invalidation.  The KHTML view is offscreen
@@ -1015,23 +1038,29 @@ public:
         }
 
         if (m_hasPendingWheel) {
-            // Dispatch the wheel event to the viewport widget (matching the
-            // mouse press/move path) for both scrolling and JS listeners.
-            // sendEvent (synchronous) with a stack event so KHTML's
-            // QScrollArea::wheelEvent scrolls before the frame is captured.
+            // Dispatch the wheel to the CONTENT widget (view->widget()),
+            // exactly like the mouse press/move path.  KHTML's native wheel
+            // routing is: content widget -> KHTMLView::eventFilter ->
+            // widgetEvent() -> QFrame::event -> KHTMLView::wheelEvent (DOM
+            // dispatch + scroll).  Sending it to viewport() instead is a dead
+            // end: KHTMLView::viewportEvent() explicitly returns false for
+            // QEvent::Wheel, so the scroll never happens — measured: 40 wheel
+            // notches produced 0 px of scroll movement (tests/scroll_probe.py
+            // and tests/scroll_smoke.py both FAILed with identical before/
+            // after pixel signatures).
+            // sendEvent (synchronous) with a stack event so KHTML scrolls
+            // before the frame is captured.
             // Do NOT also manipulate the scrollbar directly — that caused
             // double-scrolling (fast-path + QScrollArea::wheelEvent).
             // Keep the full accumulated delta; do NOT quantize by /120.
             const int dx = m_pendingWheelDeltaX;
             const int dy = m_pendingWheelDeltaY;
             const QPoint lp(m_wheelMouseX, m_wheelMouseY);
-            const QPoint gp = vp ? vp->mapToGlobal(lp) : content->mapToGlobal(lp);
-            if (vp) {
-                QWheelEvent ev(lp, gp, QPoint(dx, dy), QPoint(dx, dy),
-                               Qt::NoButton, m_wheelModifiers,
-                               Qt::NoScrollPhase, false);
-                QCoreApplication::sendEvent(vp, &ev);
-            }
+            const QPoint gp = content->mapToGlobal(lp);
+            QWheelEvent ev(lp, gp, QPoint(dx, dy), QPoint(dx, dy),
+                           Qt::NoButton, m_wheelModifiers,
+                           Qt::NoScrollPhase, false);
+            QCoreApplication::sendEvent(content, &ev);
             m_hasPendingWheel = false;
             m_pendingWheelDeltaX = 0;
             m_pendingWheelDeltaY = 0;

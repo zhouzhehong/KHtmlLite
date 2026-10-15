@@ -4,23 +4,57 @@
 <meta charset="utf-8">
 <title>scroll smoke</title>
 <style>
-  body { margin: 0; font-family: sans-serif; }
-  .band { height: 120px; padding: 12px; font-size: 28px; color: #fff; }
-  /* Distinct colors per band so pixel sampling can detect scrolling. */
+  /* KHTML/KJS-compatible tall page: NO JS, NO hsl(), NO template literals
+     (KJS is ES3-era; the old script-built bands never ran — SyntaxError on
+     the first template literal — leaving a blank page with nothing to
+     scroll, so the smoke measured a page that never rendered).
+     40 static bands x 130px = 5200px of strongly distinct scrollable
+     content. */
+  body { margin: 0; }
+  .band { height: 130px; font: bold 30px sans-serif; color: #ffffff;
+          padding: 10px; }
 </style>
 </head>
 <body>
-<script>
-  // Generate 40 colored bands -> page height ~ 5120px, well over any test viewport.
-  const bands = 40;
-  const hue = i => (i * 37) % 360;
-  for (let i = 0; i < bands; i++) {
-    const d = document.createElement("div");
-    d.className = "band";
-    d.style.background = `hsl(${hue(i)},70%,45%)`;
-    d.textContent = "Band " + i;
-    document.body.appendChild(d);
-  }
-</script>
+<div class="band" style="background-color:#b03030">band 00</div>
+<div class="band" style="background-color:#b04830">band 01</div>
+<div class="band" style="background-color:#b06030">band 02</div>
+<div class="band" style="background-color:#b07830">band 03</div>
+<div class="band" style="background-color:#b09030">band 04</div>
+<div class="band" style="background-color:#98b030">band 05</div>
+<div class="band" style="background-color:#78b030">band 06</div>
+<div class="band" style="background-color:#58b030">band 07</div>
+<div class="band" style="background-color:#38b030">band 08</div>
+<div class="band" style="background-color:#30b048">band 09</div>
+<div class="band" style="background-color:#30b068">band 10</div>
+<div class="band" style="background-color:#30b088">band 11</div>
+<div class="band" style="background-color:#30b0a8">band 12</div>
+<div class="band" style="background-color:#3088b0">band 13</div>
+<div class="band" style="background-color:#3068b0">band 14</div>
+<div class="band" style="background-color:#3048b0">band 15</div>
+<div class="band" style="background-color:#3030b0">band 16</div>
+<div class="band" style="background-color:#4830b0">band 17</div>
+<div class="band" style="background-color:#6830b0">band 18</div>
+<div class="band" style="background-color:#8830b0">band 19</div>
+<div class="band" style="background-color:#a830b0">band 20</div>
+<div class="band" style="background-color:#b03098">band 21</div>
+<div class="band" style="background-color:#b03078">band 22</div>
+<div class="band" style="background-color:#b03058">band 23</div>
+<div class="band" style="background-color:#b03038">band 24</div>
+<div class="band" style="background-color:#c04040">band 25</div>
+<div class="band" style="background-color:#c05840">band 26</div>
+<div class="band" style="background-color:#c07040">band 27</div>
+<div class="band" style="background-color:#c08840">band 28</div>
+<div class="band" style="background-color:#c0a040">band 29</div>
+<div class="band" style="background-color:#a8c040">band 30</div>
+<div class="band" style="background-color:#88c040">band 31</div>
+<div class="band" style="background-color:#68c040">band 32</div>
+<div class="band" style="background-color:#48c040">band 33</div>
+<div class="band" style="background-color:#40c058">band 34</div>
+<div class="band" style="background-color:#40c078">band 35</div>
+<div class="band" style="background-color:#40c098">band 36</div>
+<div class="band" style="background-color:#40c0b8">band 37</div>
+<div class="band" style="background-color:#4098c0">band 38</div>
+<div class="band" style="background-color:#4078c0">band 39</div>
 </body>
 </html>

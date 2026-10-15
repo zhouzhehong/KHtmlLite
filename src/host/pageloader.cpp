@@ -790,20 +790,28 @@ void PageLoader::onResourceFinished()
             finalizeSubresources();
             return;
         }
-        // Transpile external scripts before caching them: page JS is written in
-        // ES2015+ but KJS only speaks ES3. The embedded Buble transformer lowers
-        // the syntax in place; scripts that fail to transform are kept verbatim
-        // so a single bad file never blanks the page.
+        // External scripts: the page engine is QuickJS (ES2020-capable), so
+        // the ES2015->ES3 Buble lowering that the removed KJS runtime
+        // needed is now OFF by default — raw ES2015+ parses natively, which
+        // is both faster (no per-script transpile pass) and safer (no
+        // transformer-induced breakage).  KHTML_TRANSPILE=1 restores the
+        // legacy lowering for A/B comparison.  The try/catch guard stays:
+        // one throwing external script must never tear the page down.
         const QString resCt = QString::fromLatin1(r->header(QNetworkRequest::ContentTypeHeader).toByteArray()).toLower();
         const bool looksJs = res.url.path().toLower().endsWith(QLatin1String(".js"))
                              || resCt.contains(QLatin1String("javascript"));
         QByteArray outData;
         if (looksJs && data.size() < 4 * 1024 * 1024) {
-            QString t = transpileJs(QString::fromUtf8(data));
-            if (t.size() > 262144)
-                t = QStringLiteral("/* skipped: external script too large */");
-            else
-                t = QStringLiteral("try{") + t + QStringLiteral("}catch(__kjs_e){}");
+            static const bool s_transpile = qEnvironmentVariableIntValue("KHTML_TRANSPILE") == 1;
+            QString t;
+            if (s_transpile) {
+                t = transpileJs(QString::fromUtf8(data));
+                if (t.size() > 262144)
+                    t = QStringLiteral("/* skipped: external script too large */");
+            } else {
+                t = QString::fromUtf8(data);  // QuickJS parses ES2015+ as-is
+            }
+            t = QStringLiteral("try{") + t + QStringLiteral("}catch(__qjs_e){}");
             outData = t.toUtf8();
         }
         QFile f(m_cacheDir + QLatin1Char('/') + res.localName);
@@ -1126,8 +1134,10 @@ void PageLoader::rewriteAndSave()
     htmlTail.append(html.midRef(lastPos));
     html = htmlTail;
 
-    // Lower ES2015+ syntax in inline <script> blocks (no src attribute).
-    // JSON, templates and other data blocks are skipped so they stay intact.
+    // Inline <script> blocks (no src attribute).  QuickJS parses ES2015+
+    // natively, so the legacy ES3 lowering is OFF by default
+    // (KHTML_TRANSPILE=1 restores it for A/B).  JSON, templates and other
+    // data blocks are skipped so they stay intact.
     {
         const QRegularExpression reScript(
             QStringLiteral("<script([^>]*)>(.*?)</script>"),
@@ -1153,11 +1163,16 @@ void PageLoader::rewriteAndSave()
                 || stype == QLatin1String("module"))
                 && !body.trimmed().isEmpty();
             if (isJs) {
-                QString t = transpileJs(body);
-                if (t.size() > 131072)
-                    t = QStringLiteral("/* skipped: inline script too large */");
-                else
-                    t = QStringLiteral("try{") + t + QStringLiteral("}catch(__kjs_e){}");
+                static const bool s_transpile = qEnvironmentVariableIntValue("KHTML_TRANSPILE") == 1;
+                QString t;
+                if (s_transpile) {
+                    t = transpileJs(body);
+                    if (t.size() > 131072)
+                        t = QStringLiteral("/* skipped: inline script too large */");
+                } else {
+                    t = body;  // QuickJS parses ES2015+ as-is
+                }
+                t = QStringLiteral("try{") + t + QStringLiteral("}catch(__qjs_e){}");
                 out.append(QStringLiteral("<script") + attrs + QStringLiteral(">")
                           + t + QStringLiteral("</script>"));
             } else {

@@ -5,7 +5,7 @@
 import ctypes, os, subprocess, sys, time
 
 USER32 = ctypes.windll.user32
-BUILD = r"C:\Users\zhouzhehong\Desktop\KHtmlLite\build-host"
+BUILD = r"C:\Users\zhouzhehong\Desktop\KHtmlLite\build\host"
 CRASHLOG = os.path.join(BUILD, "khtml_renderer_crash.log")
 URL = "file:///C:/Users/zhouzhehong/Desktop/KHtmlLite/tests/resize_smoke.html"
 

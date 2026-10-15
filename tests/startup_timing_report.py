@@ -14,7 +14,7 @@
 import os
 import sys
 
-DEFAULT_BUILD = r"C:\Users\zhouzhehong\Desktop\KHtmlLite\build-host"
+DEFAULT_BUILD = r"C:\Users\zhouzhehong\Desktop\KHtmlLite\build\host"
 
 
 def load(path):

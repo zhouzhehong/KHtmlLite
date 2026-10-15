@@ -48,6 +48,49 @@ tests/renderer_solo.py（无浏览器直驱渲染进程+帧颜色断言）。
   （damage 累积），回前台时 invalidateFull+一帧。WebKit 对应：隐藏页面收不到
   DisplayRefreshMonitor tick。
 
+## 0c. 修复批注③（2026-10-15，UI/渲染质量轮，全部实测）
+
+- **①窗口放大/全屏贴合（resize presentation）**：PageSurface::paintEvent 在
+  "已提交帧尺寸 ≠ 表面尺寸"期间改为把旧帧**平滑拉伸铺满**（WebKit2 UI 进程
+  拉伸既有 backing store 的 Windows 对应实现），取代旧的 1:1 锚定+棋盘格；
+  真实新尺寸帧静默替换拉伸帧。新建 tests/resize_probe.py 量化（SW_MAXIMIZE/
+  SW_RESTORE + BitBlt 网格采样）：修复前"首个 >90% content 采样 = NEVER、
+  120ms 后白/棋盘格最差 62.89%"；修复后 **content 达标 0.0s、白闪 0.00%、
+  新帧落地 0.17-0.19s**，restore 0.09-0.14s。探针自坑修正记录：旧探针页用
+  flex/linear-gradient/hsl()/JS 建 DOM（KHTML 全不吐，页面纯白）；rgba 边框
+  ~22% 像素落 other 桶使 90% 阈值永不可达；采样区含工具栏（#f0f0f0 被算成
+  checkerboard，基线 ~14%）。新页为纯静态表格+hex 色，并加"最大化前 content
+  ≥85%"预检门，页面没渲染直接判 PROBE INVALID。
+- **②滚动渲染不及时**：两处真实根因，均已修——(a) 渲染端把 QWheelEvent 发给
+  viewport()，而 KHTMLView::viewportEvent() 对 Wheel 显式 return false，
+  **40 格滚轮 0px 位移**（死路）；改发 content widget（view->widget()）走
+  KHTMLView::eventFilter → widgetEvent → wheelEvent 正路。(b) 引擎侧平滑滚动
+  （SSMWhenEfficient，每格 ~128ms 动画）与浏览器端预测滚动互相打架，收敛尾
+  ~260ms；改 SSMDisabled，引擎一步到位，收敛交给预测+权威帧对账
+  （WebKit async scrolling 对应：compositor 立即滚动，引擎从不自己动画滚轮）。
+  scroll_smoke 修正为 HTTP 加载（file:// 顶层导航在本项目不可用）+ 纯静态
+  色带页（旧页 JS 全是模板字符串，KJS ES3 直接 SyntaxError → 0 色带白页），
+  实测 **PASS：滚轮真实位移（签名 before≠after）、回滚精确还原
+  （restored==before，无动画残留）**。
+- **③墓碑改系统压力驱动**：checkMemoryBudget 从固定 400MB 阈值改为
+  GlobalMemoryStatusEx.dwMemoryLoad 四级状态机（对应 WebKit
+  MemoryPressureHandler 分级）：normal<70% 不动 / pressure 70-85% 只清磁盘
+  缓存 / warning 85-93% 清缓存+按 lastActive **真 LRU** 逐个挂起后台标签 /
+  critical≥93% 每 tick 持续驱逐直到系统恢复。空闲 5 分钟驱逐独立保留
+  （Safari 空 RAM 也丢弃长闲置标签）。chrome 标签显示"系统内存%+等级"。
+- **⑤KJS 移除评估结论**：**执行路径其实已是 QuickJS-only**——kjs_proxy.cpp
+  无 KJS::ScriptInterpreter、无回退引擎（"QuickJS is the only JavaScript
+  engine"），kjs 库根本不参与构建（CMakeLists 无 kjs 引用）。本轮清除残留：
+  (a) kjs_proxy 的 kjlog 原来每次脚本求值都 fopen 写 khtml_qjs.log——改为
+  KHTML_QJS_TRACE=1 才开；(b) PageLoader 不再把脚本降级到 ES3"给 KJS 解析"
+  ——QuickJS 原生 ES2020，内联+外链脚本默认原文直通（跳过 Bublé 换pass），
+  外链 256KB 上限随之解除（仅保留 8MB 资源门），KHTML_TRANSPILE=1 可回退
+  A/B；try/catch 护栏保留。bing 采集确认现代脚本真实执行（17s 处仍有 JS
+  触发的 render pass），TTFF 1694ms 在历史区间（1514-1694）内。
+- CPU 自适应帧钟尝试被否决（中间轮已论证）：损伤驱动的 60Hz tick 空转是纯
+  early-out，弱机应"丢帧不降预算"（Safari 同款原则），保持固定 16ms，
+  KHTML_FPS_MS 仅用于诊断。
+
 ---
 
 ## 1. 进程与沙箱模型

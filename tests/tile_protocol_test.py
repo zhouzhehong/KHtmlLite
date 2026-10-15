@@ -90,12 +90,35 @@ def test_static_consistency():
     assert n_render == 1, "expected exactly 1 frame render call, got %d" % n_render
     print("  frame rendered exactly once per grabFrame (tiles are crops)")
 
-    # Safari-style resize presentation: no stretchy scaling in PageSurface;
-    # content stays 1:1 anchored, unpainted area shows a checkerboard.
+    # Resize presentation contract (AppKit live-resize stretch, the rule the
+    # macOS/Windows UI processes follow while the content process catches up):
+    #   steady state      — frame is drawn 1:1, anchored at the surface origin;
+    #   size mismatch     — the LAST committed frame is scaled to fill the
+    #                        surface until the first true-size frame lands
+    #                        (no white flash, no checkerboard).
+    # Guarded statically: the 1:1 draw must exist, scaling must be gated on a
+    # sameSize check, and unconditional full-surface scaling stays forbidden.
+    assert "p.drawImage(QPoint(-m_previewDX, -m_previewDY), m_frame)" in brow, \
+        "1:1 anchored draw path missing from PageSurface"
+    assert "const bool sameSize = !m_frame.isNull() && m_frame.size() == size();" in brow, \
+        "sameSize gate missing: scaling must only apply during size mismatch"
     assert "p.drawImage(rect(), m_frame)" not in brow, \
-        "PageSurface still scales the frame like an image"
-    assert "checkerBoard" in brow, "checkerboard helper missing"
-    print("  PageSurface draws 1:1 with checkerboard (no image stretching)")
+        "PageSurface scales the frame unconditionally"
+    assert "checkerBoard" not in brow, \
+        "stale checkerboard presentation: mismatch now shows the scaled last frame"
+    print("  PageSurface: 1:1 steady state, scaled only during size mismatch")
+
+    # Background tabs must not relayout on window resize: applyPendingResize
+    # may only touch the CURRENT tab (hidden pages get no layout work; N-tab
+    # relayout storms were the multi-tab resize lag).
+    m = re.search(r"void applyPendingResize\(\) \{(.*?)\n    \}", brow, re.S)
+    assert m, "applyPendingResize not found"
+    body = m.group(1)
+    assert "for (TabPage *" not in body, \
+        "applyPendingResize still resizes every tab (background relayout storm)"
+    assert "currentPage()" in body, \
+        "applyPendingResize must select the current tab only"
+    print("  resize ships to the current tab only (background tabs relayout on activation)")
 
     global TILE, HEADER
     TILE = parse_const(rend, "kTileSize")

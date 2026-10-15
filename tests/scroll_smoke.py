@@ -13,17 +13,27 @@
 # (no compiler, GUI processes).
 
 import ctypes
+import http.server
 import os
+import socketserver
+import struct
 import subprocess
 import sys
+import threading
 import time
 
 USER32 = ctypes.windll.user32
 GDI32 = ctypes.windll.gdi32
 
-BUILD = r"C:\Users\zhouzhehong\Desktop\KHtmlLite\build-host"
+BUILD = r"C:\Users\zhouzhehong\Desktop\KHtmlLite\build\host"
 CRASHLOG = os.path.join(BUILD, "khtml_renderer_crash.log")
-URL = "file:///C:/Users/zhouzhehong/Desktop/KHtmlLite/tests/scroll_smoke.html"
+# Served over local HTTP: the PageLoader http path is the production load
+# path.  file:// TOP-LEVEL loads are broken in KHtmlLite (missing KIO
+# plumbing — subresources got a QFile fast path, top-level navigation did
+# not), so a file:// URL here would render a blank page and the smoke would
+# measure "scrolling" on an empty surface.
+PORT = 8198
+URL = f"http://127.0.0.1:{PORT}/scroll_smoke.html"
 
 env = dict(os.environ)
 env["PATH"] = r"C:\msys64\mingw64\bin;" + env["PATH"]
@@ -140,6 +150,17 @@ def capture_window_grayscale_sig(hwnd):
 
 
 def main():
+    os.chdir(os.path.join(os.path.dirname(os.path.abspath(__file__))))
+    httpd = socketserver.TCPServer(("127.0.0.1", PORT),
+                                    http.server.SimpleHTTPRequestHandler)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        return run(httpd)
+    finally:
+        httpd.shutdown()
+
+
+def run(httpd):
     before = crashlog_size()
     proc = subprocess.Popen([os.path.join(BUILD, "khtml_browser.exe"), URL],
                             cwd=BUILD, env=env,
@@ -192,5 +213,4 @@ def main():
 
 
 if __name__ == "__main__":
-    import struct  # local import; keep struct needed in helpers
     sys.exit(main())
