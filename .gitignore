@@ -100,3 +100,6 @@ tests/*_out.txt
 tests/*_run2.txt
 tests/resize_probe_stderr.txt
 tests/quick_shot_stderr.txt
+
+tests/*_stderr.txt
+tests/qs*.txt

@@ -91,6 +91,31 @@ tests/renderer_solo.py（无浏览器直驱渲染进程+帧颜色断言）。
   early-out，弱机应"丢帧不降预算"（Safari 同款原则），保持固定 16ms，
   KHTML_FPS_MS 仅用于诊断。
 
+## 0b. 修复批注（2026-10-16，墓碑系统负载驱动 + UI 三连环 + KJS 移除落地）
+
+1. **3.4/4.5 内存压力模型已升级为系统事件驱动**（HANDOVER 5e）：本机常态
+   物理内存 83-94% 实测 → 机械 400MB 阈值永远无法代表"系统紧张"。现为
+   CreateMemoryResourceNotification(LowMemory) 内核事件线程（WebKit
+   MemoryPressureHandler 的 Windows 对应）+ dwMemoryLoad 四级
+   （≥70 清缓存 / ≥85 LRU 驱逐 / ≥93 全后台）+ GetSystemTimes 系统 CPU
+   自适应空转超时（sysCpu≥85% → 60s，否则 5min）。事件"创建即 signaled"
+   的坑用 15s 启动宽限解决（否则首页 PageLoader 缓存被清，bg_smoke 18.4s
+   红屏）。真 LRU 已落地（lastActive 排序）。tombstone_probe 全绿。
+2. **标题/_blank/file:// 三连环根因闭环**：PageLoader 预取并重写 `<a href>`
+   为本地 sha1 副本（离线优先设计）——_blank 新标签因此拿到 file:///…cache
+   路径 → KIO file 卡死 → 空标题、地址栏脏、purgeCache 后死链。修：PageLoader
+   `originalOf()` 副本→原始 URL 反查，出口统一；file:// 主文档也走 PageLoader
+   （QFile 读 + begin/write/end，弃 KIO）。3.2 的"恢复盯着占位标签 1s+"：
+   resume 现仍无缩略图（下一批），但 URL/scroll/zoom/标题路径已净。
+3. **⑥ KJS 移除落地**：src/khtml/src/bindings/ 全删（10 个从未编译的死文件：
+   KJS SVG 定制绑定 + Perl 生成器）。kjs 库零参与构建维持；jsengine.h/
+   quickjs_engine 是审计钦定的长期抽象故留；KJSProxy 命名残留文档化接受。
+   needsFallback() = 优雅降级标志（非 KJS 回退），语义已正名。
+   QuickJS 回归 PASS（file:// + document.title setter + inline handler 链路）。
+4. **桥补齐**：window.innerWidth/innerHeight（KHTMLView::visibleWidth/Height
+   活 getter，实测 W=638 H=478）。仍缺：setTimeout/setInterval、window.open、
+   DPI 清晰度、F11。
+
 ---
 
 ## 1. 进程与沙箱模型

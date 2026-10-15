@@ -291,11 +291,24 @@ public:
         KParts::BrowserExtension *ext = browserExtension();
         STARTUP_MARK("RV: browserExtension fetched");
         if (ext) {
+            // Shell-style navigation routing (Konqueror did this in the
+            // shell; our renderer IS the shell): KHTMLPart::urlSelected
+            // emits openUrlRequestDelayed for ALL link activations with
+            // browserArgs.frameName carrying the target attribute, and it
+            // only emits createNewWindow for modifier-key clicks (ctrl/
+            // shift).  Without routing here, target=_blank would navigate
+            // the SAME tab — the shell is what maps "_blank" to a new
+            // window in KParts.
             connect(ext, QOverload<const QUrl &, const KParts::OpenUrlArguments &,
                                     const KParts::BrowserArguments &>::of(
                         &KParts::BrowserExtension::openUrlRequestDelayed),
                     this, [this](const QUrl &u, const KParts::OpenUrlArguments &,
-                                 const KParts::BrowserArguments &) { emit navigateRequested(u); });
+                                 const KParts::BrowserArguments &ba) {
+                if (ba.frameName == QLatin1String("_blank"))
+                    emit openNewTabRequested(u);
+                else
+                    emit navigateRequested(u);
+            });
             connect(ext, QOverload<const QUrl &, const KParts::OpenUrlArguments &,
                                     const KParts::BrowserArguments &, const KParts::WindowArgs &,
                                     KParts::ReadOnlyPart **>::of(
@@ -315,6 +328,17 @@ protected:
     {
         const QString s = url.scheme().toLower();
         if (s == QLatin1String("http") || s == QLatin1String("https")) {
+            emit navigateRequested(url);
+            return true;
+        }
+        // file:// (about:blank's temp file, user-opened local HTML) goes
+        // through navigateRequested as well: the direct KHTMLPart::openUrl
+        // route loads via the in-process KIO file worker, which
+        // intermittently stalls and leaves the tab white forever (the
+        // file://-renders-blank defect).  The loader reads local files
+        // with QFile (Qt Network's file protocol) instead and feeds the
+        // bytes through begin()/write()/end().
+        if (s == QLatin1String("file")) {
             emit navigateRequested(url);
             return true;
         }
@@ -416,16 +440,33 @@ public:
             scheduleFrame();
         });
 
-        connect(m_view, &RendererView::navigateRequested, this, [this](const QUrl &u) {
+        connect(m_view, &RendererView::navigateRequested, this, [this](const QUrl &u0) {
+            // Link clicks arrive as REWRITTEN local cache copies (file://
+            // under khtml_cache).  Re-entering the loader with the file URL
+            // would feed the copy via KIO (stall risk) and report file:// to
+            // the chrome; restore the original http(s) URL first — the
+            // loader refetches it like a fresh navigation.
+            const QUrl u = m_loader->originalOf(u0);
             m_pendingUrl = u;
             ccSetUrl(u.toString().toUtf8().constData());
             m_loader->load(u);
         });
-        connect(m_view, &RendererView::openNewTabRequested, this, [this](const QUrl &u) {
+        connect(m_view, &RendererView::openNewTabRequested, this, [this](const QUrl &u0) {
+            // target=_blank must hand the ORIGINAL URL to the browser: a
+            // new tab loading another renderer's cache copy over file://
+            // KIO stalls and shows a cache path in the address bar.
+            const QUrl u = m_loader->originalOf(u0);
             sendMessage(QStringLiteral("newtab"), u.toString());
         });
         connect(m_loader, &PageLoader::finished, this,
                 [this](const QUrl &localFile, const QUrl &finalUrl, const QString &err) {
+            static const bool tombDebug = qEnvironmentVariableIsSet("KHTML_TOMBSTONE_DEBUG");
+            if (tombDebug)
+                fprintf(stderr, "[rend %d] loader finished local=%s final=%s err=%s\n",
+                        (int)QCoreApplication::applicationPid(),
+                        localFile.toString().toUtf8().constData(),
+                        finalUrl.toString().toUtf8().constData(),
+                        err.toUtf8().constData());
             if (!err.isEmpty()) {
                 sendMessage(QStringLiteral("error"), err);
                 return;
@@ -489,8 +530,28 @@ public:
             m_view->write(html.constData(), html.size());
             m_view->end();
         });
+        // Title source: the engine emits KParts' setWindowCaption from
+        // DOM::DocumentImpl when the <title> element is parsed — a NATIVE
+        // path that works even when JS is disabled (crash-recovery restarts
+        // with --disable-js; executeScript("document.title") returns
+        // nothing there, which made recovered tabs show empty titles).
+        connect(m_view, &KParts::ReadOnlyPart::setWindowCaption, this,
+                [this](const QString &c) {
+            m_nativeTitle = c;
+            static const bool tombDebug = qEnvironmentVariableIsSet("KHTML_TOMBSTONE_DEBUG");
+            if (tombDebug)
+                fprintf(stderr, "[rend %d] caption=%s\n",
+                        (int)QCoreApplication::applicationPid(),
+                        c.toUtf8().constData());
+        });
         connect(m_view, QOverload<>::of(&KParts::ReadOnlyPart::completed), this, [this]() {
             PERF_MARK("khtmlpart_completed");
+            static const bool tombDebug = qEnvironmentVariableIsSet("KHTML_TOMBSTONE_DEBUG");
+            if (tombDebug)
+                fprintf(stderr, "[rend %d] completed url=%s title=%s\n",
+                        (int)QCoreApplication::applicationPid(),
+                        m_pendingUrl.toString().toUtf8().constData(),
+                        m_nativeTitle.toUtf8().constData());
             // Apply tombstone restore (scroll + zoom) now that the document
             // is loaded and layout is ready. Uses native KHTML APIs, not JS.
             if (m_hasPendingRestore) {
@@ -499,8 +560,7 @@ public:
                 if (v) v->setContentsPos(m_pendingRestoreX, m_pendingRestoreY);
                 m_hasPendingRestore = false;
             }
-            const QVariant t = m_view->executeScript(QStringLiteral("document.title"));
-            sendMessage(QStringLiteral("title"), t.isValid() ? t.toString() : QString());
+            sendMessage(QStringLiteral("title"), m_nativeTitle);
             sendState();
         });
         // Periodic state report so the browser always has fresh scroll/zoom
@@ -1197,13 +1257,20 @@ private slots:
             if (cmd == QLatin1String("navigate")) {
                 const QUrl u(obj.value(QStringLiteral("url")).toString());
                 if (u.isValid()) {
+                    static const bool tombDebug = qEnvironmentVariableIsSet("KHTML_TOMBSTONE_DEBUG");
+                    if (tombDebug)
+                        fprintf(stderr, "[rend %d] navigate cmd url=%s\n",
+                                (int)QCoreApplication::applicationPid(),
+                                u.toString().toUtf8().constData());
                     PERF_BEGIN(u.toString().toUtf8().constData());
                     StartupLog::mark(("navigate_received " + u.toString()).toUtf8().constData());
                     m_pendingUrl = u;
                     const QString sc = u.scheme().toLower();
                     if (sc == QLatin1String("about")) { PERF_MARK("khtmlpart_load_start"); loadBlankPage(); }
-                    else if (sc == QLatin1String("file")) { PERF_MARK("khtmlpart_load_start"); m_view->loadUrl(u); }
-                    else m_loader->load(u);
+                    // file:// also routes through the loader (QFile read +
+                    // begin/write/end feed): the KIO file worker this used to
+                    // hit stalls intermittently and leaves the page white.
+                    else { PERF_MARK("khtmlpart_load_start"); m_loader->load(u); }
                 }
             } else if (cmd == QLatin1String("resize")) {
                 pendingW = obj.value(QStringLiteral("w")).toInt(800);
@@ -1296,6 +1363,9 @@ private:
     PageLoader *m_loader = nullptr;
     QTimer *m_stateTimer = nullptr;
     QUrl m_pendingUrl;
+    // Document title captured from the engine's native setWindowCaption
+    // emission (JS-independent; see the completed handler).
+    QString m_nativeTitle;
     bool m_jsEnabled = true;
     int m_pendingW = 800, m_pendingH = 600;
     // Tombstone restore state, applied when the next document completes.

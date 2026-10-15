@@ -667,6 +667,18 @@ QString PageLoader::localAbs(const QString &localName) const
     return QUrl::fromLocalFile(m_cacheDir + QLatin1Char('/') + localName).toString();
 }
 
+QUrl PageLoader::originalOf(const QUrl &anyUrl) const
+{
+    if (anyUrl.scheme().toLower() != QLatin1String("file"))
+        return anyUrl;
+    const QString want = anyUrl.toString();
+    for (const Res &res : m_resources) {
+        if (localAbs(res.localName) == want)
+            return res.url;
+    }
+    return anyUrl;   // not one of our rewritten copies: pass through
+}
+
 void PageLoader::extractResources()
 {
     const QString html = QString::fromUtf8(m_mainHtml);

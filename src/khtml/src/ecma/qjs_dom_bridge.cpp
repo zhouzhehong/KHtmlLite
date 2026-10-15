@@ -8,7 +8,7 @@
  *
  * Scripts that touch anything else return undefined instead of throwing,
  * so page code degrades gracefully; needsFallback() flags the truly
- * unsupported case for the caller to fall back to KJS.
+ * unsupported case so the caller (KJSProxy) can degrade gracefully too.
  *
  * All QuickJS types live inside Impl so this translation unit never
  * pollutes KJS-using TUs with the global JSValue typedef.
@@ -31,6 +31,7 @@
 #include <xml/dom2_eventsimpl.h>
 #include <xml/dom_nodeimpl.h>
 #include <xml/dom_docimpl.h>
+#include <khtmlview.h>
 #include "kjs_proxy.h"
 #include <khtml_part.h>
 #include <cstdio>
@@ -545,6 +546,21 @@ static ::JSValue styleGetPropertyValueFn(::JSContext *ctx, ::JSValueConst this_v
 // ---------------------------------------------------------------------------
 // document
 // ---------------------------------------------------------------------------
+// window.innerWidth / window.innerHeight — the live viewport size, exactly
+// the WebCore semantics (visibleWidth/visibleHeight exclude the scrollbar
+// area and track resize). window IS the document wrapper in this bridge,
+// so these are getter properties on the document object. magic 0 = width,
+// 1 = height.
+static ::JSValue windowViewportGetter(::JSContext *ctx, ::JSValueConst this_val, int magic)
+{
+    NodeWrap *w = unwrapNode(ctx, this_val);
+    if (!w) return JS_UNDEFINED;
+    Document doc(w->node);
+    KHTMLView *v = doc.view();
+    if (!v) return JS_UNDEFINED;
+    return ::JS_NewInt32(ctx, magic == 0 ? v->visibleWidth() : v->visibleHeight());
+}
+
 static ::JSValue docGetElementById(::JSContext *ctx, ::JSValueConst this_val,
                                    int argc, ::JSValueConst *argv)
 {
@@ -933,6 +949,10 @@ struct QJsDomBridge::Impl
             "window",
             JS_DupValue(ctx, documentObj)
         );
+        // window.innerWidth / innerHeight (magic 0/1) on the window object
+        // — live getters so resize is reflected without re-instantiation.
+        defCgetset("innerWidth", windowViewportGetter, nullptr, 0, documentObj);
+        defCgetset("innerHeight", windowViewportGetter, nullptr, 1, documentObj);
         qjslog("GLOBAL_DOCUMENT_WINDOW_SET");
         JS_FreeValue(ctx, global);
         qjslog("DOCUMENT_SET_END");

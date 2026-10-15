@@ -120,6 +120,27 @@ def test_static_consistency():
         "applyPendingResize must select the current tab only"
     print("  resize ships to the current tab only (background tabs relayout on activation)")
 
+    # Load-adaptive tombstone contract (Safari MemoryPressureHandler):
+    #   - 4 system memory tiers drive escalation (never a fixed MB budget);
+    #   - the kernel's LowMemoryResourceNotification escalates a check
+    #     immediately (zero-CPU wait thread, WebKit's Windows mechanism);
+    #   - system CPU load modulates the idle timeout (CPU-adaptive pillar);
+    #   - tab-bar surgery in suspendTab must not re-route currentChanged
+    #     onto the tombstone (auto-resume defeated the tombstone live).
+    for s in ("loadPct >= 93", "loadPct >= 85", "loadPct >= 70"):
+        assert s in brow, f"memory tier {s} missing from checkMemoryBudget"
+    assert "CreateMemoryResourceNotification" in brow, \
+        "kernel low-memory event watcher missing"
+    assert "sysCpuPct >= 85 ? 60 * 1000 : 5 * 60 * 1000" in brow, \
+        "CPU-adaptive idle timeout missing"
+    m = re.search(r"void suspendTab\(TabPage \*pg\) \{(.*?)\n    \}", brow, re.S)
+    assert m, "suspendTab not found"
+    assert "blockSignals(true)" in m.group(1), \
+        "suspendTab tab surgery without currentChanged suppression"
+    assert "GetSystemTimes" in brow, "system CPU sampling missing"
+    print("  tombstone: 4 memory tiers, kernel event watcher, "
+          "CPU-adaptive idle, surgery-safe suspend")
+
     global TILE, HEADER
     TILE = parse_const(rend, "kTileSize")
     HEADER = parse_const(rend, "kHeaderBytes")

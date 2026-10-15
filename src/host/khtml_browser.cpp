@@ -376,7 +376,7 @@ public:
             m_socketName = QStringLiteral("khtml_rt_%1_%2")
                 .arg(QCoreApplication::applicationPid()).arg(++m_tabCounter);
             m_process = new QProcess(this);
-            m_process->setProcessChannelMode(QProcess::MergedChannels);
+            m_process->setProcessChannelMode(QProcess::ForwardedChannels);
             exe = QCoreApplication::applicationDirPath()
                   + QStringLiteral("/khtml_renderer.exe");
             QStringList args;
@@ -633,9 +633,11 @@ public:
         s_warmSocket = QStringLiteral("khtml_warm_%1_%2")
             .arg(QCoreApplication::applicationPid()).arg(++m_tabCounter);
         QProcess *p = new QProcess(qApp);
-        p->setProcessChannelMode(QProcess::MergedChannels);
-        // Drain stdout/stderr so the pipe buffer never blocks the child.
-        connect(p, &QProcess::readyReadStandardOutput, p, [p]() { (void)p->readAll(); });
+        // ForwardedChannels: renderer debug output (startup marks, env-gated
+        // [rend] lines) flows to OUR stderr instead of being drained into
+        // nowhere.  No Qt pipe is involved, so there is no buffer to fill
+        // and no drain loop needed.
+        p->setProcessChannelMode(QProcess::ForwardedChannels);
         p->start(exe, QStringList() << QStringLiteral("--url") << QStringLiteral("about:blank")
                  << QStringLiteral("--socket") << s_warmSocket
                  << QStringLiteral("--width") << QStringLiteral("800")
@@ -1008,12 +1010,11 @@ struct TabPage {
     // frozen-page snapshot — memory is freed, pixels remain).
     QImage snapshot;
     // CPU-adaptive tombstone bookkeeping (sampled by checkMemoryBudget):
-    // cumulative renderer CPU ms at the last tick, per-core utilization
-    // (per-mille) over the last tick window, and how many consecutive
-    // ticks the background tab has been "hot".
+    // cumulative renderer CPU ms at the last tick and per-core utilization
+    // (per-mille) over the last tick window — status-bar diagnostics only;
+    // eviction decisions follow SYSTEM load (memory pressure + total CPU).
     qint64 cpuTimeMs = 0;
     int cpuPerMill = 0;
-    int hotStreak = 0;
 };
 
 // Tombstone placeholder: paints the last snapshot (top-left anchored, scaled
@@ -1139,6 +1140,7 @@ public:
         connect(newTab, &QToolButton::clicked, this, [this] { addTab(QUrl(QStringLiteral("https://cn.bing.com"))); });
         connect(m_tabs, &QTabWidget::tabCloseRequested, this, &KHtmlLiteWindow::closeTab);
         connect(m_tabs, &QTabWidget::currentChanged, this, [this](int idx) {
+            fprintf(stderr, "[tomb] currentChanged idx=%d\n", idx);
             // With software frames, each tab's PageSurface is already a child
             // of the QTabWidget stack — no show/hide of renderer windows needed.
             TabPage *pg = (idx >= 0 && idx < m_pages.size()) ? m_pages.at(idx) : nullptr;
@@ -1205,6 +1207,8 @@ public:
     void startRenderer(TabPage *pg, const QUrl &url) {
         pg->render = new RenderTab(this);
         connect(pg->render, &RenderTab::titleChanged, this, [this, pg](const QString &t) {
+            fprintf(stderr, "[tomb] titleChanged title=%s cur=%d\n",
+                    t.toUtf8().constData(), pg == currentPage());
             const int idx = m_pages.indexOf(pg);
             if (idx >= 0 && !t.isEmpty()) m_tabs->setTabText(idx, t.left(30));
             if (pg == currentPage())
@@ -1444,6 +1448,7 @@ protected:
     // ---- Tombstone / memory budget (Safari-style) ----
     void suspendTab(TabPage *pg) {
         if (!pg || pg->suspended) return;
+        fprintf(stderr, "[tomb] suspendTab idx=%d\n", m_pages.indexOf(pg));
         pg->savedTitle = m_tabs->tabText(m_pages.indexOf(pg));
         if (pg->savedTitle.isEmpty()) pg->savedTitle = pg->current.host();
         // Snapshot BEFORE killing the renderer: keep the page's last pixels.
@@ -1456,21 +1461,38 @@ protected:
         pg->lastActive = QDateTime::currentMSecsSinceEpoch();
         const int idx = m_pages.indexOf(pg);
         if (idx >= 0) {
+            // Tab-bar surgery must not re-route currentChanged onto the
+            // tombstone mid-removal: removeTab shifts indices, Qt emits
+            // currentChanged for the transient index, and the handler would
+            // instantly resumeTab() the tab we just suspended — defeating
+            // the tombstone one event after creating it (observed live:
+            // suspend idx=0 -> currentChanged idx=0 -> resumeTab idx=0).
+            // The current TAB never actually changes here, only its index
+            // churns (1 -> 0 -> 1), so suppressing the signal across the
+            // surgery is exactly right.
+            m_tabs->blockSignals(true);
             m_tabs->removeTab(idx);
             pg->tombstoneWidget = new TombstoneWidget(pg->snapshot, pg->savedTitle);
             m_tabs->insertTab(idx, pg->tombstoneWidget,
                               pg->savedTitle + QStringLiteral(" [挂起]"));
+            m_tabs->blockSignals(false);
         }
     }
 
     void resumeTab(TabPage *pg) {
         if (!pg || !pg->suspended) return;
+        fprintf(stderr, "[tomb] resumeTab idx=%d\n", m_pages.indexOf(pg));
         const int idx = m_pages.indexOf(pg);
-        if (idx >= 0) m_tabs->removeTab(idx);
+        // Mark not-suspended BEFORE any tab-bar surgery: a currentChanged
+        // emitted mid-surgery must not re-enter resumeTab.  Re-entrancy was
+        // observed live (insertTab fired currentChanged while suspended was
+        // still true -> second resumeTab -> double removeTab/insertTab ->
+        // m_pages<->m_tabs index desync -> a live renderer's widget got
+        // removed and its process crash-recovered with JS disabled).
+        pg->suspended = false;
         if (pg->render) { delete pg->render; pg->render = nullptr; }
         if (pg->crashWidget) { delete pg->crashWidget; pg->crashWidget = nullptr; }
         startRenderer(pg, pg->current);
-        if (pg->tombstoneWidget) { delete pg->tombstoneWidget; pg->tombstoneWidget = nullptr; }
         // Restore tombstone scroll + zoom. Sent when the renderer socket
         // connects; applied by the renderer after the document completes.
         if (pg->scrollX != 0 || pg->scrollY != 0 || pg->zoom != 100)
@@ -1478,9 +1500,16 @@ protected:
         // Visual continuity while the new renderer loads: seed the surface
         // with the tombstone snapshot until real tiles arrive.
         pg->render->seedFrame(pg->snapshot);
-        pg->suspended = false;
         if (idx >= 0) {
+            // Same suppression rule as suspendTab: the surgery must not
+            // re-route currentChanged onto the half-resumed tab.  The
+            // deliberate setCurrentIndex afterwards fires the handler
+            // exactly once with the final, consistent state.
+            m_tabs->blockSignals(true);
+            m_tabs->removeTab(idx);
+            if (pg->tombstoneWidget) { delete pg->tombstoneWidget; pg->tombstoneWidget = nullptr; }
             m_tabs->insertTab(idx, pg->render->container() ? pg->render->container() : new QWidget, pg->savedTitle);
+            m_tabs->blockSignals(false);
             m_tabs->setCurrentIndex(idx);
         }
     }
@@ -1543,12 +1572,16 @@ protected:
     //     instead of waiting out the poll interval (see
     //     startMemoryPressureWatch).
     //
-    // CPU-adaptive pillar: every tick also samples each renderer's CPU
-    // time (GetProcessTimes).  A BACKGROUND tab that keeps burning >= 50%
-    // of a core for 3+ consecutive ticks (~30 s) is tombstoned even while
-    // memory is free — Safari's "background CPU ~ 0" discipline, aimed at
-    // runaway page JS/timers rather than at RAM.  A suspended tab costs
-    // exactly 0 CPU by construction (process gone).
+    // CPU-adaptive pillar: system CPU load (GetSystemTimes, whole machine)
+    // modulates how aggressively idle tabs are reclaimed — under sustained
+    // CPU pressure the idle timeout drops from 5 min to 60 s (Safari's
+    // analogue: proactive suspension under thermal pressure).  Per-tab
+    // renderer CPU is also sampled every tick and shown in the status bar
+    // as a diagnostic (‰ of one core), but it is deliberately NOT an
+    // eviction trigger: measured on this architecture a background tab
+    // with a continuously animating GIF burns only ~1.6% of one core
+    // (frame-clock throttling already enforces "background CPU ~ 0"; a
+    // 50%-of-a-core rule would be dead code — tests/tombstone_probe.py).
     void checkMemoryBudget() {
         MEMORYSTATUSEX mem = {};
         mem.dwLength = sizeof(mem);
@@ -1560,12 +1593,37 @@ protected:
                                                   : 10000;
         m_lastMemTickMs = now;
 
-        // Report OUR footprint for the chrome label (informational only).
+        // System CPU load over the last tick (all cores, 0-100).
+        const int sysCpuPct = sampleSystemCpuPct();
+
+        static const bool tombDebug = qEnvironmentVariableIsSet("KHTML_TOMBSTONE_DEBUG");
+        if (tombDebug) {
+            // fprintf (not qDebug): on Windows Qt's default message handler
+            // routes qDebug to OutputDebugString, invisible to test harnesses
+            // that capture stderr.
+            fprintf(stderr, "[tomb] mem=%u%% syscpu=%d%% pages=%d\n",
+                    unsigned(loadPct), sysCpuPct, m_pages.size());
+            for (TabPage *pg : m_pages)
+                fprintf(stderr, "[tomb]  susp=%d age=%lldms\n",
+                        pg->suspended ? 1 : 0,
+                        (long long)(pg->lastActive > 0 ? now - pg->lastActive : -1));
+        }
+
+        // Report OUR footprint + hottest background tab for the chrome
+        // label (informational only; decisions follow system load).
         const qint64 browserKB = currentMemKB();
         qint64 rendererKB = 0;
+        int hottestPerMill = 0;
         for (TabPage *pg : m_pages) {
-            if (pg && pg->render && !pg->suspended)
-                rendererKB += pg->render->memoryKB();
+            if (!pg || pg->suspended)
+                continue;
+            rendererKB += pg->render ? pg->render->memoryKB() : 0;
+            const qint64 cpu = pg->render ? pg->render->cpuTimeMs() : 0;
+            const qint64 dCpu = qMax<qint64>(0, cpu - pg->cpuTimeMs);
+            pg->cpuTimeMs = cpu;
+            pg->cpuPerMill = int(dCpu * 1000 / wallMs);
+            if (pg != currentPage())
+                hottestPerMill = qMax(hottestPerMill, pg->cpuPerMill);
         }
         const qint64 memKB = browserKB + rendererKB;
 
@@ -1574,36 +1632,14 @@ protected:
         else if (loadPct >= 85) level = 2;                    // warning
         else if (loadPct >= 70) level = 1;                    // pressure
 
-        // Per-tab CPU utilization over the last tick window (per-mille of
-        // one core) + hot-streak bookkeeping for background tabs.
-        TabPage *hotTab = nullptr;
-        for (TabPage *pg : m_pages) {
-            if (!pg || pg->suspended)
-                continue;
-            const qint64 cpu = pg->render ? pg->render->cpuTimeMs() : 0;
-            const qint64 dCpu = qMax<qint64>(0, cpu - pg->cpuTimeMs);
-            pg->cpuTimeMs = cpu;
-            pg->cpuPerMill = int(dCpu * 1000 / wallMs);
-            if (pg == currentPage() || !pg->render) {
-                pg->hotStreak = 0;
-                continue;
-            }
-            if (pg->cpuPerMill >= 500) {          // >= 50% of one core
-                if (++pg->hotStreak >= 3 && pg->lastActive > 0)
-                    hotTab = hotTab && hotTab->cpuPerMill >= pg->cpuPerMill
-                            ? hotTab : pg;
-            } else {
-                pg->hotStreak = 0;
-            }
-        }
-
         static const char *names[] = {"正常", "低压", "高压", "危急"};
         if (m_memLabel) {
-            QString text = QStringLiteral("内存 %1 MB | 系统%2% (%3)")
-                .arg(memKB / 1024).arg(loadPct).arg(QLatin1String(names[level]));
-            if (hotTab)
-                text += QStringLiteral(" · 后台高CPU %1‰").arg(hotTab->cpuPerMill);
-            m_memLabel->setText(text);
+            m_memLabel->setText(QStringLiteral("内存 %1 MB | 内存%2% CPU%3% (%4)%5")
+                .arg(memKB / 1024).arg(loadPct).arg(sysCpuPct)
+                .arg(QLatin1String(names[level]))
+                .arg(hottestPerMill >= 50
+                     ? QStringLiteral(" · 后台%1‰").arg(hottestPerMill)
+                     : QString()));
         }
 
         if (level >= 1)
@@ -1629,20 +1665,44 @@ protected:
             }
         }
 
-        // CPU-adaptive eviction independent of memory pressure (Safari
-        // suspends busy background tabs to keep background CPU/energy at
-        // zero even when RAM is free).
-        if (hotTab)
-            suspendTab(hotTab);
-
-        // Idle eviction is independent of system pressure (Safari discards
-        // long-idle tabs even when memory is free to keep RAM/energy low).
-        const qint64 idleMs = 5 * 60 * 1000;
+        // CPU-modulated idle eviction (the CPU-adaptive pillar): idle tabs
+        // are discarded after 5 min on a relaxed machine, but after just
+        // 60 s while the whole system has been pinned at the CPU for the
+        // entire tick — a saturated machine is exactly when a stale
+        // background renderer's working set hurts, and the suspension is
+        // user-invisible (snapshot stays; click to resume).
+        const qint64 idleMs = sysCpuPct >= 85 ? 60 * 1000 : 5 * 60 * 1000;
         for (TabPage *pg : m_pages) {
             if (pg != currentPage() && !pg->suspended && pg->lastActive > 0
                 && (now - pg->lastActive) > idleMs)
                 suspendTab(pg);
         }
+    }
+
+    // Whole-system CPU utilization between watchdog ticks (0-100).
+    // GetSystemTimes needs no privileges and costs nothing at 10 s
+    // cadence; the first call only seeds the counters (returns 0).
+    int sampleSystemCpuPct() {
+        FILETIME idle, kernel, user;
+        if (!GetSystemTimes(&idle, &kernel, &user))
+            return 0;
+        const auto to64 = [](const FILETIME &ft) {
+            return (qint64(ft.dwHighDateTime) << 32) | ft.dwLowDateTime;
+        };
+        const qint64 i = to64(idle), k = to64(kernel), u = to64(user);
+        if (m_lastIdleTime < 0) {   // first tick: seed only
+            m_lastIdleTime = i; m_lastKernelTime = k; m_lastUserTime = u;
+            return 0;
+        }
+        const qint64 dIdle = i - m_lastIdleTime;
+        const qint64 dKernel = k - m_lastKernelTime;
+        const qint64 dUser = u - m_lastUserTime;
+        m_lastIdleTime = i; m_lastKernelTime = k; m_lastUserTime = u;
+        const qint64 total = dKernel + dUser;   // kernel includes idle
+        if (total <= 0)
+            return 0;
+        const qint64 busy = qMax<qint64>(0, total - dIdle);
+        return int(busy * 100 / total);
     }
 
     // Kernel low-memory event -> immediate pressure check (WebKit's
@@ -1657,6 +1717,16 @@ protected:
         if (!m_lowMemEvent)
             return;  // pre-Vista? poll-only mode
         QThread *watch = QThread::create([this]() {
+            // Boot grace: on an already-pressured system the kernel event
+            // is signaled at creation, so an immediate wait would escalate
+            // a cache purge while the first navigation's subresources are
+            // still being fetched — the PageLoader re-feed then reads the
+            // very files the purge just deleted and the page never heals
+            // (observed live: bg_smoke stuck red-less for 18 s).  The
+            // 10 s poll already covers steady-state reclaim; the event
+            // path is for reacting to NEW pressure, which by definition
+            // arrives after the first load has settled.
+            QThread::sleep(15);
             for (;;) {
                 if (WaitForSingleObject(m_lowMemEvent, INFINITE) != WAIT_OBJECT_0)
                     return;
@@ -1676,10 +1746,12 @@ protected:
     bool m_liveResize = false;
     bool m_purgingCache = false;
     // Load-adaptive tombstone state: kernel low-memory event handle (see
-    // startMemoryPressureWatch) + the wall clock of the previous watchdog
-    // tick, used to convert per-tab CPU deltas into utilization.
+    // startMemoryPressureWatch), the wall clock of the previous watchdog
+    // tick (for per-tab CPU deltas), and the GetSystemTimes counters for
+    // whole-system CPU load (negative = not seeded yet).
     HANDLE m_lowMemEvent = nullptr;
     qint64 m_lastMemTickMs = 0;
+    qint64 m_lastIdleTime = -1, m_lastKernelTime = 0, m_lastUserTime = 0;
     QTabWidget *m_tabs = nullptr;
     QList<TabPage *> m_pages;
     QLineEdit *m_addr = nullptr;

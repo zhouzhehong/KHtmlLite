@@ -108,10 +108,55 @@ KHTML（5.116）改造的双进程浏览器：`khtml_browser.exe`（UI/合成）
   scroll_smoke.py 改 HTTP+静态页。全绿：bg_smoke/tile_protocol/
   scroll_smoke/resize_probe。
 
+## 5e. 系统负载墓碑 + UI 修复 + KJS 移除收尾（2026-10-16，全实测）
+- **③ 墓碑随系统负载**（替代机械 400MB）：CreateMemoryResourceNotification
+  (LowMemory) 事件线程（对标 WebKit MemoryPressureHandler）+ GlobalMemoryStatusEx
+  四级：<70 正常 / ≥70 purgeCache+LRU 记分 / ≥85 驱逐 LRU 后台 / ≥93 全后台。
+  事件创建即 signaled 的坑（本机内存常态 83-94%！）→ 线程先 sleep(15s) 启动宽限，
+  否则 PageLoader 首页缓存被清 → bg_smoke 18.4s 红屏（已修复验证）。
+  系统CPU 自适应空转超时：GetSystemTimes 采样 sysCpuPct ≥85% → 60s，否则 5min。
+  测量背书：4 核本机物理内存 83-94%（常态 tier1-2）；后台标签即使放动画 GIF
+  也仅 0.6-1.7%/核（帧时钟节流有效）→ 原"热标签 500‰ 豁免"是死规则，已删。
+  验证：tests/tombstone_probe.py PASS（2 标签、t+16-21s 驱逐、无自动复活、
+  点标签复活、渲染进程存活、crashlog 干净）。
+- **QTabWidget 手术纪律**（本轮最深的坑）：removeTab/insertTab 会在半改状态
+  重发 currentChanged → 挂起处理器被路由到墓碑标签自动复活；resumeTab 再入
+  → 双重手术 → m_pages↔m_tabs 失配 → 杀了活渲染进程。修法：blockSignals(true)
+  包手术 + suspended 标志先行 + 术后显式 setCurrentIndex。
+- **④ 空标题/_blank/file:// 三连环根因**：PageLoader 会**预取链接页并重写
+  href 为本地 sha1 副本**（离线优先设计）→ target=_blank 时 openUrlRequestDelayed
+  携带的是 file:///…khtml_cache/… → 新标签拿 file:// 路径 → KIO file 加载卡死
+  → 空标题×3 + 地址栏缓存路径 + purgeCache 后死链。修法：PageLoader 新增
+  originalOf()（本地副本→原始 http URL 反查），newtab/navigateRequested 出口
+  一律反查；file:// 主文档也改走 PageLoader（QFile 读 + begin/write/end 喂入，
+  绕开 KIO 卡死，about:blank 的 temp 文件同理）。实测：quiet 标签 caption=quiet
+  正确到达；file:// 页面渲染绿底 270k px（修前纯白）；quickjs 回归页 file://
+  加载 + document.title setter 全链路 OK。
+- **④ 标题机制**：executeScript("document.title") 在 jsDisabled 渲染进程上崩，
+  改为直连 KParts::ReadOnlyPart::setWindowCaption（DOM::DocumentImpl 解析
+  <title> 时原生发射，空标题自动回退 URL）。渲染进程 stderr 改
+  ForwardedChannels 直透浏览器（探针可见），[tomb]/[rend] 调试输出由
+  KHTML_TOMBSTONE_DEBUG=1 门控常驻。
+- **④ window.innerWidth/innerHeight 桥补齐**：QJsDomBridge 在 window(=document
+  包装)上挂 defCgetset 活 getter（KHTMLView::visibleWidth/Height，WebCore 同义）。
+  实测 viewport W=638 H=478。残留未做：F11 全屏、DPI 清晰度（144dpi 屏模糊）。
+- **⑤ KJS 完全移除评估落地**：删除 src/khtml/src/bindings/ 全目录（10 文件：
+  5 个 KJS SVG 定制绑定引用不存在的头、5 个 Perl 绑定生成器——均不在任何编译
+  清单，git 记 D）。保留 ecma/jsengine.h + quickjs_engine.{h,cpp}（编译内、
+  审计文档钦定的长期参考抽象）；KJSProxy 命名残留维持文档化接受；
+  needsFallback() 语义确认为"QuickJS 无法执行→调用方优雅降级"（非回退 KJS），
+  qjs_dom_bridge 头部过期注释已改。QuickJS 回归 PASS。
+- 启动基线（本轮新采，file:// quickjs 页）：TTFF 3106ms，全程标记齐全无缺口
+  （尾部 13.2s 空闲为静态页无动画的预期）。
+- 全绿：tile_protocol（含新增墓碑契约断言）/bg_smoke/scroll_probe(60px/格,
+  3.7ms 收敛)/resize_probe(0.07s 还原)/tombstone_probe/title_probe(三路径)
+  /quickjs 回归/viewport/启动采集。
+
 ## 6. 正在/马上要做的
 A. ~~拆那 1.1s~~ **已完成**（字体枚举缓存 + 图标懒加载，构造 1.1s→~0.35s，TTFF 2.0→1.1s）。
    下一步同部位残账：渲染进程镜像加载+socket 连接 ~500ms（每次新标签都付），
-   可做渲染进程预热/常驻待命池（对齐 WebKit 的 process pre-warm）。
+   ~~可做渲染进程预热~~ **prewarm 已落地**（本轮 quiet 标签即走领养路径）；
+   残账是 load kicked→browser connected 1617ms 的对齐开销（见 5e 启动基线）。
 B. **墓碑机制落地**：挂起标签 → 缩略图+scroll/zoom/标题落 QSettings；冷重启可"秒回"。
    （注意：QSettings 写 AppData 在本开发机被 ACL 沙箱拒，落盘路径选 applicationDirPath。）
 C. 空闲 CPU 归零（挂起标签的计时器/渲染进程冻结）。

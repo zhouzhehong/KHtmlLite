@@ -31,6 +31,17 @@ public:
     // Where downloaded pages/resources are cached.
     static QString cacheRoot();
 
+    // Reverse-mapping for cross-process URL handoff: href/src in the served
+    // (rewritten) document point at LOCAL prefetch copies (file:// URLs
+    // under the cache dir).  When navigation leaves this renderer — the
+    // new-tab IPC, or any re-entry through navigateRequested — the local
+    // copy URL must be mapped back to the ORIGINAL http(s) URL: the cache
+    // is purgeable and hashed per-URL, the chrome/address bar/history must
+    // show the real URL, and a fresh renderer's file:// KIO load of the
+    // copy stalls (documented kio_file issue).  URLs that are not cache
+    // copies pass through unchanged.
+    QUrl originalOf(const QUrl &anyUrl) const;
+
 Q_SIGNALS:
     void finished(const QUrl &localFileUrl, const QUrl &finalUrl, const QString &error);
     // Emitted at most once per navigation, after ALL sub-resources (critical
