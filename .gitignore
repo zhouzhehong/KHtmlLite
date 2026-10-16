@@ -103,3 +103,7 @@ tests/quick_shot_stderr.txt
 
 tests/*_stderr.txt
 tests/qs*.txt
+
+# DPI-probe screenshot artifacts (diagnostic outputs, regenerable)
+tests/shot_*.png
+tests/resize_offender.png
