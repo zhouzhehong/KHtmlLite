@@ -18,8 +18,8 @@
  *  Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-#ifndef _KJS_PROXY_H_
-#define _KJS_PROXY_H_
+#ifndef _KHTML_SCRIPT_PROXY_H_
+#define _KHTML_SCRIPT_PROXY_H_
 
 #include <QVariant>
 #include <QString>
@@ -50,11 +50,11 @@ class QJsDomBridge;
  * removed. This class now only routes script evaluation and inline event
  * dispatch to the embedded QuickJS engine; it holds no KJS state.
  */
-class KJSProxy
+class ScriptProxy
 {
 public:
-    KJSProxy(khtml::ChildFrame *frame);
-    ~KJSProxy();
+    ScriptProxy(khtml::ChildFrame *frame);
+    ~ScriptProxy();
 
     QVariant evaluate(const QString &filename, int baseLine, const QString &, const DOM::Node &n);
     void clear();
@@ -77,7 +77,7 @@ public:
     }
 
     // Helper method, to access the private KHTMLPart::jScript()
-    static KJSProxy *proxy(KHTMLPart *part);
+    static ScriptProxy *proxy(KHTMLPart *part);
 
     bool quickJSAvailable() const { return m_qjs != nullptr; }
     bool dispatchEventToQuickJS(DOM::EventImpl *event, DOM::NodeImpl *target,

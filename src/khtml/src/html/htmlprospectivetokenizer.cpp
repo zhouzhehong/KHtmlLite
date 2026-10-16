@@ -39,7 +39,7 @@
 #include <khtml_part.h>
 #include <xml/dom_docimpl.h>
 #include <css/csshelper.h>
-#include <ecma/kjs_proxy.h>
+#include <ecma/js_proxy.h>
 #include <ctype.h>
 #include <assert.h>
 #include <QVariant>

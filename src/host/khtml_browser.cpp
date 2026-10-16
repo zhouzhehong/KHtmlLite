@@ -48,6 +48,9 @@
 #define NOMINMAX
 #include <windows.h>
 #include <psapi.h>
+#include <pdh.h>
+#include <pdhmsg.h>
+#include <QAction>
 #include <QDateTime>
 #include <QMessageBox>
 #include <QStandardPaths>
@@ -97,15 +100,19 @@ public:
         else
             update(dirty);
     }
-    // Map a widget-relative point to frame coordinates.  The frame is always
-    // Drawn unscaled at the surface origin except during the short
-    // size-mismatch transition (see paintEvent), where the whole frame is
-    // briefly scaled to the surface.  Hit testing stays identity-mapped:
-    // during the <1-frame transition the sub-pixel click offset is below
-    // the perception threshold (WebKit makes no live-resize hit-test
-    // compensation either — input during that window targets the next
-    // committed frame's geometry).
-    QPoint mapToFrame(const QPoint &p) const { return p; }
+    // Map a widget-relative (logical) point to frame coordinates.  The
+    // frame is PHYSICAL pixels (size = surface * devicePixelRatio), so
+    // input positions divide by dpr.  During the <1-frame resize
+    // transition the sub-pixel click offset is below the perception
+    // threshold (WebKit makes no live-resize hit-test compensation
+    // either — input during that window targets the next committed
+    // frame's geometry).
+    QPoint mapToFrame(const QPoint &p) const {
+        const qreal dpr = devicePixelRatioF();
+        if (dpr == 1.0)
+            return p;
+        return QPoint(qRound(p.x() / dpr), qRound(p.y() / dpr));
+    }
 
 public:
     // Callback set by RenderTab to forward input events to the renderer.
@@ -172,44 +179,52 @@ protected:
             update();
             return;
         }
-        // Push the new page viewport size to the renderer, so it re-lays out
-        // and re-renders for this viewport instead of leaving the browser to
-        // show a stale framebuffer.
-        if (m_resizeCb)
-            m_resizeCb(width(), height());
+        // Push the new page viewport size to the renderer in PHYSICAL
+        // pixels (size * dpr) so text and layout rasterize on the device
+        // grid — the browser scales the frame down on paint.
+        if (m_resizeCb) {
+            const qreal dpr = devicePixelRatioF();
+            m_resizeCb(int(width() * dpr), int(height() * dpr));
+        }
     }
 
     void paintEvent(QPaintEvent *) override {
         QPainter p(this);
-        // Safari presentation contract for resize (WebKit2 mac / Windows
-        // follow the same rule): while the committed frame does not match
-        // the surface size — meaning the renderer has not caught up with a
-        // viewport change yet — the OLD frame is SCALED to fill the widget
-        // (in WebKit this is the UI process stretching its existing
-        // backing store / tiled surface), instead of a 1:1 crop plus
-        // checkerboard.  Scaling keeps the page visually attached to the
-        // window edges during interactive drags and maximize/restore
-        // without paying a synchronous relayout per WM_SIZE; the first
-        // true-size frame silently replaces the stretched one below.
-        const bool sameSize = !m_frame.isNull() && m_frame.size() == size();
-        if (!m_frame.isNull() && !sameSize
-                && m_previewDX == 0 && m_previewDY == 0) {
-            // Live drag-resize repaints at WM_SIZE rate; smooth interpolation
-            // of a full-surface stretch each time is pure CPU burn there, so
-            // it is reserved for the short discrete transitions
-            // (maximize/restore) where it is actually visible for a moment.
-            p.setRenderHint(QPainter::SmoothPixmapTransform, !m_liveResize);
-            p.drawImage(QRect(QPoint(0, 0), size()), m_frame);
+        if (m_frame.isNull()) {
+            p.fillRect(rect(), Qt::white);
             return;
         }
-        if (!m_frame.isNull()) {
-            // Draw 1:1 anchored (frame size already matches), possibly with
-            // the transient predictive scroll offset (scrolling down moves
-            // content up, hence the negative sign).
-            p.drawImage(QPoint(-m_previewDX, -m_previewDY), m_frame);
-        } else {
-            p.fillRect(rect(), Qt::white);
+        const qreal dpr = devicePixelRatioF();
+        // Steady state at ANY device pixel ratio: the frame is PHYSICAL
+        // pixels by design and now matches this widget's real device
+        // footprint.  Undo the logical→device scale on the painter so the
+        // image blits source-pixel-to-backing-pixel (1:1, no resampling,
+        // exact colours — Safari's deviceScaleFactor presentation).  The
+        // untagged draw below would resample twice on a 150% display
+        // (down to logical, then DWM back up), visibly softening the page.
+        // A ±1 px tolerance absorbs the int()/qRound() split between this
+        // widget and the renderer's frame allocation without ever
+        // stretching a stale frame by a whole pixel row.
+        const int physW = qRound(width() * dpr);
+        const int physH = qRound(height() * dpr);
+        if (qAbs(m_frame.width() - physW) <= 1 && qAbs(m_frame.height() - physH) <= 1) {
+            if (dpr != 1.0) {
+                p.scale(1.0 / dpr, 1.0 / dpr);
+                p.drawImage(QPoint(qRound(-m_previewDX * dpr),
+                                   qRound(-m_previewDY * dpr)), m_frame);
+            } else {
+                p.drawImage(QPoint(-m_previewDX, -m_previewDY), m_frame);
+            }
+            return;
         }
+        // Frame size does not match: the renderer has not caught up with a
+        // viewport change — the WebKit2 UI-process continuity stretch
+        // (Safari resize presentation): the old frame fills the widget
+        // until the first true-size frame silently replaces it.  Live
+        // drags repaint at WM_SIZE rate, where full-surface smooth
+        // interpolation is pure CPU burn.
+        p.setRenderHint(QPainter::SmoothPixmapTransform, !m_liveResize);
+        p.drawImage(QRect(QPoint(-m_previewDX, -m_previewDY), size()), m_frame);
     }
 
     void mousePressEvent(QMouseEvent *e) override {
@@ -371,6 +386,7 @@ public:
             s_warmProcess = nullptr;
             m_process->setParent(this);
             m_adopted = true;
+            assignJob();               // already running: sandbox now
             STARTUP_MARK("tab start (warm-hit)");
         } else {
             m_socketName = QStringLiteral("khtml_rt_%1_%2")
@@ -388,6 +404,9 @@ public:
             STARTUP_MARK("tab start (cold)");
             m_process->start(exe, args);
             STARTUP_MARK("renderer process start");
+            // Sandbox the renderer into its Job Object as soon as the pid
+            // exists (QProcess::started fires after a successful CreateProcess).
+            connect(m_process, &QProcess::started, this, [this]() { assignJob(); });
         }
         // Keep one warm renderer standing by for the NEXT tab.  Delayed a
         // beat so the very first (cold) tab is not competing with the warm
@@ -545,8 +564,61 @@ public:
         sendRestoreIfConnected();
     }
 
+    // === Renderer sandbox: per-process Job Object (Windows shape of
+    // WebKit's per-WebProcess memory limits) ===
+    // Every renderer lives in its own job with (1) a hard COMMIT ceiling
+    // that tracks the dynamic per-renderer budget (set every watchdog
+    // tick, 2x the soft budget — the soft layer tombstones on working-set
+    // growth long before commit can hit the cap) and (2)
+    // JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE: if the browser ever dies
+    // abnormally, the kernel instantly reaps every renderer — no orphaned
+    // KHTML/QuickJS processes left waiting for the 10-min watchdog.
+    void assignJob()
+    {
+        if (m_job || !m_process || m_process->state() == QProcess::NotRunning)
+            return;
+        const qint64 pid = m_process->processId();
+        if (pid <= 0)
+            return;
+        HANDLE h = CreateJobObjectW(nullptr, nullptr);
+        if (!h)
+            return;
+        applyJobLimit(h, 2 * 768 * 1024 * 1024LL);   // provisional; tuned per tick
+        HANDLE proc = OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, FALSE, (DWORD)pid);
+        if (!proc || !AssignProcessToJobObject(h, proc)) {
+            CloseHandle(h);
+            if (proc) CloseHandle(proc);
+            return;
+        }
+        CloseHandle(proc);
+        m_job = h;
+    }
+    static void applyJobLimit(HANDLE h, qint64 commitBytes)
+    {
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION jeli = {};
+        jeli.BasicLimitInformation.LimitFlags =
+            JOB_OBJECT_LIMIT_PROCESS_MEMORY | JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        jeli.ProcessMemoryLimit = (SIZE_T)qMax<qint64>(128ll * 1024 * 1024, commitBytes);
+        SetInformationJobObject(h, JobObjectExtendedLimitInformation,
+                                &jeli, sizeof(jeli));
+    }
+    // Dynamic tuning: the hard ceiling follows the current soft budget.
+    void setMemoryCeilingKB(qint64 kb)
+    {
+        if (kb <= 0) return;
+        m_ceilingKB = kb;
+        if (m_job)
+            applyJobLimit(m_job, kb * 1024);
+    }
+
     void terminate()
     {
+        if (m_job) {
+            // Kill-on-close makes this an immediate kernel reap; the
+            // process is being terminated here anyway.
+            CloseHandle(m_job);
+            m_job = nullptr;
+        }
         if (m_process) {
             disconnect(m_process, nullptr, this, nullptr);
             m_process->kill();
@@ -900,14 +972,22 @@ private:
                                  m_canvas.width() != w ||
                                  m_canvas.height() != h;
         if (dimsChanged) {
-            // Frame-size commit.  Start white, but carry the overlap from the
-            // old canvas: a pure height change leaves those tiles valid (the
-            // renderer only re-paints the newly exposed bottom strip), so a
-            // fresh white canvas would flash on restore/maximize.
+            // Frame-size commit.  WebKit2 continuity rule: the UI process
+            // never exposes an unpainted canvas.  Start from the old canvas
+            // STRETCHED to the new size — any region the next tiles message
+            // does not cover keeps showing page content instead of white
+            // (this was the maximize white flash: first partial frame
+            // after a resize replaced the surface with a half-white
+            // canvas, bypassing the stale-frame stretch in paintEvent) —
+            // then carry the 1:1 overlap on top so pure-height strip
+            // repaints land on exact pixels.
             QImage next(w, h, QImage::Format_RGB32);
             next.fill(Qt::white);
             if (!m_canvas.isNull()) {
                 QPainter cp(&next);
+                if (m_canvas.width() != w || m_canvas.height() != h) {
+                    cp.drawImage(QRect(0, 0, w, h), m_canvas);
+                }
                 cp.drawImage(0, 0, m_canvas);
                 cp.end();
             }
@@ -949,6 +1029,8 @@ private:
 public:
 
     QProcess *m_process = nullptr;
+    HANDLE m_job = nullptr;          // per-renderer sandbox job (see assignJob)
+    qint64 m_ceilingKB = 0;          // current hard commit ceiling
     QLocalSocket *m_socket = nullptr;
     PageSurface *m_container = nullptr;
     QSharedMemory *m_shm = nullptr;
@@ -1071,6 +1153,19 @@ public:
         statusBar()->addPermanentWidget(m_memLabel);
         m_memTimer = new QTimer(this);
         connect(m_memTimer, &QTimer::timeout, this, &KHtmlLiteWindow::checkMemoryBudget);
+
+        // F11 fullscreen toggle (Windows browser convention; every major
+        // browser maps F11 here).  Registered as a window QAction so it
+        // fires regardless of which child widget holds focus.
+        QAction *fsAct = new QAction(this);
+        fsAct->setShortcut(QKeySequence(Qt::Key_F11));
+        connect(fsAct, &QAction::triggered, this, [this]() {
+            if (isFullScreen())
+                showNormal();      // restore previous maximized/normal state
+            else
+                showFullScreen();
+        });
+        addAction(fsAct);
         m_memTimer->start(10000);
         startMemoryPressureWatch();
         m_resizeTimer = new QTimer(this);
@@ -1200,7 +1295,9 @@ public:
             if (!container)
                 return;
             const QSize s = container->size();
-            pg->render->resize(s.width(), s.height());
+            // Physical pixels: the renderer rasters on the device grid.
+            const qreal dpr = container->devicePixelRatioF();
+            pg->render->resize(int(s.width() * dpr), int(s.height() * dpr));
         });
     }
 
@@ -1230,8 +1327,8 @@ public:
             if (idx < 0) return;
             pg->crashCount++;
             // Auto-recovery: first crash → retry with JS disabled (most
-            // modern-site crashes are KJS-native; without JS the page
-            // degrades gracefully). Second crash → show crash UI.
+            // modern-site crashes come from page script; without JS the
+            // page degrades gracefully). Second crash → show crash UI.
             if (pg->crashCount == 1 && !pg->jsDisabled) {
                 pg->jsDisabled = true;
                 if (pg->render) { delete pg->render; pg->render = nullptr; }
@@ -1292,7 +1389,9 @@ public:
         const QSize s = container->size();
         if (s.width() <= 0 || s.height() <= 0)
             return;
-        pg->render->resize(s.width(), s.height());
+        // Physical pixels: the renderer rasters on the device grid.
+        const qreal dpr = container->devicePixelRatioF();
+        pg->render->resize(int(s.width() * dpr), int(s.height() * dpr));
     }
 
 protected:
@@ -1633,9 +1732,12 @@ protected:
         else if (loadPct >= 70) level = 1;                    // pressure
 
         static const char *names[] = {"正常", "低压", "高压", "危急"};
+        // GPU utilization (PDH GPU Engine counters — the Task Manager data
+        // source).  Display + diagnosis pillar of the real-time monitor.
+        const int gpuPct = sampleGpuPct();
         if (m_memLabel) {
-            m_memLabel->setText(QStringLiteral("内存 %1 MB | 内存%2% CPU%3% (%4)%5")
-                .arg(memKB / 1024).arg(loadPct).arg(sysCpuPct)
+            m_memLabel->setText(QStringLiteral("内存 %1 MB | 内存%2% CPU%3% GPU%4% (%5)%6")
+                .arg(memKB / 1024).arg(loadPct).arg(sysCpuPct).arg(gpuPct)
                 .arg(QLatin1String(names[level]))
                 .arg(hottestPerMill >= 50
                      ? QStringLiteral(" · 后台%1‰").arg(hottestPerMill)
@@ -1662,6 +1764,31 @@ protected:
             for (TabPage *pg : m_pages) {
                 if (pg != currentPage() && !pg->suspended)
                     suspendTab(pg);
+            }
+        }
+
+        // Per-renderer dynamic memory budget — the SOFT layer of the
+        // renderer sandbox (the Job Object is the hard one).  A single
+        // runaway background tab is tombstoned, never crashes the browser
+        // and never competes with the OS (Safari per-WebProcess limits).
+        // The budget follows machine class AND live pressure: warning+
+        // halves it (内存动态调节).  The Job Object ceiling tracks at 2x,
+        // so commit pressure can never surprise the working-set monitor.
+        const qint64 budgetKB = perRendererBudgetKB(mem.ullTotalPhys, level);
+        for (TabPage *pg : m_pages) {
+            if (!pg || pg->suspended || !pg->render)
+                continue;
+            pg->render->setMemoryCeilingKB(budgetKB * 2);
+            if (pg != currentPage()) {
+                const qint64 kb = pg->render->memoryKB();
+                if (kb > budgetKB) {
+                    // fprintf (not qDebug): Qt routes qDebug to
+                    // OutputDebugString on Windows, invisible to harnesses.
+                    fprintf(stderr, "[tomb] renderer budget exceeded: "
+                            "%lldKB > %lldKB -> suspend tab\n",
+                            (long long)kb, (long long)budgetKB);
+                    suspendTab(pg);
+                }
             }
         }
 
@@ -1703,6 +1830,68 @@ protected:
             return 0;
         const qint64 busy = qMax<qint64>(0, total - dIdle);
         return int(busy * 100 / total);
+    }
+
+    // Dynamic per-renderer memory budget (KB).  Machine class sets the
+    // base; live system pressure halves it at warning/critical — "the
+    // budget follows the machine and the moment" (Safari's
+    // MemoryPressureHandler doctrine) instead of one fixed number.
+    static qint64 perRendererBudgetKB(ULONGLONG totalPhysBytes, int level) {
+        const ULONGLONG totalKB = totalPhysBytes / 1024;
+        qint64 budget = totalKB >= (16ull << 20) ? qint64(1024) * 1024
+                      : totalKB >= (8ull << 20)  ? qint64(768) * 1024
+                      : qint64(512) * 1024;
+        if (level >= 2)
+            budget /= 2;
+        return budget;
+    }
+
+    // Whole-machine GPU utilization (0-100) from PDH GPU Engine counters —
+    // the same data source Task Manager graphs.  Instances are per-engine
+    // (3D, copy, video decode...); machine utilization is their sum,
+    // clamped.  First call only opens the query; utilization needs two
+    // collects, so the first tick reports 0.  On machines with no PDH
+    // GPU counters (basic display drivers) this degrades to a flat 0 —
+    // honest absence, never a fake number.
+    int sampleGpuPct()
+    {
+        if (m_gpuUnavailable)
+            return 0;                       // PDH GPU unavailable on this box
+        if (!m_gpuQuery) {
+            PDH_STATUS st = PdhOpenQueryW(nullptr, 0, &m_gpuQuery);
+            if (st != ERROR_SUCCESS) {
+                m_gpuUnavailable = true;
+                return 0;
+            }
+            st = PdhAddEnglishCounterW(m_gpuQuery,
+                L"\\GPU Engine(*)\\Utilization Percentage", 0, &m_gpuCounter);
+            if (st != ERROR_SUCCESS) {
+                PdhCloseQuery(m_gpuQuery);
+                m_gpuQuery = nullptr;
+                m_gpuCounter = nullptr;
+                m_gpuUnavailable = true;
+                return 0;
+            }
+        }
+        if (PdhCollectQueryData(m_gpuQuery) != ERROR_SUCCESS)
+            return m_lastGpuPct;
+        DWORD bufSize = 0, count = 0;
+        PDH_STATUS st = PdhGetFormattedCounterArrayW(m_gpuCounter, PDH_FMT_LARGE,
+                                                    &bufSize, &count, nullptr);
+        if (st == PDH_MORE_DATA && bufSize > 0) {
+            QByteArray buf(int(bufSize), Qt::Uninitialized);
+            auto *items = reinterpret_cast<PPDH_FMT_COUNTERVALUE_ITEM_W>(buf.data());
+            st = PdhGetFormattedCounterArrayW(m_gpuCounter, PDH_FMT_LARGE,
+                                              &bufSize, &count, items);
+            if (st == ERROR_SUCCESS && count > 0) {
+                qint64 sum = 0;
+                for (DWORD i = 0; i < count; ++i)
+                    if (items[i].FmtValue.CStatus == ERROR_SUCCESS)
+                        sum += items[i].FmtValue.largeValue;
+                m_lastGpuPct = int(qMin<qint64>(100, sum));
+            }
+        }
+        return m_lastGpuPct;
     }
 
     // Kernel low-memory event -> immediate pressure check (WebKit's
@@ -1751,6 +1940,12 @@ protected:
     // whole-system CPU load (negative = not seeded yet).
     HANDLE m_lowMemEvent = nullptr;
     qint64 m_lastMemTickMs = 0;
+    // GPU monitor (PDH).  m_gpuUnavailable marks "no GPU counters on this
+    // box" so the sampler stops retrying a path that can never exist.
+    PDH_HQUERY m_gpuQuery = nullptr;
+    PDH_HCOUNTER m_gpuCounter = nullptr;
+    bool m_gpuUnavailable = false;
+    int m_lastGpuPct = 0;
     qint64 m_lastIdleTime = -1, m_lastKernelTime = 0, m_lastUserTime = 0;
     QTabWidget *m_tabs = nullptr;
     QList<TabPage *> m_pages;
@@ -1762,6 +1957,13 @@ int main(int argc, char **argv)
 {
     SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
     STARTUP_MARK("main entry");
+    // High-DPI clarity (Safari deviceScaleFactor model): Qt reasons in
+    // device-independent pixels, and the page raster pipeline renders at
+    // PHYSICAL pixels (PageSurface sends size*dpr to the renderer and
+    // scales the frame down on paint — an exact n:n map on the device
+    // grid), so both chrome and page content stay crisp at 125/150%.
+    QApplication::setAttribute(Qt::AA_EnableHighDpiScaling);
+    QApplication::setAttribute(Qt::AA_UseHighDpiPixmaps);
     QApplication app(argc, argv);
     app.setApplicationName(QStringLiteral("KHtmlLite"));
     app.setOrganizationName(QStringLiteral("KHtmlLite"));

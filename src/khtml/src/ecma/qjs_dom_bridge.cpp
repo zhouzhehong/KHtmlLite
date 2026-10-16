@@ -8,7 +8,7 @@
  *
  * Scripts that touch anything else return undefined instead of throwing,
  * so page code degrades gracefully; needsFallback() flags the truly
- * unsupported case so the caller (KJSProxy) can degrade gracefully too.
+ * unsupported case so the caller (ScriptProxy) can degrade gracefully too.
  *
  * All QuickJS types live inside Impl so this translation unit never
  * pollutes KJS-using TUs with the global JSValue typedef.
@@ -32,21 +32,34 @@
 #include <xml/dom_nodeimpl.h>
 #include <xml/dom_docimpl.h>
 #include <khtmlview.h>
-#include "kjs_proxy.h"
+#include "js_proxy.h"
 #include <khtml_part.h>
 #include <cstdio>
 #include <QHash>
 #include <QSet>
 #include <QVector>
+#include <QTimer>
+
+// Trace log for the QuickJS DOM bridge. OFF by default: the old
+// unconditional fopen wrote khtml_qjs.log on EVERY evaluate/world reset —
+// per-eval latency plus an ever-growing file on user machines.
+// KHTML_QJS_TRACE=1 turns it back on for debugging.
+static bool qjsTraceEnabled()
+{
+    static const bool on = [] { const char *v = getenv("KHTML_QJS_TRACE"); return v && v[0] == '1'; }();
+    return on;
+}
 
 static void qjslog(const char *msg)
 {
+    if (!qjsTraceEnabled()) return;
     FILE *f = fopen("C:/Users/zhouzhehong/khtml_qjs.log", "a");
     if (f) { fprintf(f, "[%lld] %s\n", (long long)QDateTime::currentMSecsSinceEpoch(), msg); fclose(f); }
 }
 
 static void qjslog2(const char *msg, const void *p1, const void *p2)
 {
+    if (!qjsTraceEnabled()) return;
     FILE *f = fopen("C:/Users/zhouzhehong/khtml_qjs.log", "a");
     if (f) { fprintf(f, "[%lld] %s p1=%p p2=%p\n", (long long)QDateTime::currentMSecsSinceEpoch(), msg, p1, p2); fclose(f); }
 }
@@ -157,7 +170,7 @@ class QJSNodeListener : public DOM::EventListener
 {
 public:
     // Invoked by KHTML during native event dispatch on the node the shim is
-    // registered on. Routes through KJSProxy so the QuickJS runtime is lazily
+    // registered on. Routes through ScriptProxy so the QuickJS runtime is lazily
     // brought up if needed, then walks g_qjsListeners for this node+type.
     void handleEvent(DOM::Event &evt) override
     {
@@ -170,7 +183,7 @@ public:
         if (!part) {
             return;
         }
-        KJSProxy *proxy = KJSProxy::proxy(part);
+        ScriptProxy *proxy = ScriptProxy::proxy(part);
         if (proxy) {
             // Empty handlerSource: run ONLY the programmatic listener table.
             // The inline onXXX attribute path uses a non-empty handlerSource.
@@ -624,6 +637,154 @@ static ::JSValue docSetProp(::JSContext *ctx, ::JSValueConst this_val,
 }
 
 // ---------------------------------------------------------------------------
+// window timers: setTimeout / setInterval / clearTimeout / clearInterval /
+// requestAnimationFrame / cancelAnimationFrame
+// ---------------------------------------------------------------------------
+// WebCore semantics on the Qt event loop of the host process.  Timer
+// records hold duplicated JSValue references; the registry is wiped on
+// every world teardown (resetRuntime / destructor), so a callback can
+// never fire into a dead context.  requestAnimationFrame is a ~60 Hz
+// single-shot alias (16 ms), exactly what the CSS animation polyfill
+// needs; it was previously missing entirely, silently disabling every
+// @keyframes polyfill injection.
+struct QjsTimerRec {
+    int id = 0;
+    QTimer *t = nullptr;
+    ::JSValue fn = JS_UNDEFINED;   // function form
+    QString code;                  // setTimeout("code") string form
+    bool isString = false;
+    QVector<::JSValue> args;       // trailing args passed back to fn
+    bool repeat = false;
+};
+static QHash<int, QjsTimerRec *> g_qjsTimers;    // id -> record
+static QHash<QTimer *, int> g_qjsTimerIds;       // QObject -> id
+static int g_qjsNextTimerId = 1;
+static ::JSContext *g_qjsTimerCtx = nullptr;     // the world the timers live in
+
+static void qjsTimerFreeRec(::JSContext *ctx, QjsTimerRec *rec)
+{
+    if (ctx && !rec->isString) {
+        JS_FreeValue(ctx, rec->fn);
+        for (::JSValue &a : rec->args)
+            JS_FreeValue(ctx, a);
+    }
+    delete rec;
+}
+
+// Kill every pending timer.  Must run BEFORE the owning JSContext dies so
+// the JSValue references can be freed on a live context.  Idempotent.
+static void qjsTimerKillAll()
+{
+    for (auto it = g_qjsTimers.begin(); it != g_qjsTimers.end(); ++it) {
+        QjsTimerRec *rec = it.value();
+        if (rec->t) {
+            rec->t->stop();
+            delete rec->t;   // outside any timeout handler: direct delete is safe
+        }
+        qjsTimerFreeRec(g_qjsTimerCtx, rec);
+    }
+    g_qjsTimers.clear();
+    g_qjsTimerIds.clear();
+    g_qjsTimerCtx = nullptr;
+}
+
+// magic: 0 = setTimeout, 1 = setInterval, 2 = requestAnimationFrame
+static ::JSValue jsWindowTimer(::JSContext *ctx, ::JSValueConst, int argc,
+                               ::JSValueConst *argv, int magic)
+{
+    if (argc < 1 || !g_qjsTimerCtx || ctx != g_qjsTimerCtx)
+        return ::JS_NewInt32(ctx, 0);
+    QjsTimerRec *rec = new QjsTimerRec;
+    rec->id = g_qjsNextTimerId++;
+    rec->repeat = magic == 1;
+    if (JS_IsString(argv[0])) {
+        rec->isString = true;
+        rec->code = jsValStr(ctx, argv[0]);
+    } else {
+        rec->fn = JS_DupValue(ctx, argv[0]);
+    }
+    for (int i = 2; i < argc; ++i)
+        rec->args.append(JS_DupValue(ctx, argv[i]));
+    int delay = 0;
+    if (magic == 2) {
+        delay = 16;                      // rAF: one frame cadence
+    } else if (argc >= 2) {
+        int32_t d = 0;
+        if (JS_ToInt32(ctx, &d, argv[1])) {
+            // Non-numeric delay: swallow the pending exception, default 0.
+            ::JSValue e = JS_GetException(ctx);
+            JS_FreeValue(ctx, e);
+        }
+        delay = d > 0 ? d : 0;
+    }
+    QTimer *t = new QTimer;
+    t->setSingleShot(!rec->repeat);
+    t->setInterval(delay);
+    rec->t = t;
+    g_qjsTimers.insert(rec->id, rec);
+    g_qjsTimerIds.insert(t, rec->id);
+    // Context object = the timer itself: destroying it disconnects, so the
+    // lambda can never run against a dead registry entry.
+    QObject::connect(t, &QTimer::timeout, t, [t]() {
+        const int id = g_qjsTimerIds.value(t, 0);
+        QjsTimerRec *rec = g_qjsTimers.value(id, nullptr);
+        if (!rec || !g_qjsTimerCtx)
+            return;
+        ::JSContext *ctx2 = g_qjsTimerCtx;
+        if (!rec->repeat) {
+            // Detach first: clearTimeout() / world reset during the callback
+            // must not be able to dangle the record we are about to call.
+            g_qjsTimers.remove(id);
+            g_qjsTimerIds.remove(t);
+        }
+        ::JSValue r;
+        if (rec->isString) {
+            const QByteArray b = rec->code.toUtf8();
+            r = JS_Eval(ctx2, b.constData(), b.size(), "<timer>", JS_EVAL_TYPE_GLOBAL);
+        } else {
+            r = JS_Call(ctx2, rec->fn, JS_UNDEFINED,
+                        rec->args.size(), rec->args.data());
+        }
+        if (JS_IsException(r)) {
+            ::JSValue e = JS_GetException(ctx2);
+            JS_FreeValue(ctx2, e);
+        }
+        JS_FreeValue(ctx2, r);
+        if (!rec->repeat) {
+            qjsTimerFreeRec(ctx2, rec);
+            t->deleteLater();            // we are inside its own handler
+        }
+    });
+    t->start();
+    return ::JS_NewInt32(ctx, rec->id);
+}
+
+// clearTimeout() / clearInterval() / cancelAnimationFrame() share one body.
+static ::JSValue jsWindowClearTimer(::JSContext *ctx, ::JSValueConst,
+                                    int argc, ::JSValueConst *argv, int)
+{
+    int32_t id = 0;
+    if (argc >= 1) {
+        if (JS_ToInt32(ctx, &id, argv[0])) {
+            // Non-numeric id: swallow the pending exception, id stays 0.
+            ::JSValue e = JS_GetException(ctx);
+            JS_FreeValue(ctx, e);
+        }
+    }
+    QjsTimerRec *rec = g_qjsTimers.value(id, nullptr);
+    if (rec) {
+        if (rec->t) {
+            g_qjsTimerIds.remove(rec->t);
+            rec->t->stop();
+            rec->t->deleteLater();
+        }
+        g_qjsTimers.remove(id);
+        qjsTimerFreeRec(g_qjsTimerCtx, rec);
+    }
+    return JS_UNDEFINED;
+}
+
+// ---------------------------------------------------------------------------
 // Impl (PIMPL body)
 // ---------------------------------------------------------------------------
 struct QJsDomBridge::Impl
@@ -643,6 +804,9 @@ struct QJsDomBridge::Impl
 
     void resetRuntime() {
         qjslog2("RUNTIME_RESET_BEGIN", rt, ctx);
+        // Pending timers reference JSValues of the outgoing world — kill
+        // them (and their JSValue refs) on the still-live context first.
+        qjsTimerKillAll();
         // Free all listener JSValues before tearing down the runtime they
         // belong to.
         for (auto it = g_qjsListeners.begin(); it != g_qjsListeners.end(); ++it) {
@@ -891,6 +1055,9 @@ struct QJsDomBridge::Impl
     ~Impl()
     {
         qjslog2("IMPL_DESTRUCTOR_BEGIN", rt, ctx);
+        // Pending timers reference JSValues of this world — they must die
+        // with it, never after.
+        qjsTimerKillAll();
         if (ctx) {
             if (!JS_IsUndefined(documentObj)) {
                 qjslog2("IMPL_DESTRUCTOR_FREE_DOCUMENTOBJ", (void*)JS_VALUE_GET_PTR(documentObj), nullptr);
@@ -953,6 +1120,46 @@ struct QJsDomBridge::Impl
         // — live getters so resize is reflected without re-instantiation.
         defCgetset("innerWidth", windowViewportGetter, nullptr, 0, documentObj);
         defCgetset("innerHeight", windowViewportGetter, nullptr, 1, documentObj);
+
+        // window timers (setTimeout / setInterval / clearTimeout /
+        // clearInterval / requestAnimationFrame / cancelAnimationFrame):
+        // installed on BOTH the global object and the window wrapper, so
+        // bare setTimeout(...) and window.setTimeout(...) both resolve.
+        // This is what makes @keyframes CSS animation polyfills (which
+        // hard-require requestAnimationFrame) actually run.
+        {
+            static const bool s_timersOn = [] {
+                const char *v = getenv("KHTML_QJS_TIMERS");
+                return !v || v[0] != '0';
+            }();
+            if (s_timersOn) {
+                g_qjsTimerCtx = ctx;
+                auto defTimer = [&](const char *name, int magic, ::JSValue target) {
+                    ::JSValue f = JS_NewCFunction2(ctx,
+                        reinterpret_cast<::JSCFunction *>(&jsWindowTimer),
+                        name, 3, ::JS_CFUNC_generic_magic, magic);
+                    JS_SetPropertyStr(ctx, target, name, f);
+                };
+                const ::JSValue targets[2] = { global, documentObj };
+                for (const ::JSValue &target : targets) {
+                    defTimer("setTimeout", 0, target);
+                    defTimer("setInterval", 1, target);
+                    defTimer("requestAnimationFrame", 2, target);
+                    ::JSValue cf = JS_NewCFunction2(ctx,
+                        reinterpret_cast<::JSCFunction *>(&jsWindowClearTimer),
+                        "clearTimeout", 1, ::JS_CFUNC_generic_magic, 0);
+                    JS_SetPropertyStr(ctx, target, "clearTimeout", cf);
+                    cf = JS_NewCFunction2(ctx,
+                        reinterpret_cast<::JSCFunction *>(&jsWindowClearTimer),
+                        "clearInterval", 1, ::JS_CFUNC_generic_magic, 0);
+                    JS_SetPropertyStr(ctx, target, "clearInterval", cf);
+                    cf = JS_NewCFunction2(ctx,
+                        reinterpret_cast<::JSCFunction *>(&jsWindowClearTimer),
+                        "cancelAnimationFrame", 1, ::JS_CFUNC_generic_magic, 0);
+                    JS_SetPropertyStr(ctx, target, "cancelAnimationFrame", cf);
+                }
+            }
+        }
         qjslog("GLOBAL_DOCUMENT_WINDOW_SET");
         JS_FreeValue(ctx, global);
         qjslog("DOCUMENT_SET_END");

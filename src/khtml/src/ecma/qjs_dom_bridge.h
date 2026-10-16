@@ -1,14 +1,14 @@
 /* qjs_dom_bridge.h - QuickJS to KHTML DOM bridge (engine-internal).
  *
- * Minimal-but-sufficient DOM surface so page scripts can run on the
- * embedded QuickJS engine (ES2020) instead of the 2010-era KJS.
- * The KJSProxy::evaluate() entry prefers this engine and falls back to
- * KJS when a script references a DOM API the bridge does not expose.
+ * Minimal-but-sufficient DOM surface so page scripts run on the embedded
+ * QuickJS engine (ES2020).  QuickJS is the ONLY engine: ScriptProxy routes
+ * all script evaluation and inline event dispatch here.  APIs the bridge
+ * does not expose simply read as undefined to page code (needsFallback()
+ * marks the rare hard-unsupported cases so callers can degrade instead of
+ * hallucinating an engine that no longer exists).
  *
- * This header deliberately does NOT include quickjs.h: KJS also exports
- * a type named JSValue, so pulling QuickJS's typedef into translation
- * units that use KJS would be ambiguous. All QuickJS types are hidden
- * behind the PIMPL pointer below.
+ * This header deliberately does NOT include quickjs.h: all QuickJS types
+ * are hidden behind the PIMPL pointer below.
  */
 #ifndef KHTML_QJS_DOM_BRIDGE_H
 #define KHTML_QJS_DOM_BRIDGE_H

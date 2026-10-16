@@ -152,15 +152,85 @@ KHTML（5.116）改造的双进程浏览器：`khtml_browser.exe`（UI/合成）
   3.7ms 收敛)/resize_probe(0.07s 还原)/tombstone_probe/title_probe(三路径)
   /quickjs 回归/viewport/启动采集。
 
+## 5f. 系统监测与沙盒轮（2026-10-17，全实测，本机 150% DPI 屏）
+
+- **② 渲染进程沙盒（Job Object 硬上限 + 动态软预算）**：每个渲染进程
+  AssignProcessToJobObject 自有 Job Object：ProcessMemoryLimit = 软预算×2
+  （commit 硬顶，每 2s tick 跟随调价）+ JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+  （浏览器异常退出 → 内核即时回收全部渲染进程，不再依赖 10min 看门狗）。
+  软预算 perRendererBudgetKB：整机 RAM ≥16G→1G / ≥8G→768M / 否则 512M，
+  系统压力 ≥85%（warning+）再减半（"预算跟机器和当下走"，对标 Safari
+  per-WebProcess limit + MemoryPressureHandler）。超软预算 → suspendTab 转墓碑
+  （绝不崩浏览器），stderr 打 `[tomb] renderer budget exceeded`。领养(暖进程)
+  路径 start() 直挂，冷启路径挂 QProcess::started。
+- **③ GPU/CPU/内存实时监测**：PDH GPU Engine(*)\Utilization Percentage
+  （任务管理器同源）按引擎实例求和封顶 100；无 GPU 计数器的机器降级为 0
+  （诚实缺席，不造数）。GetSystemTimes 系统 CPU%（子代理已有）保留。
+  状态栏："内存 %MB | 内存x% CPUy% GPUz% (等级) · 后台‰"。已有决策位不变
+  （CPU≥85% 缩短空转驱逐）；GPU 先做展示与诊断，不接调度（无实测收益
+  不加规则——ARCHITECTURE 章程）。CMake：khtml_browser 链 pdh + pdhmsg。
+- **④ DPI 清晰度（150% 屏实测，本轮最深）**：AA_EnableHighDpiScaling +
+  AA_UseHighDpiPixmaps；管线全物理像素（PageSurface 发 size×dpr，输入÷dpr）。
+  PageSurface paintEvent 稳态分支 `p.scale(1.0/dpr)` 后 1:1 设备像素直投
+  （零拷贝；QImage setDevicePixelRatio 会每帧 detach 8MB，故用 painter 反缩放），
+  ±1px 容差吸收 int()/qRound() 差；失配走 WebKit2 连续性拉伸。
+  **像素级验证**：1920 客户区抓图，页面色带 73–74 设备px/条（49逻辑×1.5）、
+  带内精确 hex（0xa02c2c 等逐字面值）、带界仅 1–2 行过渡。若双重重采样，
+  精确色不可能长程存在。
+- **④ resize 白闪真根因修复**：framesize 提交原是"白底 + 左上 1:1 搬运"——
+  渲染端 resize 后首帧若只带部分瓦片，半白画布直接顶掉旧帧（绕过 paintEvent
+  拉伸保护），maximize 时下半屏纯白（t≤0.12s 幽灵样本抓到，1920×974 客户
+  区白 46% 列吻合）。修法：新画布先整体拉伸旧画布再叠 1:1 搬运（WebKit2
+  "UI 进程永不暴露未绘制画布"），纯高度变化的条带重绘仍落精确像素。
+  实测（DPI-aware 探针）：maximize 白闪 0.00%、内容 >90% @0.197s、settle
+  0.23s；restore 白闪 0.00%。
+- **④ 探针工具链升级（150% 屏必需）**：resize_probe SetProcessDpiAwareness(2)
+  ——DPI 无感知进程在 150% 屏拿到的是 DWM 降采样虚像（每像素都是 1.5×1.5
+  混合），精确调色板分类全废，高 DPI 渲染被误判为回归。页面区改为"饱和像素
+  包围盒"自校准（chrome 随 dpr 变大，只裁顶部不够）；白闪指标改纯白
+  （checkerboard 呈现已废除且被 tile_protocol 静态断言禁止，灰色=滚动条/
+  状态栏等合法 chrome）；几何前提修复：先 SetWindowPos 缩小窗口再最大化
+  （150% 屏默认窗口已近满屏，SW_MAXIMIZE 反而缩小→无暴露区可测）；
+  SW_RESTORE 异步 → 等 IsZoomed 翻转 + 客户区真回到还原几何再采样。
+  新工具 tests/shot_tool.py（DPI-aware 截图 + 任意窗宽）。
+- **④ F11 全屏**：QAction(QKeySequence(Qt::Key_F11)) 窗级注册，任意子控件
+  焦点下可触发；isFullScreen 切换 showNormal/showFullScreen。
+- **④ 定时器桥**：QJsDomBridge 装 setTimeout/setInterval/clearTimeout/
+  clearInterval/requestAnimationFrame/cancelAnimationFrame（global+window 双挂，
+  JSCFunctionMagic 分派，rAF=16ms 单发）。QuickJS World 重置（resetRuntime/
+  析构）先 qjsTimerKillAll() 清注册表再拆 ctx，回调永不落入死上下文。
+  修复链：CSS 动画 polyfill 硬依赖 rAF（原先缺失→polyfill 静默空转）；
+  Promise shim 内部用 setTimeout（原先 undefined→挂起态 Promise 永不 resolve）。
+  KHTML_QJS_TIMERS=0 可关。qjslog/qjslog2 每 evaluate fopen 写盘的老病
+  同步根治（KHTML_QJS_TRACE=1 才开）。
+- **⑤ KJS 残留清零**：KJSProxy→ScriptProxy 全仓改名（16 文件 ~40 处 +
+  libkhtml.map 导出 + guard），kjs_proxy.{h,cpp}→js_proxy.{h,cpp}；
+  js_transpile.{h,cpp} 删除（Bublé ES3 降级机器——QuickJS 原生 ES2020，
+  纯属 KJS 时代遗产），外链/内联脚本 raw 直通 + try/catch 保留；
+  pageloader/css_anim_polyfill/khtml_browser 过期 KJS 注释改写。
+  墓碑缩略图（TombstoneWidget 快照缩放绘制 + seedFrame 预填）经
+  tombstone_probe 生命周期验证（挂起/无自动复活/点击恢复）。
+- **回归账目（150% DPI 屏，全绿）**：tile_protocol（含 dpr 设备直投静态断言）
+  /bg_smoke/scroll_smoke/tombstone_probe/tit le_probe(三路径)/resize_probe
+  （白闪 0.00%×2 相位）。启动采集 bing 冷启 TTFF **1545ms**（渲染 pass 4-21ms，
+  大隙为网络/子资源，与既测 1694ms 同水位；5e 的 3106ms 为 file:// 冷页基线）。
+- **遗留（设计已定未施工）**：真 deviceScaleFactor CSS-px 视口（当前 CSS px=
+  物理 px，150% 屏元素比 OS 惯例小 1/3 但全清晰）。正解=渲染端逻辑尺寸
+  KHTMLView + 画布物理尺寸 + QPainter scale(dpr) 光栅缩放，KHTML 现有
+  setZoomFactor 是"放大镜"（layout 宽不随 zoom 收窄，render_canvas.cpp:171
+  m_width=visibleWidth）不可直接用；damage→瓦片需 ×dpr 换算，涉及已验证的
+  瓦片/滚动路径，独立成轮施工。
+
 ## 6. 正在/马上要做的
 A. ~~拆那 1.1s~~ **已完成**（字体枚举缓存 + 图标懒加载，构造 1.1s→~0.35s，TTFF 2.0→1.1s）。
    下一步同部位残账：渲染进程镜像加载+socket 连接 ~500ms（每次新标签都付），
    ~~可做渲染进程预热~~ **prewarm 已落地**（本轮 quiet 标签即走领养路径）；
    残账是 load kicked→browser connected 1617ms 的对齐开销（见 5e 启动基线）。
-B. **墓碑机制落地**：挂起标签 → 缩略图+scroll/zoom/标题落 QSettings；冷重启可"秒回"。
-   （注意：QSettings 写 AppData 在本开发机被 ACL 沙箱拒，落盘路径选 applicationDirPath。）
+B. **真 deviceScaleFactor CSS-px 视口**（见 5f 遗留：设计已定，涉及瓦片 damage
+   ×dpr 换算，独立成轮）。QSettings 墓碑持久化（冷重启秒回）仍待做。
 C. 空闲 CPU 归零（挂起标签的计时器/渲染进程冻结）。
-D. 必应等现代重型站的 JS 转译流水线开销（Bublé 嵌入，异步/缓存化）。
+D. ~~必应等现代重型站的 JS 转译流水线开销~~ **已删**（transpile 机器整体移除，
+   QuickJS 原生 ES2020 直通，见 5f）。
 
 ## 7. 交付给下一个会话的操作步骤
 1. `cd C:\Users\zhouzhehong\Desktop\KHtmlLite`

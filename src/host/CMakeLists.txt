@@ -69,17 +69,16 @@ set(KHTML_HOST_COMPILE_OPTS
 add_executable(khtml_browser WIN32
     khtml_browser.cpp
     pageloader.cpp
-    js_transpile.cpp
 )
 target_include_directories(khtml_browser PRIVATE ${KHTML_HOST_INCLUDES})
-target_link_libraries(khtml_browser PRIVATE ${KHTML_HOST_LIBS})
+# pdh: GPU Engine utilization counters for the real-time monitor.
+target_link_libraries(khtml_browser PRIVATE ${KHTML_HOST_LIBS} pdh)
 target_compile_options(khtml_browser PRIVATE ${KHTML_HOST_COMPILE_OPTS})
 
 # --- Renderer process (out-of-process, one per tab) --------------------------
 add_executable(khtml_renderer WIN32
     khtml_renderer.cpp
     pageloader.cpp
-    js_transpile.cpp
 )
 target_include_directories(khtml_renderer PRIVATE ${KHTML_HOST_INCLUDES})
 target_link_libraries(khtml_renderer PRIVATE ${KHTML_HOST_LIBS} dbghelp)

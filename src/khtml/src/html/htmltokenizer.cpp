@@ -42,7 +42,7 @@
 #include <khtmlview.h>
 #include <khtml_part.h>
 #include <xml/dom_docimpl.h>
-#include <ecma/kjs_proxy.h>
+#include <ecma/js_proxy.h>
 #include <kcharsets.h>
 #include <ctype.h>
 #include <assert.h>
@@ -1974,7 +1974,7 @@ void HTMLTokenizer::finish()
 
 void HTMLTokenizer::processToken()
 {
-    KJSProxy *jsProxy = view ? view->part()->jScript() : nullptr;
+    ScriptProxy *jsProxy = view ? view->part()->jScript() : nullptr;
     if (jsProxy) {
         jsProxy->setEventHandlerLineno(tagStartLineno);
     }

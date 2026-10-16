@@ -2,7 +2,8 @@
 // Injected after the base ES3 polyfill. Reads keyframes extracted by
 // PageLoader (window.__cssKeyframes) and drives them with requestAnimationFrame.
 // Supports opacity, transform (translate/rotate/scale), pixel lengths, and
-// colors. Deliberately small and ES3-only so it runs on KJS without transpilation.
+// colors. Deliberately small and in conservative ES5 so it runs on QuickJS
+// as-is, no transpilation needed.
 static const char *kCssAnimPolyfill =
 "(function(){\n"
 "  var kf = window.__cssKeyframes || {};\n"

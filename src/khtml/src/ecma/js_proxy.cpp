@@ -19,7 +19,7 @@
  *  Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-#include "kjs_proxy.h"
+#include "js_proxy.h"
 
 #include "qjs_dom_bridge.h"
 #include <cstdio>
@@ -45,7 +45,7 @@ static void kjlog(const char *m) {
 #include "khtml_debug.h"
 
 #ifndef NDEBUG
-int KJSProxy::s_count = 0;
+int ScriptProxy::s_count = 0;
 #endif
 
 namespace {
@@ -62,10 +62,10 @@ public:
 
     void handleEvent(DOM::Event &evt) override
     {
-        // Reach the KJSProxy through the event target's document -> part.
+        // Reach the ScriptProxy through the event target's document -> part.
         // This deliberately does NOT touch any JS window object: that would
         // force an interpreter to be constructed, which we have removed.
-        KJSProxy *proxy = nullptr;
+        ScriptProxy *proxy = nullptr;
         DOM::Node ct = evt.currentTarget();
         DOM::NodeImpl *target = nullptr;
         if (!ct.isNull()) {
@@ -73,7 +73,7 @@ public:
             if (target && target->document()) {
                 KHTMLPart *part = qobject_cast<KHTMLPart *>(target->document()->part());
                 if (part) {
-                    proxy = KJSProxy::proxy(part);
+                    proxy = ScriptProxy::proxy(part);
                 }
             }
         }
@@ -93,7 +93,7 @@ private:
 
 } // namespace
 
-KJSProxy::KJSProxy(khtml::ChildFrame *frame)
+ScriptProxy::ScriptProxy(khtml::ChildFrame *frame)
 {
     m_frame = frame;
     m_debugEnabled = false;
@@ -105,7 +105,7 @@ KJSProxy::KJSProxy(khtml::ChildFrame *frame)
 #endif
 }
 
-KJSProxy::~KJSProxy()
+ScriptProxy::~ScriptProxy()
 {
     delete m_qjs;
     m_qjs = nullptr;
@@ -114,7 +114,7 @@ KJSProxy::~KJSProxy()
 #endif
 }
 
-bool KJSProxy::evaluateQuickJS(const QString &script, const QString &filename,
+bool ScriptProxy::evaluateQuickJS(const QString &script, const QString &filename,
                                const DOM::Node &n, QVariant *result)
 {
     // Global kill-switch: KHTML_QJS_RUNTIME=0 disables the QuickJS path entirely.
@@ -155,7 +155,7 @@ bool KJSProxy::evaluateQuickJS(const QString &script, const QString &filename,
 }
 
 
-bool KJSProxy::dispatchEventToQuickJS(DOM::EventImpl *event, DOM::NodeImpl *target,
+bool ScriptProxy::dispatchEventToQuickJS(DOM::EventImpl *event, DOM::NodeImpl *target,
                                       const QString &handlerSource)
 {
     // QuickJS is the only engine: lazily create the runtime on first event,
@@ -175,7 +175,7 @@ bool KJSProxy::dispatchEventToQuickJS(DOM::EventImpl *event, DOM::NodeImpl *targ
     return m_qjs->dispatchEvent(event, target, handlerSource);
 }
 
-QVariant KJSProxy::evaluate(const QString &filename, int baseLine,
+QVariant ScriptProxy::evaluate(const QString &filename, int baseLine,
                             const QString &str, const DOM::Node &n)
 {
     ++m_running;
@@ -196,18 +196,18 @@ QVariant KJSProxy::evaluate(const QString &filename, int baseLine,
     return QVariant();
 }
 
-bool KJSProxy::isRunningScript()
+bool ScriptProxy::isRunningScript()
 {
     return m_running != 0;
 }
 
-void KJSProxy::clear()
+void ScriptProxy::clear()
 {
     // KF5JS interpreter removed. The QuickJS bridge keeps its own document
     // state; dropping it here would force a runtime rebuild on next page load.
 }
 
-DOM::EventListener *KJSProxy::createHTMLEventHandler(const QString &sourceUrl, const QString &name, const QString &code, DOM::NodeImpl *node, bool svg)
+DOM::EventListener *ScriptProxy::createHTMLEventHandler(const QString &sourceUrl, const QString &name, const QString &code, DOM::NodeImpl *node, bool svg)
 {
     // Hand back a self-contained inline listener that retains only the raw
     // handler source. It parses nothing with KJS; at dispatch time it feeds
@@ -217,36 +217,36 @@ DOM::EventListener *KJSProxy::createHTMLEventHandler(const QString &sourceUrl, c
     return new InlineQJSListener(code, sourceUrl, m_handlerLineno, name);
 }
 
-void KJSProxy::finishedWithEvent(const DOM::Event &event)
+void ScriptProxy::finishedWithEvent(const DOM::Event &event)
 {
     // Used to tell the KJS interpreter to release its wrapper for this event.
     // QuickJS owns no such cache, so this is a no-op.
     Q_UNUSED(event);
 }
 
-void KJSProxy::setDebugEnabled(bool enabled)
+void ScriptProxy::setDebugEnabled(bool enabled)
 {
     m_debugEnabled = enabled;
 }
 
-bool KJSProxy::debugEnabled() const
+bool ScriptProxy::debugEnabled() const
 {
     return m_debugEnabled;
 }
 
-void KJSProxy::showDebugWindow(bool /*show*/)
+void ScriptProxy::showDebugWindow(bool /*show*/)
 {
     // KJS debugger removed.
 }
 
-bool KJSProxy::paused() const
+bool ScriptProxy::paused() const
 {
     return false;
 }
 
 // Helper method, so that all classes which need jScript() don't need to be added
 // as friend to KHTMLPart
-KJSProxy *KJSProxy::proxy(KHTMLPart *part)
+ScriptProxy *ScriptProxy::proxy(KHTMLPart *part)
 {
     return part->jScript();
 }

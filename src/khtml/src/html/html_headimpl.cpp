@@ -36,7 +36,7 @@
 #include "css/cssstyleselector.h"
 #include "css/css_mediaquery.h"
 
-#include "ecma/kjs_proxy.h"
+#include "ecma/js_proxy.h"
 
 #include <QUrl>
 #include "khtml_debug.h"
@@ -585,7 +585,7 @@ void HTMLScriptElementImpl::evaluateScript(const QString &URL, const DOMString &
 
     KHTMLPart *part = document()->part();
     if (part) {
-        KJSProxy *proxy = KJSProxy::proxy(part);
+        ScriptProxy *proxy = ScriptProxy::proxy(part);
         if (proxy) {
             m_evaluated = true;
             proxy->evaluate(URL, 0, script.string(), nullptr);

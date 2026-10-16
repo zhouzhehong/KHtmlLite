@@ -299,11 +299,11 @@ ecm_gperf_generate(html/kentities.gperf ${CMAKE_CURRENT_BINARY_DIR}/kentities-gp
 #
 # The legacy KF5JS (KJS) interpreter and all of its generated DOM bindings
 # have been removed. QuickJS is the only execution engine; the sources below
-# are the engine abstraction, the DOM bridge, and the KJSProxy shim that
+# are the engine abstraction, the DOM bridge, and the ScriptProxy shim that
 # routes inline handlers and programmatic script evaluation to QuickJS.
 
 set(kjs_html_STAT_SRCS
-  ecma/kjs_proxy.cpp
+  ecma/js_proxy.cpp
   ecma/quickjs_engine.cpp
   ecma/qjs_dom_bridge.cpp
 )

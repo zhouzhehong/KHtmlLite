@@ -64,7 +64,7 @@ using namespace DOM;
 #include <kparts/guiactivateevent.h>
 
 #include <kacceleratormanager.h>
-#include "ecma/kjs_proxy.h"
+#include "ecma/js_proxy.h"
 #include "khtml_settings.h"
 
 #include <sys/types.h>
@@ -1192,7 +1192,7 @@ bool KHTMLPart::metaRefreshEnabled() const
     return d->m_metaRefreshEnabled;
 }
 
-KJSProxy *KHTMLPart::jScript()
+ScriptProxy *KHTMLPart::jScript()
 {
     if (!jScriptEnabled()) {
         return nullptr;
@@ -1217,7 +1217,7 @@ KJSProxy *KHTMLPart::jScript()
         }
     }
     if (!d->m_frame->m_jscript) {
-        d->m_frame->m_jscript = new KJSProxy(d->m_frame);
+        d->m_frame->m_jscript = new ScriptProxy(d->m_frame);
     }
     d->m_frame->m_jscript->setDebugEnabled(d->m_bJScriptDebugEnabled);
 
@@ -1322,7 +1322,7 @@ QVariant KHTMLPart::executeScript(const QString &filename, int baseLine, const D
     // The script is now printed by KJS's Parser::parse
     qCDebug(KHTML_LOG) << "executeScript: caller='" << objectName() << "' filename=" << filename << " baseLine=" << baseLine /*<< " script=" << script*/;
 #endif
-    KJSProxy *proxy = jScript();
+    ScriptProxy *proxy = jScript();
 
     if (!proxy || proxy->paused()) {
         return QVariant();
@@ -1355,7 +1355,7 @@ QVariant KHTMLPart::executeScript(const DOM::Node &n, const QString &script)
 #ifdef KJS_VERBOSE
     qCDebug(KHTML_LOG) << "caller=" << objectName() << "node=" << n.nodeName().string().toLatin1().constData() << "(" << (n.isNull() ? 0 : n.nodeType()) << ") " /* << script */;
 #endif
-    KJSProxy *proxy = jScript();
+    ScriptProxy *proxy = jScript();
 
     if (!proxy || proxy->paused()) {
         return QVariant();
@@ -5475,7 +5475,7 @@ void KHTMLPartPrivate::renameFrameForContainer(DOM::HTMLPartContainerElementImpl
     }
 }
 
-KJSProxy *KHTMLPart::framejScript(KParts::ReadOnlyPart *framePart)
+ScriptProxy *KHTMLPart::framejScript(KParts::ReadOnlyPart *framePart)
 {
     KHTMLPart *const kp = qobject_cast<KHTMLPart *>(framePart);
     if (kp) {
@@ -5489,7 +5489,7 @@ KJSProxy *KHTMLPart::framejScript(KParts::ReadOnlyPart *framePart)
         khtml::ChildFrame *frame = *it;
         if (framePart == frame->m_part.data()) {
             if (!frame->m_jscript) {
-                frame->m_jscript = new KJSProxy(frame);
+                frame->m_jscript = new ScriptProxy(frame);
             }
             return frame->m_jscript;
         }
@@ -7095,7 +7095,7 @@ DOM::Node KHTMLPart::activeNode() const
 
 DOM::EventListener *KHTMLPart::createHTMLEventListener(QString code, QString name, NodeImpl *node, bool svg)
 {
-    KJSProxy *proxy = jScript();
+    ScriptProxy *proxy = jScript();
 
     if (!proxy) {
         return nullptr;

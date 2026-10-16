@@ -44,7 +44,7 @@
 #include <rendering/render_flow.h>
 #include <rendering/render_line.h>
 
-#include <ecma/kjs_proxy.h>
+#include <ecma/js_proxy.h>
 #include <khtmlview.h>
 #include <khtml_part.h>
 //Added by qt3to4:

@@ -34,7 +34,7 @@
 
 #include "html/html_objectimpl.h"
 #include "khtml_run.h"
-#include "ecma/kjs_proxy.h"
+#include "ecma/js_proxy.h"
 
 namespace khtml
 {
@@ -58,7 +58,7 @@ public:
 
     QString m_serviceName;
     QString m_serviceType;
-    KJSProxy *m_jscript;
+    ScriptProxy *m_jscript;
     bool m_bCompleted;
     QString m_name;
     KParts::OpenUrlArguments m_args;

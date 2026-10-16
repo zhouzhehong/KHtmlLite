@@ -1,5 +1,4 @@
 #include "pageloader.h"
-#include "js_transpile.h"
 #include "css_anim_polyfill.h"
 #include "perflog.h"
 #include <QRegularExpression>
@@ -12,9 +11,10 @@
 #include <QColor>
 #include <QDebug>
 
-// Minimal ES5+ polyfill bundle. Kept small and ES3-only so KJS (2001-era)
-// can parse and execute it without tripping over modern syntax. Wrapped in
-// try/catch so a failure in one polyfill never takes down the page.
+// Minimal ES5+ polyfill bundle: language-core API shims QuickJS does not
+// carry into the page DOM environment (console etc.). Kept in conservative
+// ES5 syntax and wrapped in try/catch so a failure in one polyfill never
+// takes down the page.
 static const char *kJsPolyfill =
 "(function(){"
 "try{"
@@ -802,27 +802,17 @@ void PageLoader::onResourceFinished()
             finalizeSubresources();
             return;
         }
-        // External scripts: the page engine is QuickJS (ES2020-capable), so
-        // the ES2015->ES3 Buble lowering that the removed KJS runtime
-        // needed is now OFF by default — raw ES2015+ parses natively, which
-        // is both faster (no per-script transpile pass) and safer (no
-        // transformer-induced breakage).  KHTML_TRANSPILE=1 restores the
-        // legacy lowering for A/B comparison.  The try/catch guard stays:
-        // one throwing external script must never tear the page down.
+        // External scripts pass through RAW: the page engine is QuickJS
+        // (ES2020-capable) and parses ES2015+ natively.  The old Buble
+        // ES2015->ES3 lowering existed only for the removed KJS
+        // interpreter and is gone.  The try/catch guard stays: one
+        // throwing external script must never tear the page down.
         const QString resCt = QString::fromLatin1(r->header(QNetworkRequest::ContentTypeHeader).toByteArray()).toLower();
         const bool looksJs = res.url.path().toLower().endsWith(QLatin1String(".js"))
                              || resCt.contains(QLatin1String("javascript"));
         QByteArray outData;
         if (looksJs && data.size() < 4 * 1024 * 1024) {
-            static const bool s_transpile = qEnvironmentVariableIntValue("KHTML_TRANSPILE") == 1;
-            QString t;
-            if (s_transpile) {
-                t = transpileJs(QString::fromUtf8(data));
-                if (t.size() > 262144)
-                    t = QStringLiteral("/* skipped: external script too large */");
-            } else {
-                t = QString::fromUtf8(data);  // QuickJS parses ES2015+ as-is
-            }
+            QString t = QString::fromUtf8(data);
             t = QStringLiteral("try{") + t + QStringLiteral("}catch(__qjs_e){}");
             outData = t.toUtf8();
         }
@@ -1175,16 +1165,10 @@ void PageLoader::rewriteAndSave()
                 || stype == QLatin1String("module"))
                 && !body.trimmed().isEmpty();
             if (isJs) {
-                static const bool s_transpile = qEnvironmentVariableIntValue("KHTML_TRANSPILE") == 1;
-                QString t;
-                if (s_transpile) {
-                    t = transpileJs(body);
-                    if (t.size() > 131072)
-                        t = QStringLiteral("/* skipped: inline script too large */");
-                } else {
-                    t = body;  // QuickJS parses ES2015+ as-is
-                }
-                t = QStringLiteral("try{") + t + QStringLiteral("}catch(__qjs_e){}");
+                // Raw pass-through: QuickJS parses ES2015+ natively (the
+                // ES3 lowering was only for the removed KJS interpreter).
+                QString t = QStringLiteral("try{") + body
+                          + QStringLiteral("}catch(__qjs_e){}");
                 out.append(QStringLiteral("<script") + attrs + QStringLiteral(">")
                           + t + QStringLiteral("</script>"));
             } else {
@@ -1264,8 +1248,9 @@ void PageLoader::rewriteAndSave()
     }
     allKeyframes += QStringLiteral("}");
     // Only inject when there is actual keyframe data AND it is small enough
-    // for KJS. Empty "{}" means no animations were found — skip injection
-    // entirely so the polyfill does not scan getComputedStyle on every element.
+    // for the engine. Empty "{}" means no animations were found — skip
+    // injection entirely so the polyfill does not scan getComputedStyle
+    // on every element.
     if (allKeyframes.size() > 3 && allKeyframes.size() < 65536) {
         const QString kfScript = QStringLiteral("<script>window.__cssKeyframes=") + allKeyframes +
             QStringLiteral(";</script>\n<script>") + QString::fromLatin1(kCssAnimPolyfill) + QStringLiteral("</script>");

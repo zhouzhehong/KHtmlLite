@@ -41,7 +41,7 @@
 #include <css/css_stylesheetimpl.h>
 #include <misc/seed.h>
 #include <misc/loader.h>
-#include <ecma/kjs_proxy.h>
+#include <ecma/js_proxy.h>
 
 #include <QStack>
 #include <QApplication>

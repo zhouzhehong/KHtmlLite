@@ -91,7 +91,7 @@ tests/renderer_solo.py（无浏览器直驱渲染进程+帧颜色断言）。
   early-out，弱机应"丢帧不降预算"（Safari 同款原则），保持固定 16ms，
   KHTML_FPS_MS 仅用于诊断。
 
-## 0b. 修复批注（2026-10-16，墓碑系统负载驱动 + UI 三连环 + KJS 移除落地）
+## 0d. 修复批注（2026-10-16，墓碑系统负载驱动 + UI 三连环 + KJS 移除落地）
 
 1. **3.4/4.5 内存压力模型已升级为系统事件驱动**（HANDOVER 5e）：本机常态
    物理内存 83-94% 实测 → 机械 400MB 阈值永远无法代表"系统紧张"。现为
@@ -118,6 +118,52 @@ tests/renderer_solo.py（无浏览器直驱渲染进程+帧颜色断言）。
 
 ---
 
+## 0e. 修复批注（2026-10-17，系统监测与沙盒轮，全实测，本机 150% DPI 屏）
+
+1. **1.4 渲染进程沙箱：Job Object 落地**（`RenderTab::assignJob`）——每渲染进程
+   自有 Job Object：ProcessMemoryLimit=软预算×2（commit 硬顶，每 2s tick 动态
+   调价）+ JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE（浏览器异常退出 → 内核即时回收
+   全部渲染进程，10min 看门狗降为兜底）。软预算超限 → suspendTab 转墓碑
+   （**不崩浏览器**），stderr `[tomb] renderer budget exceeded`。预算
+   perRendererBudgetKB = 整机 RAM 档（≥16G→1G / ≥8G→768M / 否则 512M），
+   系统压力 ≥85% 再减半。**1.4 从"重大差距"降级为"部分对齐"**：OS 级内存
+   强制已闭环，restricted token / 完整性级别 / 文件系统白名单仍缺。
+2. **③ GPU/CPU/内存实时监测**：PDH `\GPU Engine(*)\Utilization Percentage`
+   （任务管理器同源）按引擎求和；无 GPU 计数器机器诚实降级为 0。状态栏
+   "内存% MB | 内存x% CPUy% GPUz% (等级) · 后台‰"。调度决策位维持 CPU 自适应
+   （GPU 未接规则——无实测收益不立规则，章程铁律）。
+3. **3.2 墓碑缩略图闭环**：TombstoneWidget（快照缩放绘制 + 标题徽章 +
+   "已挂起·点击标签恢复"）+ resumeTab seedFrame 预填首帧；tombstone_probe
+   生命周期全绿（t+16s 驱逐、无自动复活、点击恢复、渲染进程存活）。
+   3.5 持久化（冷重启回）仍缺。
+4. **2.6 修正（checkerboard 已废除）**：Safari resize 呈现现为 WebKit2 连续性
+   拉伸——失配期旧帧铺满 + framesize 提交"先整体拉伸旧画布再叠 1:1 搬运"
+   （本轮修复的 maximize 半屏白闪真根因：渲染端 resize 后首帧部分瓦片把
+   半白画布顶上屏，绕过 paintEvent 拉伸保护）。tile_protocol 静态断言禁止
+   checkerBoard 回归。resize_probe 实测：maximize/restore 白闪 **0.00%**、
+   内容 >90% @0.197s、settle 0.23s。
+5. **桥定时器落地（0b 批注欠账清）**：setTimeout/setInterval/clearTimeout/
+   clearInterval/requestAnimationFrame/cancelAnimationFrame 全家（global+window
+   双挂，World 重置先杀定时器注册表）。连锁修复：CSS 动画 polyfill 硬依赖
+   rAF（原先静默空转）、Promise shim 依赖 setTimeout（原先挂起态永不 resolve）。
+   4.3 后台 JS 节流仍缺。
+6. **DPI 清晰度（150% 屏）**：AA_EnableHighDpiScaling + 全物理像素管线
+   （视口发 size×dpr、输入÷dpr、paintEvent `p.scale(1.0/dpr)` 设备像素 1:1
+   直投）。像素级验证：色带 73-74 设备px（49 逻辑×1.5）、带内精确 hex 逐字
+   面值、带界 1-2 行过渡。**真 deviceScaleFactor CSS-px 视口未做**（当前
+   CSS px=物理 px，150% 屏元素小 1/3 但全清晰）——设计已定：渲染端逻辑尺寸
+   KHTMLView + 物理画布 + QPainter scale(dpr)，KHTML setZoomFactor 是放大镜
+   不可直接用（render_canvas.cpp layout 宽不随 zoom 收窄），需独立成轮。
+7. **F11 全屏**（QAction 窗级注册）；**KJS 残留清零**：KJSProxy→ScriptProxy
+   全仓改名（含 libkhtml.map）、js_transpile（Bublé ES3 降级机器）整体删除。
+8. **探针工具链 DPI 化（方法论沉淀）**：DPI 无感知 harness 在 150% 屏抓到
+   的是 DWM 降采样虚像（每像素 1.5×1.5 混合），精确调色板分类全废——高 DPI
+   渲染曾因此被误判为回归。resize_probe 现为 PER_MONITOR_AWARE + 饱和像素
+   包围盒自校准 + 纯白白闪指标 + 还原几何前置（先缩小再最大化）。新增
+   tests/shot_tool.py。启动基线：bing 冷启 TTFF **1545ms**（同水位 1514-1694）。
+
+---
+
 ## 1. 进程与沙箱模型
 
 | # | 机制 | 我们的实现（落点） | WebKit 对应 | 差距 | 量化影响 | 优先级 | 对齐成本 |
@@ -125,7 +171,7 @@ tests/renderer_solo.py（无浏览器直驱渲染进程+帧颜色断言）。
 | 1.1 | UI/渲染进程分离 | 已实现：`khtml_browser.exe` 不碰渲染，`khtml_renderer.exe` 每标签一个（`RenderTab::start` L376，browser.cpp） | UIProcess / WebContent 进程 | **已对齐**。逐标签进程模型 = 早期 Chromium/现代 WebKit per-tab 粒度 | 崩溃只崩一格（章程北星指标已达成） | — | — |
 | 1.2 | IPC 命令通道 | QLocalSocket JSON 行协议（`RenderTab::navigate/sendInput`；renderer `RendererHost::onMessage` L1076） | WebKit IPC（Mach/Unix 域套接字 + 二进制编码） | **部分对齐**。功能等价，但 JSON 文本序列化成本高、无消息优先级、无类型安全 schema | 每条消息一次 `QJsonDocument::toJson`+socket flush；帧外消息量级 10/s 内，**非瓶颈**；轮未实测吞吐，需测量 | 低 | 中 |
 | 1.3 | 像素零拷贝通道 | QSharedMemory 256×256 tile 网格 + 脏 tile 索引表（renderer `grabFrame` L472，browser `readTiles` L766） | 共享内存 backing store / IOSurface（macOS） | **已对齐**（机制层）。单段、grow-only 复用、header 最后写保证读者不读半截帧 | tile 协议有 Python 模型测试（tests/tile_protocol_test.py） | — | — |
-| 1.4 | 渲染进程沙箱（权限收紧） | **没有**。渲染进程是完整权限子进程，仅在其内部间接做了降权（Java/plugins 关、http(s) 经 PageLoader，`RendererView::openUrl` L314） | macOS sandbox profile / Windows GPU-less restricted token、低完整性级别 | **重大差距**。渲染进程可任意读写文件系统、开网络；KHTML 5.116 + QuickJS 的攻击面裸奔 | 需测量攻击面（进程权限枚举）；一次 0day = 全机沦陷 | **高** | 大 |
+| 1.4 | 渲染进程沙箱（权限收紧） | **部分落地（0e）**：每渲染进程 Job Object（commit 硬顶=2×动态软预算 + KILL_ON_JOB_CLOSE 崩溃即回收）+ 超软预算转墓碑；内部降权照旧（Java/plugins 关、http(s) 经 PageLoader，`RendererView::openUrl` L314） | macOS sandbox profile / Windows GPU-less restricted token、低完整性级别 | **部分对齐**。OS 级内存强制已闭环；restricted token / 完整性级别 / 文件系统白名单仍缺 | 内存爆炸面已封（超限=墓碑不崩溃）；任意文件读写攻击面仍在 | **高** | 大→中 |
 | 1.5 | 崩溃检测与诊断 | VEH + MiniDump + 模块解析 + QuickJS 诊断，全在无 Qt/无堆的处理器里（renderer `ccVehHandler` L95）；UI 侧 `onFinished` 判崩（browser.cpp L590） | WebKit 进程崩溃信号 + CrashReporter | **已对齐**且超额（minidump 自带 RVA 反解） | 崩溃日志落在 EXE 旁 khtml_renderer_crash.log | — | — |
 | 1.6 | 渲染进程预热（process pre-warm） | **没有**。每开新标签从零起 QProcess + Qt 初始化 + socket 握手 | WebKit `prewarm` 的 WebContent：预先 fork、暂停在 main 之前，用时即接管 | **缺失**。这是当前冷路径明确的大头 | 实测：渲染进程起 + socket 连接 **~500ms**（HANDOVER 188→684），每次新标签都付 | **高** | 中 |
 | 1.7 | 独立网络进程 | **没有**网络进程；PageLoader 在渲染进程内跑 | NetworkProcess（Cookie/缓存/DNS/TLS 全部独立） | **缺失**。网络层漏洞直接落在渲染进程；且各标签重复持连接/缓存，无法共享 | 需测量：每标签独立 socket/DNS 的内存与握手开销 | 中 | 大 |
@@ -140,7 +186,7 @@ tests/renderer_solo.py（无浏览器直驱渲染进程+帧颜色断言）。
 | 2.3 | 一次渲染、tile 裁剪 | 全帧只 `w->render()` 一次，tile 是裁剪（renderer L614–631） | display list 重放式 tile 绘制 | **已对齐**（修掉了逐 tile 重渲的大坑） | 该项完成于 commit 037c022，是主帧成本的第一大降 | — | — |
 | 2.4 | 重复上传抑制 | FNV-1a per-tile 哈希（renderer L641–692；0 保留值防误抑制） | WebKit 靠 display list 而不是像素哈希；Chromium 有 damage tracker | **机制替代性对齐**。我们用像素哈希换"不知道哪里脏"的缺陷；WebKit 从源头知道 | 哈希本身有成本（见 2.2）；抑制命中率需测量 | 中 | 中 |
 | 2.5 | 预测滚动 + 权威收敛 | 浏览器先挪画布（PageSurface `bumpScrollPreview` L133），渲染进程回绝对偏移收敛 + 250ms 防抖全收敛帧（`applyScrollAuthority` L731；renderer L566–581） | Async scrolling：Compositor 线程即时滚动 + 主线程稍后提交 | **已对齐**（双层职责分离是教科书式对应）。剩余 Gap：strip 外 fixed 元素靠 250ms 延迟收敛，WebKit 是逐帧命中 compositing 层 | 剩余"resize/缩小毛刺"已入章程候选池 C | 中 | 中 |
-| 2.6 | Live-resize 不放大内容 | WM_ENTERSIZEMOVE/EXITSIZEMOVE 期间冻结渲染进程视口，结束才提交一次真实 resize（browser.cpp L1205–1224）＋未画区 checkerboard（PageSurface L108） | Safari resize：内容 1:1 锚定 + checkerboard | **已对齐**。这是 Safari 签名行为，细节（灰格 16px 单元）都照着语义做了 | 修掉了"照片拉伸"观感 | — | — |
+| 2.6 | Live-resize 不放大内容 | WM_ENTERSIZEMOVE/EXITSIZEMOVE 期间冻结渲染进程视口，结束才提交一次真实 resize（browser.cpp L1205–1224）；未画区呈现 = WebKit2 连续性拉伸（旧帧铺满，PageSurface），**checkerboard 已废除**（0e：framesize 提交"先整体拉伸旧画布再叠 1:1 搬运"，resize_probe 白闪 0.00%×2 相位） | Safari resize：内容 1:1 锚定 + 未画区呈现 | **已对齐且升级**。现代 Safari 同为连续性呈现而非棋盘格；tile_protocol 静态断言禁止 checkerBoard 回归 | 修掉了"照片拉伸"观感和 maximize 半屏白闪 | — | — |
 | 2.7 | 合成层/硬件加速 | **没有**。软件 QImage 合成 + PageSurface::paintEvent 单次 drawImage（L195） | CALayer/硬加速合成树，滚动/视频/CSS transform 不进主渲染 | **缺失（机制层定论：现阶段不追）**。我们的页面复杂度（KHTML 引擎上限）决定了软件合成不是当前瓶颈；但纯滚动场景完全可以只靠 SHM blit + GPU 上传 | 需测量：全帧 drawImage 到屏幕的 paint 耗时；若 >4ms 那只有硬合成能救 | 低（章程第 6 节列明不追引擎现代化） | 大 |
 
 ## 3. 墓碑机制
@@ -148,7 +194,7 @@ tests/renderer_solo.py（无浏览器直驱渲染进程+帧颜色断言）。
 | # | 机制 | 我们的实现（落点） | WebKit 对应 | 差距 | 量化影响 | 优先级 | 对齐成本 |
 |---|------|------------------|-------------|------|----------|--------|----------|
 | 3.1 | 挂起释放全部引擎内存 | 杀进程（`suspendTab` L1299：terminate + render=nullptr），内存 100% 归还 OS | iOS Safari 标签冷冻（先挂起，严重时 kill） | **部分对齐**。我们是"直接处决"——没有中间态（先冻结 CPU、内存还在）；iOS 是先 suspsend 再按压力 kill | 内存回收是彻底的；缺 CPU=0 但页面秒回的中间档 | 中 | 中 |
-| 3.2 | 墓碑视觉状态保留 | 只存 scrollX/Y + zoom + URL + 标题（TabPage L916–919；`restore` 命令 L1106），**没有缩略图**，恢复位置是灰字 "[标签已挂起]" 占位 | 完整快照缩略图 + 所见即所得恢复 | **重大差距**。章程明写"保留最后一张缩略图"——目前没做；恢复时用户盯着占位标签重新加载 1s+ | 恢复延迟 = 冷启 ~1.1s 全程（首帧 ~1.1s 实测）+ 无视觉锚点 | **高** | 中 |
+| 3.2 | 墓碑视觉状态保留 | **已落地（0e）**：TombstoneWidget 快照缩放绘制 + 标题徽章 + resumeTab seedFrame 预填首帧；scrollX/Y + zoom + URL + 标题照旧（TabPage；`restore` 命令） | 完整快照缩略图 + 所见即所得恢复 | **已对齐**（内存内路径）。tombstone_probe 生命周期验证（挂起/无自动复活/点击恢复） | 恢复即时有视觉锚点，不再是占位标签 | — | — |
 | 3.3 | 恢复不丢未提交输入 | **没有**。墓碑不序列化 DOM 表单状态 | iOS Safari 恢复时表单数据经 NSUserActivity/会话状态保留 | **缺失**。长篇草稿在墓碑后全丢；这是最伤用户的 gap | 章程验收判据 #3 直接点名，无法豁免 | **高** | 大（要序列化 focus/表单/部分 DOM） |
 | 3.4 | 处决策略 = LRU + 内存预算 | 10s 巡视线程（`checkMemoryBudget` L1376）：>400MB 超预算先墓碑一个非当前页 + purge 缓存；5 分钟 idle 也挂起（L1398–1404） | iOS: jetsam 事件 + foreground/background 分级；macOS: TabSuspender + memorypressure | **部分对齐**。LRU 用了但排序粗糙——只是"第一个满足条件的"（L1393/1400 循环 break），不是真 LRU 排序 | 400MB 阈值是否匹配现代 KHTML 站点分布，需测量挂起频次 | 中 | 小 |
 | 3.5 | 墓碑持久化（冷重启可回） | **没有**。进程退了墓碑即蒸发 | Safari 会话恢复（Session Restore 跨重启） | **缺失**。HANDOVER 候选池 B 已列 | AppData 写盘在开发机被 ACL 拒（已知坑），落盘走 applicationDirPath | 中 | 中 |
@@ -197,18 +243,18 @@ tests/renderer_solo.py（无浏览器直驱渲染进程+帧颜色断言）。
 | 脏矩形传播 | 部分 | 输入路径全帧 invalidate + 像素哈希补丁，WebKit 从源头知道 | **高** |
 | 单次渲染 tile 裁剪 | 已对齐 | — | — |
 | 预测滚动/权威收敛 | 已对齐 | 剩余 resize/缩小毛刺（章程候选池 C） | 中 |
-| Live-resize 1:1 + checkerboard | 已对齐 | — | — |
+| Live-resize 1:1 + 连续性呈现（拉伸，checkerboard 已废） | 已对齐且升级 | resize_probe 白闪 0.00%×2 相位（0e） | — |
 | 合成层/硬加速 | 缺失 | 软件合成是当前架构上限，章程第 6 节已豁免 | 低 |
-| **渲染进程 OS 层沙箱** | **缺失** | 协议降权 ≠ 权限降权，攻击面裸奔 | **高** |
+| **渲染进程 OS 层沙箱** | **部分落地（0e）** | Job Object 内存硬顶+崩溃回收闭环；restricted token/文件白名单仍缺 | **高** |
 | 崩溃检测/诊断 | 已对齐 | 甚至超出 WebKit 基线 | — |
 | **渲染进程预热** | **缺失** | 每新标签白付 ~500ms 进程启动 | **高** |
 | 网络进程独立 | 缺失 | 网络漏洞落渲染进程；同源无共享 | 中 |
-| **墓碑缩略图** | **缺失** | 章程明写要有，恢复还在看灰字占位 1s+ | **高** |
+| **墓碑缩略图** | **已落地（0e）** | TombstoneWidget 快照+seedFrame，probe 验证 | — |
 | **墓碑表单不丢** | **缺失** | 长篇草稿挂起即丢，违反章程验收 #3 | **高** |
 | **后台活页 JS/帧钟节流** | **缺失** | 后台标签 60Hz 空转，违反"空闲 CPU ≈ 0" | **高** |
-| 墓碑 LRU 排序 | 部分 | 目前只"第一个满足条件"，非排序 | 低 |
+| 墓碑 LRU 排序 | 已对齐 | lastActive 真 LRU（0d 批注落地） | — |
 | 墓碑持久化跨重启 | 缺失 | 冷启动墓碑蒸发 | 中 |
-| 内存压力模型 | 部分 | 只看自己 WorkingSet 总和，不响应 OS 压力事件 | 中 |
+| 内存压力模型 | 已对齐 | 内核 LowMemory 事件 + 四级 + 动态 per-renderer 预算（0d/0e） | — |
 | IPC 消息优先级 | 缺失 | 所有命令单通道 FIFO | 中 |
 | 网络输入 schema 校验 | 部分 | IPC 有最低线，HTML 本体裸奔老引擎 | **高** |
 | 崩溃自愈排序 | 已对齐 | 禁 JS 重载 → 崩溃页 → 用户触发 | — |

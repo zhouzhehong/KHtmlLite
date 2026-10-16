@@ -41,7 +41,7 @@
 
 class KHTMLPartPrivate;
 class KHTMLPartBrowserExtension;
-class KJSProxy;
+class ScriptProxy;
 class KHTMLView;
 class KHTMLViewBar;
 class KHTMLFindBar;
@@ -198,7 +198,7 @@ class KHTML_EXPORT KHTMLPart : public KParts::ReadOnlyPart
     friend class DOM::ElementImpl;
     friend class KHTMLRun;
     friend class DOM::HTMLFormElementImpl;
-    friend class KJSProxy;
+    friend class ScriptProxy;
     friend class KHTMLPartBrowserExtension;
     friend class DOM::DocumentImpl;
     friend class DOM::HTMLDocumentImpl;
@@ -972,7 +972,7 @@ public:
     /**
      * Returns child frame framePart its script interpreter
      */
-    KJSProxy *framejScript(KParts::ReadOnlyPart *framePart);
+    ScriptProxy *framejScript(KParts::ReadOnlyPart *framePart);
 
     /**
      * Finds a frame by name. Returns 0L if frame can't be found.
@@ -1755,7 +1755,7 @@ private:
     bool checkLinkSecurity(const QUrl &linkURL, const KLocalizedString &message = KLocalizedString(), const QString &button = QString());
     QVariant executeScript(const QString &filename, int baseLine, const DOM::Node &n, const QString &script);
 
-    KJSProxy *jScript();
+    ScriptProxy *jScript();
 
     KHTMLPart *opener();
     long cacheId() const;

@@ -96,17 +96,28 @@ def test_static_consistency():
     #   size mismatch     — the LAST committed frame is scaled to fill the
     #                        surface until the first true-size frame lands
     #                        (no white flash, no checkerboard).
-    # Guarded statically: the 1:1 draw must exist, scaling must be gated on a
-    # sameSize check, and unconditional full-surface scaling stays forbidden.
+    #   dpr != 1          — the frame is PHYSICAL pixels by design, so the
+    #                        steady-state draw undoes the logical->device
+    #                        scale and blits source->backing pixel 1:1
+    #                        (Safari deviceScaleFactor, exact colours).
+    # Guarded statically: both 1:1 paths must exist, the device-pixel blit
+    # must be gated on the physical size match, and unconditional
+    # full-surface scaling stays forbidden.
     assert "p.drawImage(QPoint(-m_previewDX, -m_previewDY), m_frame)" in brow, \
         "1:1 anchored draw path missing from PageSurface"
-    assert "const bool sameSize = !m_frame.isNull() && m_frame.size() == size();" in brow, \
-        "sameSize gate missing: scaling must only apply during size mismatch"
+    assert "p.scale(1.0 / dpr, 1.0 / dpr)" in brow, \
+        "device-pixel 1:1 blit missing (frame would be resampled twice at dpr != 1)"
+    assert re.search(r"qAbs\(m_frame\.width\(\) - physW\) <= 1[^}]*"
+                     r"p\.scale\(1\.0 / dpr, 1\.0 / dpr\)", brow, re.S), \
+        "device-pixel blit must be gated on the physical frame==surface match"
+    assert "p.drawImage(QRect(QPoint(-m_previewDX, -m_previewDY), size()), m_frame)" in brow, \
+        "mismatch stretch fallback missing"
     assert "p.drawImage(rect(), m_frame)" not in brow, \
         "PageSurface scales the frame unconditionally"
     assert "checkerBoard" not in brow, \
         "stale checkerboard presentation: mismatch now shows the scaled last frame"
-    print("  PageSurface: 1:1 steady state, scaled only during size mismatch")
+    print("  PageSurface: 1:1 steady state (device px at dpr != 1), "
+          "stretch only on size mismatch")
 
     # Background tabs must not relayout on window resize: applyPendingResize
     # may only touch the CURRENT tab (hidden pages get no layout work; N-tab
