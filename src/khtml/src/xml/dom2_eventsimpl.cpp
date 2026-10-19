@@ -330,7 +330,7 @@ void EventImpl::setTarget(EventTargetImpl *_target)
 DOMTimeStamp EventImpl::timeStamp()
 {
     QDateTime epoch(QDate(1970, 1, 1), QTime(0, 0));
-    // ### kjs does not yet support long long (?) so the value wraps around
+    // ### the script engine does not expose long long, so the value wraps around
     return epoch.secsTo(m_createTime) * 1000 + m_createTime.time().msec();
 }
 

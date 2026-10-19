@@ -119,6 +119,26 @@ def test_static_consistency():
     print("  PageSurface: 1:1 steady state (device px at dpr != 1), "
           "stretch only on size mismatch")
 
+    # True deviceScaleFactor contract: the renderer receives a LOGICAL
+    # (CSS px) viewport plus the ratio, lays KHTML out at that logical size
+    # and rasterizes the frame at logical*dpr by scaling the painter.  The
+    # frame stays physical (tiles/canvas unchanged) and engine damage stays
+    # logical until the single map to the tile grid.
+    assert 'obj[QStringLiteral("dpr")] = dpr' in brow, \
+        "resize message must carry the device pixel ratio"
+    assert "m_resizeCb(int(width()), int(height()))" in brow, \
+        "PageSurface must report the LOGICAL viewport (CSS px), not physical"
+    assert "fp.scale(m_dpr, m_dpr)" in rend, \
+        "renderer must scale the painter onto the device grid (CSS-px layout)"
+    assert "const QRegion dirtyPhys = QTransform::fromScale(m_dpr, m_dpr).map(dirty)" in rend, \
+        "engine damage (CSS px) must be mapped to the physical tile grid once"
+    assert "const int fw = qMax(1, qRound(lw * m_dpr))" in rend, \
+        "frame canvas must be logical size times dpr"
+    assert "int(s.width() * dpr), int(s.height() * dpr)" not in brow, \
+        "browser still ships a physical viewport to the renderer"
+    print("  CSS-px viewport: logical resize + dpr, painter-scaled raster, "
+          "damage mapped once")
+
     # Background tabs must not relayout on window resize: applyPendingResize
     # may only touch the CURRENT tab (hidden pages get no layout work; N-tab
     # relayout storms were the multi-tab resize lag).

@@ -44,11 +44,11 @@ class QJsDomBridge;
 /**
  * @internal
  *
- * @short Proxy class serving as interface when being dlopen'ed.
+ * @short Proxy class routing script evaluation and inline event dispatch.
  *
- * NOTE: Despite the historic name, the KF5JS (KJS) interpreter has been fully
- * removed. This class now only routes script evaluation and inline event
- * dispatch to the embedded QuickJS engine; it holds no KJS state.
+ * QuickJS is the only script engine in this tree; this class owns the
+ * per-frame QJsDomBridge and the handler-line bookkeeping — it holds no
+ * interpreter state of its own.
  */
 class ScriptProxy
 {
@@ -63,13 +63,6 @@ public:
     void finishedWithEvent(const DOM::Event &event);
 
     bool isRunningScript();
-
-    // KJS debugger removed: these are retained as no-ops for source compatibility.
-    void setDebugEnabled(bool);
-    bool debugEnabled() const;
-    void showDebugWindow(bool show = true);
-
-    bool paused() const;
 
     void setEventHandlerLineno(int lineno)
     {
@@ -90,7 +83,6 @@ private:
     int m_handlerLineno;
 
     khtml::QJsDomBridge *m_qjs;
-    bool m_debugEnabled;
     int m_running;
 #ifndef NDEBUG
     static int s_count;

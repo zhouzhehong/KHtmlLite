@@ -43,17 +43,17 @@ public:
     void setDocument(const DOM::Document &doc);
 
     // True when the last evaluate() hit a script that referenced an API
-    // we do not support (caller should fall back to KJS).
+    // we do not support (caller should hand the event to legacy dispatch).
     bool needsFallback() const { return m_fallback; }
 
     // Dispatch a DOM event to a QuickJS handler. Returns true if QuickJS
-    // handled the event (KJS must NOT re-run it). False means caller should
-    // fall back to KJS event execution.
+    // handled the event (legacy dispatch must NOT re-run it). False means the
+    // caller should fall back to its own event execution.
     bool dispatchEvent(DOM::EventImpl *event, DOM::NodeImpl *target,
                        const QString &handlerSource);
 
     // Register a QuickJS-side event listener for a node. Used by the
-    // addEventListener bridge so JS callbacks live in QuickJS, not KJS.
+    // addEventListener bridge so JS callbacks live in QuickJS, not the host.
     void addEventListener(DOM::NodeImpl *node, const QString &type,
                           const QString &handlerSource);
 

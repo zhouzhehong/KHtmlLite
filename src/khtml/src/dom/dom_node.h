@@ -34,11 +34,6 @@
 
 class QRect;
 
-namespace KJS
-{
-class HTMLDocument;
-class Window;
-}
 namespace DOM
 {
 

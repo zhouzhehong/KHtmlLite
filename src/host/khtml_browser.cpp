@@ -179,12 +179,11 @@ protected:
             update();
             return;
         }
-        // Push the new page viewport size to the renderer in PHYSICAL
-        // pixels (size * dpr) so text and layout rasterize on the device
-        // grid — the browser scales the frame down on paint.
+        // CSS-px viewport (deviceScaleFactor): send the LOGICAL size.  The
+        // renderer lays KHTML out at CSS pixels and rasters at dpr onto the
+        // physical frame canvas (RenderTab::resize attaches the ratio).
         if (m_resizeCb) {
-            const qreal dpr = devicePixelRatioF();
-            m_resizeCb(int(width() * dpr), int(height() * dpr));
+            m_resizeCb(int(width()), int(height()));
         }
     }
 
@@ -493,19 +492,23 @@ public:
 
     void resize(int w, int h)
     {
+        // w/h are the LOGICAL (CSS px) viewport; the ratio to physical pixels
+        // rides along so the renderer can lay out at CSS px and raster at dpr.
+        const qreal dpr = m_container ? m_container->devicePixelRatioF() : 1.0;
         // Redundancy guard: a same-size resize would trigger a synchronous
         // KHTML relayout in the renderer for nothing (tab switches re-fire
         // surface resizes, and drags that end on the start size).  Only a
         // genuinely new viewport is shipped.  A fresh renderer (resume,
         // crash-restart) starts at m_lastSentW=0, so its first size always
         // goes out.
-        if (w == m_lastSentW && h == m_lastSentH)
+        if (w == m_lastSentW && h == m_lastSentH && dpr == m_lastSentDpr)
             return;
         if (m_socket && m_socket->isOpen()) {
             QJsonObject obj;
             obj[QStringLiteral("cmd")] = QStringLiteral("resize");
             obj[QStringLiteral("w")] = w;
             obj[QStringLiteral("h")] = h;
+            obj[QStringLiteral("dpr")] = dpr;
             // Growing resize: proactively release our SHM attachment BEFORE
             // sending the message.  On Windows the renderer cannot
             // QSharedMemory::create() a larger segment while we still hold
@@ -514,8 +517,9 @@ public:
             // a whole extra frame tick before it can render at the new size.
             // Detaching here (before the renderer processes the resize) lets
             // its first ensureShm() succeed immediately.
-            if (m_shm && m_shm->isAttached() &&
-                m_shm->size() < (qint64)w * (qint64)h * 4) {
+            const qsizetype physBytes = qsizetype(qRound(w * dpr))
+                                      * qsizetype(qRound(h * dpr)) * 4;
+            if (m_shm && m_shm->isAttached() && m_shm->size() < physBytes) {
                 m_shm->detach();
                 m_attachedShmW = 0;
                 m_attachedShmH = 0;
@@ -525,6 +529,7 @@ public:
             m_resizePending = false;
             m_lastSentW = w;
             m_lastSentH = h;
+            m_lastSentDpr = dpr;
         } else {
             // The renderer process and its IPC socket start asynchronously, so
             // a resize that happens in the meantime cannot be delivered yet.
@@ -882,10 +887,17 @@ private:
     void applyScrollAuthority(int cx, int cy)
     {
         if (!m_container) return;
-        const int dx = cx - m_baseCX;
-        const int dy = cy - m_baseCY;
-        m_baseCX = cx;
-        m_baseCY = cy;
+        // cx/cy arrive in CSS pixels (KHTML's scroll offset now that the
+        // renderer lays out at CSS px); the canvas is physical.  Convert the
+        // ABSOLUTE offsets, never the delta, so per-step rounding cannot
+        // accumulate over a long scroll.
+        const qreal dpr = m_container->devicePixelRatioF();
+        const int pcx = qRound(cx * dpr);
+        const int pcy = qRound(cy * dpr);
+        const int dx = pcx - m_baseCX;
+        const int dy = pcy - m_baseCY;
+        m_baseCX = pcx;
+        m_baseCY = pcy;
         m_container->resetScrollPreview();
         if (dx == 0 && dy == 0)
             return;
@@ -1046,7 +1058,8 @@ public:
     bool m_resizePending = false;
     // Last viewport size actually shipped to the renderer (see resize()):
     // same-size requests are dropped instead of re-triggering a relayout.
-    int m_lastSentW = 0, m_lastSentH = 0;
+    int m_lastSentW = 0, m_lastSentH = 0;   // logical (CSS px) viewport
+    qreal m_lastSentDpr = 0.0;
     int m_connectRetries = 0;
     int m_restoreX = 0, m_restoreY = 0, m_restoreZoom = 100;
     bool m_hasRestore = false;
@@ -1295,9 +1308,8 @@ public:
             if (!container)
                 return;
             const QSize s = container->size();
-            // Physical pixels: the renderer rasters on the device grid.
-            const qreal dpr = container->devicePixelRatioF();
-            pg->render->resize(int(s.width() * dpr), int(s.height() * dpr));
+            // Logical (CSS px) viewport: RenderTab::resize attaches the dpr.
+            pg->render->resize(s.width(), s.height());
         });
     }
 
@@ -1389,9 +1401,8 @@ public:
         const QSize s = container->size();
         if (s.width() <= 0 || s.height() <= 0)
             return;
-        // Physical pixels: the renderer rasters on the device grid.
-        const qreal dpr = container->devicePixelRatioF();
-        pg->render->resize(int(s.width() * dpr), int(s.height() * dpr));
+        // Logical (CSS px) viewport: RenderTab::resize attaches the dpr.
+        pg->render->resize(s.width(), s.height());
     }
 
 protected:

@@ -26,11 +26,7 @@
 
 //#include "StaticConstructors.h"
 #include "StringHash.h"
-//#include <kjs/identifier.h>
 #include <wtf/HashSet.h>
-
-//using KJS::Identifier;
-//using KJS::UString;
 
 namespace khtml
 {
@@ -227,61 +223,6 @@ void AtomicString::remove(DOMStringImpl *r)
     stringTable->remove(r);
 }
 
-/*DOMStringImpl* AtomicString::add(const KJS::Identifier& identifier)
-{
-    if (identifier.isNull())
-        return 0;
-
-    UString::Rep* string = identifier.ustring().rep();
-    unsigned length = string->size();
-    if (!length)
-        return StringImpl::empty();
-
-    HashAndCharacters buffer = { string->computedHash(), string->data(), length };
-    pair<HashSet<StringImpl*>::iterator, bool> addResult = stringTable->add<HashAndCharacters, HashAndCharactersTranslator>(buffer);
-    if (!addResult.second)
-        return *addResult.first;
-    return adoptRef(*addResult.first);
-}
-
-PassRefPtr<StringImpl> AtomicString::add(const KJS::UString& ustring)
-{
-    if (ustring.isNull())
-        return 0;
-
-    UString::Rep* string = ustring.rep();
-    unsigned length = string->size();
-    if (!length)
-        return StringImpl::empty();
-
-    HashAndCharacters buffer = { string->hash(), string->data(), length };
-    pair<HashSet<StringImpl*>::iterator, bool> addResult = stringTable->add<HashAndCharacters, HashAndCharactersTranslator>(buffer);
-    if (!addResult.second)
-        return *addResult.first;
-    return adoptRef(*addResult.first);
-}
-
-AtomicStringImpl* AtomicString::find(const KJS::Identifier& identifier)
-{
-    if (identifier.isNull())
-        return 0;
-
-    UString::Rep* string = identifier.ustring().rep();
-    unsigned length = string->size();
-    if (!length)
-        return static_cast<AtomicStringImpl*>(StringImpl::empty());
-
-    HashAndCharacters buffer = { string->computedHash(), string->data(), length };
-    HashSet<StringImpl*>::iterator iterator = stringTable->find<HashAndCharacters, HashAndCharactersTranslator>(buffer);
-    if (iterator == stringTable->end())
-        return 0;
-    return static_cast<AtomicStringImpl*>(*iterator);
-}
-
-AtomicString::operator UString() const
-{
-    return m_string;
-}*/
 
 #define DEFINE_GLOBAL(type, name, ...) \
     const type name;

@@ -57,11 +57,6 @@ struct KPerDomainSettings {
     bool m_bEnableJavaScript : 1;
     bool m_bEnablePlugins : 1;
     // don't forget to maintain the bitfields as the enums grow
-    KHTMLSettings::KJSWindowOpenPolicy m_windowOpenPolicy : 2;
-    KHTMLSettings::KJSWindowStatusPolicy m_windowStatusPolicy : 1;
-    KHTMLSettings::KJSWindowFocusPolicy m_windowFocusPolicy : 1;
-    KHTMLSettings::KJSWindowMovePolicy m_windowMovePolicy : 1;
-    KHTMLSettings::KJSWindowResizePolicy m_windowResizePolicy : 1;
 
 #ifdef DEBUG_SETTINGS
     void dump(const QString &infix = QString()) const
@@ -70,11 +65,6 @@ struct KPerDomainSettings {
         // qCDebug(KHTML_LOG) << "  m_bEnableJava: " << m_bEnableJava;
         // qCDebug(KHTML_LOG) << "  m_bEnableJavaScript: " << m_bEnableJavaScript;
         // qCDebug(KHTML_LOG) << "  m_bEnablePlugins: " << m_bEnablePlugins;
-        // qCDebug(KHTML_LOG) << "  m_windowOpenPolicy: " << m_windowOpenPolicy;
-        // qCDebug(KHTML_LOG) << "  m_windowStatusPolicy: " << m_windowStatusPolicy;
-        // qCDebug(KHTML_LOG) << "  m_windowFocusPolicy: " << m_windowFocusPolicy;
-        // qCDebug(KHTML_LOG) << "  m_windowMovePolicy: " << m_windowMovePolicy;
-        // qCDebug(KHTML_LOG) << "  m_windowResizePolicy: " << m_windowResizePolicy;
     }
 #endif
 };
@@ -275,47 +265,6 @@ void KHTMLSettings::readDomainSettings(const KConfigGroup &config, bool reset,
         pd_settings.m_bEnableJavaScript = config.readEntry(key, true);
     } else if (!global) {
         pd_settings.m_bEnableJavaScript = d->global.m_bEnableJavaScript;
-    }
-
-    // window property policies
-    key = jsPrefix + QLatin1String("WindowOpenPolicy");
-    if ((global && reset) || config.hasKey(key))
-        pd_settings.m_windowOpenPolicy = (KJSWindowOpenPolicy)
-                                         config.readEntry(key, uint(KJSWindowOpenSmart));
-    else if (!global) {
-        pd_settings.m_windowOpenPolicy = d->global.m_windowOpenPolicy;
-    }
-
-    key = jsPrefix + QLatin1String("WindowMovePolicy");
-    if ((global && reset) || config.hasKey(key))
-        pd_settings.m_windowMovePolicy = (KJSWindowMovePolicy)
-                                         config.readEntry(key, uint(KJSWindowMoveAllow));
-    else if (!global) {
-        pd_settings.m_windowMovePolicy = d->global.m_windowMovePolicy;
-    }
-
-    key = jsPrefix + QLatin1String("WindowResizePolicy");
-    if ((global && reset) || config.hasKey(key))
-        pd_settings.m_windowResizePolicy = (KJSWindowResizePolicy)
-                                           config.readEntry(key, uint(KJSWindowResizeAllow));
-    else if (!global) {
-        pd_settings.m_windowResizePolicy = d->global.m_windowResizePolicy;
-    }
-
-    key = jsPrefix + QLatin1String("WindowStatusPolicy");
-    if ((global && reset) || config.hasKey(key))
-        pd_settings.m_windowStatusPolicy = (KJSWindowStatusPolicy)
-                                           config.readEntry(key, uint(KJSWindowStatusAllow));
-    else if (!global) {
-        pd_settings.m_windowStatusPolicy = d->global.m_windowStatusPolicy;
-    }
-
-    key = jsPrefix + QLatin1String("WindowFocusPolicy");
-    if ((global && reset) || config.hasKey(key))
-        pd_settings.m_windowFocusPolicy = (KJSWindowFocusPolicy)
-                                          config.readEntry(key, uint(KJSWindowFocusAllow));
-    else if (!global) {
-        pd_settings.m_windowFocusPolicy = d->global.m_windowFocusPolicy;
     }
 
 }
@@ -977,36 +926,6 @@ bool KHTMLSettings::isJavaScriptErrorReportingEnabled(const QString & /*hostname
 bool KHTMLSettings::isPluginsEnabled(const QString &hostname) const
 {
     return lookup_hostname_policy(d, hostname.toLower()).m_bEnablePlugins;
-}
-
-KHTMLSettings::KJSWindowOpenPolicy KHTMLSettings::windowOpenPolicy(
-    const QString &hostname) const
-{
-    return lookup_hostname_policy(d, hostname.toLower()).m_windowOpenPolicy;
-}
-
-KHTMLSettings::KJSWindowMovePolicy KHTMLSettings::windowMovePolicy(
-    const QString &hostname) const
-{
-    return lookup_hostname_policy(d, hostname.toLower()).m_windowMovePolicy;
-}
-
-KHTMLSettings::KJSWindowResizePolicy KHTMLSettings::windowResizePolicy(
-    const QString &hostname) const
-{
-    return lookup_hostname_policy(d, hostname.toLower()).m_windowResizePolicy;
-}
-
-KHTMLSettings::KJSWindowStatusPolicy KHTMLSettings::windowStatusPolicy(
-    const QString &hostname) const
-{
-    return lookup_hostname_policy(d, hostname.toLower()).m_windowStatusPolicy;
-}
-
-KHTMLSettings::KJSWindowFocusPolicy KHTMLSettings::windowFocusPolicy(
-    const QString &hostname) const
-{
-    return lookup_hostname_policy(d, hostname.toLower()).m_windowFocusPolicy;
 }
 
 int KHTMLSettings::mediumFontSize() const

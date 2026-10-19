@@ -150,10 +150,8 @@ tests/renderer_solo.py（无浏览器直驱渲染进程+帧颜色断言）。
 6. **DPI 清晰度（150% 屏）**：AA_EnableHighDpiScaling + 全物理像素管线
    （视口发 size×dpr、输入÷dpr、paintEvent `p.scale(1.0/dpr)` 设备像素 1:1
    直投）。像素级验证：色带 73-74 设备px（49 逻辑×1.5）、带内精确 hex 逐字
-   面值、带界 1-2 行过渡。**真 deviceScaleFactor CSS-px 视口未做**（当前
-   CSS px=物理 px，150% 屏元素小 1/3 但全清晰）——设计已定：渲染端逻辑尺寸
-   KHTMLView + 物理画布 + QPainter scale(dpr)，KHTML setZoomFactor 是放大镜
-   不可直接用（render_canvas.cpp layout 宽不随 zoom 收窄），需独立成轮。
+   面值、带界 1-2 行过渡。**真 deviceScaleFactor CSS-px 视口已在 0f 落地**
+   （渲染端逻辑尺寸 KHTMLView + 物理画布 + QPainter scale(dpr)）。
 7. **F11 全屏**（QAction 窗级注册）；**KJS 残留清零**：KJSProxy→ScriptProxy
    全仓改名（含 libkhtml.map）、js_transpile（Bublé ES3 降级机器）整体删除。
 8. **探针工具链 DPI 化（方法论沉淀）**：DPI 无感知 harness 在 150% 屏抓到
@@ -161,6 +159,60 @@ tests/renderer_solo.py（无浏览器直驱渲染进程+帧颜色断言）。
    渲染曾因此被误判为回归。resize_probe 现为 PER_MONITOR_AWARE + 饱和像素
    包围盒自校准 + 纯白白闪指标 + 还原几何前置（先缩小再最大化）。新增
    tests/shot_tool.py。启动基线：bing 冷启 TTFF **1545ms**（同水位 1514-1694）。
+
+## 0f. 修复批注（2026-10-19，真 deviceScaleFactor CSS-px 视口 + KJS 清零复查）
+
+1. **CSS-px 视口落地（Safari web-process 语义）**：浏览器只发**逻辑尺寸**
+   （CSS px）+ dpr；渲染端 KHTMLView 按逻辑尺寸布局，画布 = 逻辑 × dpr，
+   渲染 pass 用 `QPainter::scale(dpr,dpr)` **直接光栅到设备网格**（文字在
+   1.5× 下栅格化，不是逻辑图再放大）。damage 全程保持 CSS px，仅在瓦片
+   命中测试处 `QTransform::fromScale(dpr,dpr)` 映射一次；滚动条带用逻辑
+   坐标（sdx/sdy 是 CSS px），浏览器侧 scroll authority 把**绝对**偏移
+   乘 dpr（用绝对值而非增量，长滚动不累积取整误差）。瓦片/画布尺寸不变。
+   - 实测（tests/dpr_probe.py，直接驱动渲染进程）：resize {w:680,h:356,
+     dpr:1.5} → 页面报 `innerWidth=680 innerHeight=356 r=1.5`，
+     tiles 报 `fw=1020 fh=534`（=680×1.5 × 356×1.5）——四项全 OK。
+   - 输入坐标隐性修复：旧模型 renderer 控件是物理像素、浏览器却已发 CSS px，
+     点击落点偏 1/1.5；新模型下两者同为 CSS px。tests/input_coord_probe.py：
+     在 (100,75) 与 (580,275) 两点点击，两个目标全中（PASS）。
+   - 浏览器级回归：resize_probe PASS（maximize/restore 白闪 0.00%×2、
+     内容 >90% @0.228s、settle 0.27s）、bg_smoke/scroll_smoke/tombstone/
+     title_probe 全绿；bing 冷启 TTFF 1986ms（区间 1545-3106 内，网络主导）。
+2. **window.devicePixelRatio**：KHTMLPart::setDevicePixelRatio + 桥的
+   window 活 getter（magic 2），页面拿到 1.5；innerWidth/innerHeight 随
+   逻辑视口（CSS px，WebCore 语义）。
+3. **title 传播真缺陷（顺带修复）**：渲染进程原来只在 `completed` 时发一次
+   "title" 消息，加载后 `document.title` 的任何变更（计时器回调、未读计数、
+   媒体状态、测试上报）都被丢弃——浏览器标签永久停在加载时标题。现在
+   caption 每次变化都发（m_lastSentTitle 去重，completed 同样去重）。
+   实测：dpr_probe 页面 setTimeout(500) 里改 title，'timer-ok' 正确到达；
+   旧版该消息丢失（探针即因此先判 FAIL，排查过程见 4）。
+4. **计时器桥排查结论（不是桥的 bug）**：KHTML_QJS_TRACE=1 打开后逐点追踪
+   （create/fire/callback ok/killall 带毫秒时间戳）确认 QTimer 正常触发、
+   回调无异常、document.title 命中正确文档（view 有效、无 parent）——问题
+   全在 3 的 title 出口。追踪点作为长期诊断保留（默认关闭）。
+5. **KJS 清零复查（全仓代码零命中）**：删除上游 `test_regression.{h,cpp}` +
+   `test_regression_fontoverload.cpp`（只引用已删的 kjs_binding/kjs_window/
+   kjs_proxy 头，Windows 从不编译）+ tests/CMakeLists 的 testregression 目标；
+   `libkhtml.map` 删 `kjs_html_init` 与 `KJS::*`/`Q*KJS::*`/typeinfo/vtable
+   四条导出模式、`KJSCPUGuard*`；`kjs_html_STAT_SRCS` 变量改名
+   `khtml_ecma_SRCS`；删除 `KHTMLSettings::KJSWindow{Open,Status,Move,Resize,
+   Focus}Policy` 五组枚举 + 五个 getter + 位域/解析代码（全仓零调用者，
+   死 API）；删 `KJSErrorDlg` 前向声明与 jsError* 一族
+   （jsErrorExtension/removeJSErrorExtension/disableJSErrorExtension/
+   jsErrorDialogContextMenu/launchJSErrorDialog + m_jsedlg/m_statusBarJSErrorLabel）、
+   `jScriptInterpreter()` 遗留访问器、`setDebugScript`/`slotDebugScript`/
+   `m_paDebugScript`/`m_newJSInterpreterExists`/`m_bJScriptDebugEnabled`；
+   ScriptProxy 的调试器空实现（setDebugEnabled/debugEnabled/showDebugWindow/
+   paused）删除并去掉 executeScript 里的 paused() 分支与 KJS_VERBOSE 宏；
+   AtomicString 的 KJS 注释块、khtmlview/dom_node/html_canvasimpl 的
+   `namespace KJS` 前向声明、dom_textimpl/dom_stringimpl/dom2_eventsimpl/
+   pageloader/dom_docimpl/khtmladaptorpart 等处的 kjs 注释全部清除。
+   校验：`\bKJS\b|KF5JS|kjs_|kjs` 在 **src/** 全树零命中。
+6. **已知观察项（非本轮引入）**：同一次导航里脚本会执行两次、QuickJS World
+   随之重建（title 序列可见 'pending'→'ok'→'pending' 回退，且约 1s 后发生）。
+   现象是 KHTML 对同一文档的二次解析（疑似编码探测触发的重载），会重置页面
+   JS 状态。未在本轮处理，记为下一轮候选（对计时器/表单状态有实际影响）。
 
 ---
 

@@ -257,7 +257,7 @@ void KHTMLPart::init(KHTMLView *view, GUIProfile prof)
     d->m_extension->setObjectName("KHTMLBrowserExtension");
     d->m_hostExtension = new KHTMLPartBrowserHostExtension(this);
     d->m_statusBarExtension = new KParts::StatusBarExtension(this);
-    d->m_scriptableExtension = nullptr; // KF5JS ScriptableExtension removed along with KJS
+    d->m_scriptableExtension = nullptr; // no DBus scripting interface in this build
     new KHTMLTextExtension(this);
     new KHTMLHtmlExtension(this);
     STARTUP_MARK("KP init: extensions");
@@ -265,7 +265,6 @@ void KHTMLPart::init(KHTMLView *view, GUIProfile prof)
     d->m_openableSuppressedPopups = 0;
 
     d->m_paLoadImages = nullptr;
-    d->m_paDebugScript = nullptr;
     d->m_bMousePressed = false;
     d->m_bRightMousePressed = false;
     d->m_bCleared = false;
@@ -483,7 +482,6 @@ void KHTMLPart::init(KHTMLView *view, GUIProfile prof)
     STARTUP_MARK("KP init: actions created");
     d->m_bOpenMiddleClick = d->m_settings->isOpenMiddleClickEnabled();
     d->m_bJScriptEnabled = d->m_settings->isJavaScriptEnabled();
-    setDebugScript(d->m_settings->isJavaScriptDebugEnabled());
     d->m_bJavaEnabled = d->m_settings->isJavaEnabled();
     d->m_bPluginsEnabled = d->m_settings->isPluginsEnabled();
 
@@ -578,9 +576,6 @@ KHTMLPart::~KHTMLPart()
     }
 
     slotWalletClosed();
-    if (!parentPart()) { // only delete it if the top khtml_part closes
-        removeJSErrorExtension();
-    }
 
     stopAutoScroll();
     d->m_redirectionTimer.stop();
@@ -602,11 +597,6 @@ KHTMLPart::~KHTMLPart()
     if (d->m_view) {
         d->m_view->m_part = nullptr;
     }
-
-    // Have to delete this here since we forward declare it in khtmlpart_p and
-    // at least some compilers won't call the destructor in this case.
-    delete d->m_jsedlg;
-    d->m_jsedlg = nullptr;
 
     if (!parentPart()) { // only delete d->m_frame if the top khtml_part closes
         delete d->m_frame;
@@ -639,7 +629,6 @@ bool KHTMLPart::restoreURL(const QUrl &url)
 
     // set the java(script) flags according to the current host.
     d->m_bJScriptEnabled = KHTMLGlobal::defaultHTMLSettings()->isJavaScriptEnabled(url.host());
-    setDebugScript(KHTMLGlobal::defaultHTMLSettings()->isJavaScriptDebugEnabled());
     d->m_bJavaEnabled = KHTMLGlobal::defaultHTMLSettings()->isJavaEnabled(url.host());
     d->m_bPluginsEnabled = KHTMLGlobal::defaultHTMLSettings()->isPluginsEnabled(url.host());
 
@@ -937,7 +926,7 @@ bool KHTMLPart::openUrl(const QUrl &url)
     d->m_bComplete = false;
     d->m_bLoadEventEmitted = false;
 
-    // delete old status bar msg's from kjs (if it _was_ activated on last URL)
+    // delete old status bar msgs (if window.status was active on the last URL)
     if (d->m_bJScriptEnabled) {
         d->m_statusBarText[BarOverrideText].clear();
         d->m_statusBarText[BarDefaultText].clear();
@@ -945,7 +934,6 @@ bool KHTMLPart::openUrl(const QUrl &url)
 
     // set the javascript flags according to the current url
     d->m_bJScriptEnabled = KHTMLGlobal::defaultHTMLSettings()->isJavaScriptEnabled(url.host());
-    setDebugScript(KHTMLGlobal::defaultHTMLSettings()->isJavaScriptDebugEnabled());
     d->m_bJavaEnabled = KHTMLGlobal::defaultHTMLSettings()->isJavaEnabled(url.host());
     d->m_bPluginsEnabled = KHTMLGlobal::defaultHTMLSettings()->isPluginsEnabled(url.host());
 
@@ -1135,11 +1123,14 @@ void KHTMLPart::setStatusMessagesEnabled(bool enable)
     d->m_statusMessagesEnabled = enable;
 }
 
-void *KHTMLPart::jScriptInterpreter()
+void KHTMLPart::setDevicePixelRatio(qreal dpr)
 {
-    // KF5JS interpreter removed; QuickJS is the only engine and exposes no
-    // opaque interpreter pointer through this legacy accessor.
-    return nullptr;
+    d->m_devicePixelRatio = (dpr > 0.0 && dpr < 8.0) ? dpr : 1.0;
+}
+
+qreal KHTMLPart::devicePixelRatio() const
+{
+    return d->m_devicePixelRatio;
 }
 
 bool KHTMLPart::statusMessagesEnabled() const
@@ -1219,7 +1210,6 @@ ScriptProxy *KHTMLPart::jScript()
     if (!d->m_frame->m_jscript) {
         d->m_frame->m_jscript = new ScriptProxy(d->m_frame);
     }
-    d->m_frame->m_jscript->setDebugEnabled(d->m_bJScriptDebugEnabled);
 
     return d->m_frame->m_jscript;
 }
@@ -1262,52 +1252,7 @@ QVariant KHTMLPart::crossFrameExecuteScript(const QString &target,  const QStrin
 }
 
 //Enable this to see all JS scripts being executed
-//#define KJS_VERBOSE
-
-KJSErrorDlg *KHTMLPart::jsErrorExtension()
-{
-    // KJS error dialog removed along with KF5JS; QuickJS logs script errors itself.
-    return nullptr;
-}
-
-void KHTMLPart::removeJSErrorExtension()
-{
-    if (parentPart()) {
-        parentPart()->removeJSErrorExtension();
-        return;
-    }
-    if (d->m_statusBarJSErrorLabel != nullptr) {
-        d->m_statusBarExtension->removeStatusBarItem(d->m_statusBarJSErrorLabel);
-        delete d->m_statusBarJSErrorLabel;
-        d->m_statusBarJSErrorLabel = nullptr;
-    }
-    delete d->m_jsedlg;
-    d->m_jsedlg = nullptr;
-}
-
-void KHTMLPart::disableJSErrorExtension()
-{
-    removeJSErrorExtension();
-    // These two lines are really kind of hacky, and it sucks to do this inside
-    // KHTML but I don't know of anything that's reasonably easy as an alternative
-    // right now.  It makes me wonder if there should be a more clean way to
-    // contact all running "KHTML" instance as opposed to Konqueror instances too.
-    d->m_settings->setJSErrorsEnabled(false);
-    emit configurationChanged();
-}
-
-void KHTMLPart::jsErrorDialogContextMenu()
-{
-    QMenu *m = new QMenu(nullptr);
-    m->addAction(i18n("&Hide Errors"), this, SLOT(removeJSErrorExtension()));
-    m->addAction(i18n("&Disable Error Reporting"), this, SLOT(disableJSErrorExtension()));
-    m->popup(QCursor::pos());
-}
-
-void KHTMLPart::launchJSErrorDialog()
-{
-    // KJS error dialog removed along with KF5JS; no-op.
-}
+//#define KHTML_SCRIPT_VERBOSE
 
 void KHTMLPart::launchJSConfigDialog()
 {
@@ -1318,13 +1263,12 @@ void KHTMLPart::launchJSConfigDialog()
 
 QVariant KHTMLPart::executeScript(const QString &filename, int baseLine, const DOM::Node &n, const QString &script)
 {
-#ifdef KJS_VERBOSE
-    // The script is now printed by KJS's Parser::parse
+#ifdef KHTML_SCRIPT_VERBOSE
     qCDebug(KHTML_LOG) << "executeScript: caller='" << objectName() << "' filename=" << filename << " baseLine=" << baseLine /*<< " script=" << script*/;
 #endif
     ScriptProxy *proxy = jScript();
 
-    if (!proxy || proxy->paused()) {
+    if (!proxy) {
         return QVariant();
     }
 
@@ -1352,12 +1296,12 @@ QVariant KHTMLPart::executeScript(const QString &script)
 
 QVariant KHTMLPart::executeScript(const DOM::Node &n, const QString &script)
 {
-#ifdef KJS_VERBOSE
+#ifdef KHTML_SCRIPT_VERBOSE
     qCDebug(KHTML_LOG) << "caller=" << objectName() << "node=" << n.nodeName().string().toLatin1().constData() << "(" << (n.isNull() ? 0 : n.nodeType()) << ") " /* << script */;
 #endif
     ScriptProxy *proxy = jScript();
 
-    if (!proxy || proxy->paused()) {
+    if (!proxy) {
         return QVariant();
     }
 
@@ -1370,7 +1314,7 @@ QVariant KHTMLPart::executeScript(const DOM::Node &n, const QString &script)
         submitFormAgain();
     }
 
-#ifdef KJS_VERBOSE
+#ifdef KHTML_SCRIPT_VERBOSE
     qCDebug(KHTML_LOG) << "done";
 #endif
     return ret;
@@ -1433,13 +1377,6 @@ void KHTMLPart::slotDebugDOMTree()
             static_cast<KHTMLPart *>(p)->slotDebugDOMTree();
         }
     s_DOMTreeIndentLevel = indentLevel;
-}
-
-void KHTMLPart::slotDebugScript()
-{
-    if (jScript()) {
-        jScript()->showDebugWindow();
-    }
 }
 
 void KHTMLPart::slotDebugRenderTree()
@@ -1697,7 +1634,7 @@ void KHTMLPart::slotData(KIO::Job *kio_job, const QByteArray &data)
         //qCDebug(KHTML_LOG) << "begin!";
 
         // We must suspend KIO while we're inside begin() because it can cause
-        // crashes if a window (such as kjsdebugger) goes back into the event loop,
+        // crashes if a window goes back into the event loop,
         // more data arrives, and begin() gets called again (re-entered).
         d->m_job->suspend();
         begin(d->m_workingURL, arguments().xOffset(), arguments().yOffset());
@@ -2035,7 +1972,6 @@ void KHTMLPart::begin(const QUrl &url, int xOffset, int yOffset)
 
     // No need to show this for a new page until an error is triggered
     if (!parentPart()) {
-        removeJSErrorExtension();
         setSuppressedPopupIndicator(false);
         d->m_openableSuppressedPopups = 0;
         for (KHTMLPart *part : d->m_suppressedPopupOriginParts) {
@@ -2623,7 +2559,7 @@ bool KHTMLPartPrivate::isJavaScriptURL(const QString &url)
     return url.indexOf(QLatin1String("javascript:"), 0, Qt::CaseInsensitive) == 0;
 }
 
-// Called by ecma/kjs_window in case of redirections from Javascript,
+// Called by the script engine in case of redirections from Javascript,
 // and by xml/dom_docimpl.cpp in case of http-equiv meta refresh.
 void KHTMLPart::scheduleRedirection(int delay, const QString &url, bool doLockHistory)
 {
@@ -4244,10 +4180,6 @@ void KHTMLPart::updateActions()
 
     if (d->m_paSaveBackground) {
         d->m_paSaveBackground->setEnabled(!bgURL.isEmpty());
-    }
-
-    if (d->m_paDebugScript) {
-        d->m_paDebugScript->setEnabled(d->m_frame ? d->m_frame->m_jscript : nullptr);
     }
 }
 
@@ -6154,7 +6086,6 @@ void KHTMLPart::reparseConfiguration()
 
     d->m_bOpenMiddleClick = settings->isOpenMiddleClickEnabled();
     d->m_bJScriptEnabled = settings->isJavaScriptEnabled(url().host());
-    setDebugScript(settings->isJavaScriptDebugEnabled());
     d->m_bJavaEnabled = settings->isJavaEnabled(url().host());
     d->m_bPluginsEnabled = settings->isPluginsEnabled(url().host());
     d->m_metaRefreshEnabled = settings->isAutoDelayedActionsEnabled();
@@ -7546,23 +7477,6 @@ bool KHTMLPart::isModified() const
     return d->m_doc->unsubmittedFormChanges();
 }
 
-void KHTMLPart::setDebugScript(bool enable)
-{
-    unplugActionList("debugScriptList");
-    if (enable) {
-        if (!d->m_paDebugScript) {
-            d->m_paDebugScript = new QAction(i18n("JavaScript &Debugger"), this);
-            actionCollection()->addAction("debugScript", d->m_paDebugScript);
-            connect(d->m_paDebugScript, SIGNAL(triggered(bool)), this, SLOT(slotDebugScript()));
-        }
-        d->m_paDebugScript->setEnabled(d->m_frame ? d->m_frame->m_jscript : nullptr);
-        QList<QAction *> lst;
-        lst.append(d->m_paDebugScript);
-        plugActionList("debugScriptList", lst);
-    }
-    d->m_bJScriptDebugEnabled = enable;
-}
-
 void KHTMLPart::setSuppressedPopupIndicator(bool enable, KHTMLPart *originPart)
 {
     if (parentPart()) {
@@ -7614,7 +7528,7 @@ void KHTMLPart::suppressedPopupMenu()
 
 void KHTMLPart::togglePopupPassivePopup()
 {
-    // Same hack as in disableJSErrorExtension()
+    // Same hack as in setJSErrorsEnabled(): flip the setting and re-announce it
     d->m_settings->setJSPopupBlockerPassivePopup(!d->m_settings->jsPopupBlockerPassivePopup());
     emit configurationChanged();
 }

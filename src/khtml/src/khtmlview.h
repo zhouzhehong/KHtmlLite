@@ -51,12 +51,6 @@ class NodeImpl;
 class CSSProperty;
 }
 
-namespace KJS
-{
-class WindowFunc;
-class ExternalFunc;
-}
-
 namespace khtml
 {
 class RenderObject;

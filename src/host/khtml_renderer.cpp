@@ -543,6 +543,15 @@ public:
                 fprintf(stderr, "[rend %d] caption=%s\n",
                         (int)QCoreApplication::applicationPid(),
                         c.toUtf8().constData());
+            // Propagate EVERY caption change, not just the one that exists at
+            // load completion: pages routinely change document.title after
+            // load (unread counters, media playing, test runners, and any
+            // setTimeout callback). Those used to be dropped here and the tab
+            // kept the load-time title forever.
+            if (c != m_lastSentTitle) {
+                m_lastSentTitle = c;
+                sendMessage(QStringLiteral("title"), c);
+            }
         });
         connect(m_view, QOverload<>::of(&KParts::ReadOnlyPart::completed), this, [this]() {
             PERF_MARK("khtmlpart_completed");
@@ -560,7 +569,10 @@ public:
                 if (v) v->setContentsPos(m_pendingRestoreX, m_pendingRestoreY);
                 m_hasPendingRestore = false;
             }
-            sendMessage(QStringLiteral("title"), m_nativeTitle);
+            if (m_nativeTitle != m_lastSentTitle) {
+                m_lastSentTitle = m_nativeTitle;
+                sendMessage(QStringLiteral("title"), m_nativeTitle);
+            }
             sendState();
         });
         // Periodic state report so the browser always has fresh scroll/zoom
@@ -616,9 +628,20 @@ public:
         m_framePending = false;
         if (!m_view || !m_shm) return;
         QWidget *w = m_view->widget();
-        const int fw = w->width();
-        const int fh = w->height();
-        if (fw <= 0 || fh <= 0) return;
+        // === CSS-px viewport (deviceScaleFactor) ===
+        // The widget is laid out at the LOGICAL size (CSS pixels, exactly
+        // Safari's web-process viewport) and the frame canvas is that size
+        // times the device pixel ratio.  Everything below — damage, tiles,
+        // strips — is in PHYSICAL pixels because that is what the browser
+        // composites; the engine is scaled onto the device grid by the
+        // painter in the render pass, so text never goes through a logical
+        // raster that would have to be resampled (the blurry path this
+        // replaces).
+        const int lw = w->width();
+        const int lh = w->height();
+        if (lw <= 0 || lh <= 0) return;
+        const int fw = qMax(1, qRound(lw * m_dpr));
+        const int fh = qMax(1, qRound(lh * m_dpr));
 
         // Flush coalesced mousemove/wheel before rendering this frame.
         flushPendingInput();
@@ -628,7 +651,8 @@ public:
 
         const int tilesX = (fw + kTileSize - 1) / kTileSize;
         const int tilesY = (fh + kTileSize - 1) / kTileSize;
-        const QRect frameRect(0, 0, fw, fh);
+        const QRect frameRect(0, 0, fw, fh);        // PHYSICAL: tiles/canvas
+        const QRect logicalRect(0, 0, lw, lh);      // CSS px: engine damage
 
         // Damage policy (see resize handler): a width change forces a KHTML
         // relayout, so every tile is dirty — this also covers segment
@@ -636,10 +660,13 @@ public:
         // existing rows at the same tile indices: only the newly exposed
         // bottom strip is painted.  A pure height shrink invalidates
         // nothing; the browser simply crops its canvas.
+        // m_dirtyRegion is kept in LOGICAL coordinates throughout (that is
+        // the engine's damage space); it is mapped to physical exactly once,
+        // where tiles are hit-tested.
         if (m_relayoutPending || tilesX != m_tilesX)
-            m_dirtyRegion = QRegion(frameRect);
-        else if (fh > m_frameH)
-            m_dirtyRegion += QRect(0, m_frameH, fw, fh - m_frameH);
+            m_dirtyRegion = QRegion(logicalRect);
+        else if (lh > m_frameLH)
+            m_dirtyRegion += QRect(0, m_frameLH, lw, lh - m_frameLH);
         m_relayoutPending = false;
 
         // === Scroll fast path (blit) ===
@@ -689,11 +716,14 @@ public:
         if (scrollFast) {
             // Damage = only the viewport strip freshly scrolled into view.
             // Everything else stays at its shifted pixels on the browser.
+            // Everything here is LOGICAL (CSS px): KHTML scrolls in CSS px,
+            // the strip is damage for the engine-space dirty region, and the
+            // tile hit-test below maps it to physical once.
             QRegion strip;
-            if (sdy > 0) strip += QRect(0, fh - qMin(sdy, fh), fw, qMin(sdy, fh));
-            else if (sdy < 0) strip += QRect(0, 0, fw, qMin(-sdy, fh));
-            if (sdx > 0) strip += QRect(fw - qMin(sdx, fw), 0, qMin(sdx, fw), fh);
-            else if (sdx < 0) strip += QRect(0, 0, qMin(-sdx, fw), fh);
+            if (sdy > 0) strip += QRect(0, lh - qMin(sdy, lh), lw, qMin(sdy, lh));
+            else if (sdy < 0) strip += QRect(0, 0, lw, qMin(-sdy, lh));
+            if (sdx > 0) strip += QRect(lw - qMin(sdx, lw), 0, qMin(sdx, lw), lh);
+            else if (sdx < 0) strip += QRect(0, 0, qMin(-sdx, lw), lh);
             m_dirtyRegion = strip;
 
             // Tell the browser to shift its canvas first; the strip tiles in
@@ -718,10 +748,13 @@ public:
             });
         }
 
-        const QRegion dirty = m_dirtyRegion.intersected(frameRect);
+        const QRegion dirty = m_dirtyRegion.intersected(logicalRect);
         const bool dimsChanged = (fw != m_frameW || fh != m_frameH);
         if (dirty.isEmpty() && !dimsChanged)
             return;  // nothing changed — browser keeps its existing canvas
+
+        // Map the engine's CSS-px damage to the physical tile grid once.
+        const QRegion dirtyPhys = QTransform::fromScale(m_dpr, m_dpr).map(dirty);
 
         // Collect dirty tile indices (ordered, row-major).
         QVector<int> dirtyTiles;
@@ -729,7 +762,7 @@ public:
             for (int tx = 0; tx < tilesX; ++tx) {
                 const QRect tileRect(tx * kTileSize, ty * kTileSize,
                                      kTileSize, kTileSize);
-                if (dirty.intersects(tileRect))
+                if (dirtyPhys.intersects(tileRect))
                     dirtyTiles.append(ty * tilesX + tx);
             }
 
@@ -762,6 +795,12 @@ public:
         {
             QPainter fp(&frameImage);
             STARTUP_MARK("render pass begin");
+            // deviceScaleFactor: the engine lays out in CSS pixels and this
+            // scale rasterizes it directly onto the device grid.  The damage
+            // region stays in widget coordinates, which is render()'s input
+            // space; the painter transform maps it to the physical canvas.
+            if (m_dpr != 1.0)
+                fp.scale(m_dpr, m_dpr);
             w->render(&fp, QPoint(), QRegion(dirty));
             fp.end();
             STARTUP_MARK("render pass done");
@@ -903,6 +942,8 @@ public:
 
         m_frameW = fw;
         m_frameH = fh;
+        m_frameLW = lw;
+        m_frameLH = lh;
         m_tilesX = tilesX;
         m_tilesY = tilesY;
         m_dirtyRegion = QRegion();
@@ -932,6 +973,8 @@ public:
                 m_frameShmReady = false;
                 m_frameW = 0;
                 m_frameH = 0;
+                m_frameLW = 0;
+                m_frameLH = 0;
                 m_tilesX = 0;
                 m_tilesY = 0;
                 m_dirtyRegion = QRegion();
@@ -947,6 +990,8 @@ public:
                 m_frameShmReady = false;
                 m_frameW = 0;
                 m_frameH = 0;
+                m_frameLW = 0;
+                m_frameLH = 0;
                 m_tilesX = 0;
                 m_tilesY = 0;
                 m_dirtyRegion = QRegion();
@@ -1231,8 +1276,8 @@ private slots:
         view->setAttribute(Qt::WA_DontShowOnScreen, true);
         view->show();
         view->winId();
-        ensureShm(view->width() > 0 ? view->width() : m_pendingW,
-                  view->height() > 0 ? view->height() : m_pendingH);
+        ensureShm(qMax(1, qRound((view->width() > 0 ? view->width() : m_pendingW) * m_dpr)),
+                  qMax(1, qRound((view->height() > 0 ? view->height() : m_pendingH) * m_dpr)));
         // Carries renderer-local elapsed ms so the browser can compute an
         // exact clock skew for startup-log alignment (report script uses it).
         sendMessage(QStringLiteral("ready"),
@@ -1246,6 +1291,7 @@ private slots:
         // the last one matters — applying each intermediate size triggers a
         // synchronous KHTML relayout that can starve the event loop.
         int pendingW = -1, pendingH = -1;
+        qreal pendingDpr = 1.0;
         bool hasPendingResize = false;
 
         while (m_socket && m_socket->canReadLine()) {
@@ -1273,8 +1319,12 @@ private slots:
                     else { PERF_MARK("khtmlpart_load_start"); m_loader->load(u); }
                 }
             } else if (cmd == QLatin1String("resize")) {
+                // w/h are CSS PIXELS (the logical viewport); dpr converts to
+                // the physical frame canvas.  See grabFrame().
                 pendingW = obj.value(QStringLiteral("w")).toInt(800);
                 pendingH = obj.value(QStringLiteral("h")).toInt(600);
+                const double d = obj.value(QStringLiteral("dpr")).toDouble(1.0);
+                pendingDpr = (d > 0.0 && d < 8.0) ? d : 1.0;
                 hasPendingResize = true;
             } else if (cmd == QLatin1String("visible")) {
                 // Background-tab throttling (WebKit: hidden pages get no
@@ -1308,15 +1358,22 @@ private slots:
 
         // Apply only the final resize from this batch.
         if (hasPendingResize && m_view) {
+            m_dpr = pendingDpr;
+            // Logical (CSS px) layout size; the canvas is derived by dpr.
             m_view->widget()->resize(pendingW, pendingH);
-            ensureShm(pendingW, pendingH);
+            // Expose the ratio to the page (window.devicePixelRatio) — the
+            // engine itself lays out in CSS px, so this is the only place
+            // the DOM learns what it is rasterized at.
+            m_view->setDevicePixelRatio(m_dpr);
+            ensureShm(qMax(1, qRound(pendingW * m_dpr)),
+                      qMax(1, qRound(pendingH * m_dpr)));
             // Damage policy for the tiled transport: a width change forces
             // a KHTML relayout, so the whole frame must be repainted.
             // A pure height change leaves the page layout untouched: the
             // existing tiles stay valid and only the newly exposed bottom
             // strip (if any) is painted — grabFrame() adds that strip from
             // the committed-vs-new frame height.
-            if (pendingW != m_frameW)
+            if (qRound(pendingW * m_dpr) != m_frameW)
                 m_relayoutPending = true;
             // Request a frame immediately after the resize instead of
             // waiting for the next 33 ms timer tick.  The synchronous
@@ -1356,7 +1413,12 @@ private:
     QString m_shmKey;
     QSharedMemory *m_shm = nullptr;
     QTimer *m_frameTimer = nullptr;
-    int m_frameW = 0, m_frameH = 0;
+    int m_frameW = 0, m_frameH = 0;          // last committed PHYSICAL frame
+    int m_frameLW = 0, m_frameLH = 0;         // ... and its LOGICAL (CSS px) size
+    // deviceScaleFactor: CSS px → device px.  Set by the browser's resize
+    // command; the KHTML widget is laid out at CSS-px size and the frame
+    // canvas is that times this ratio (painted scaled in grabFrame()).
+    qreal m_dpr = 1.0;
     bool m_frameShmReady = false;
     bool m_sizeMismatchNotified = false;
     RendererView *m_view = nullptr;
@@ -1366,6 +1428,8 @@ private:
     // Document title captured from the engine's native setWindowCaption
     // emission (JS-independent; see the completed handler).
     QString m_nativeTitle;
+    // Last title shipped over IPC (dedupe for late document.title changes).
+    QString m_lastSentTitle;
     bool m_jsEnabled = true;
     int m_pendingW = 800, m_pendingH = 600;
     // Tombstone restore state, applied when the next document completes.

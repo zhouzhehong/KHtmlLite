@@ -352,7 +352,7 @@ TextImpl *TextImpl::splitText(const unsigned long offset, int &exceptioncode)
 
     // ### we explicitly check for a negative long that has been cast to an unsigned long
     // ... this can happen if JS code passes in -1 - we need to catch this earlier! (in the
-    // kjs bindings)
+    // script bindings)
     if (offset > str->l || (long)offset < 0) {
         exceptioncode = DOMException::INDEX_SIZE_ERR;
         return nullptr;

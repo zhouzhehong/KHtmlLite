@@ -47,7 +47,6 @@ class KHTMLViewBar;
 class KHTMLFindBar;
 class KHTMLSettings;
 class KJavaAppletContext;
-class KJSErrorDlg;
 
 namespace DOM
 {
@@ -356,10 +355,12 @@ public:
     bool jScriptEnabled() const;
 
     /**
-     * Legacy accessor that used to return the KJS interpreter. KF5JS has been
-     * removed and QuickJS is the only engine, so this always returns nullptr.
+     * Device pixel ratio this part's viewport is rasterized at.  The host
+     * process (which alone knows the screen) sets it; the DOM exposes it as
+     * window.devicePixelRatio.  Default 1.0.
      */
-    void *jScriptInterpreter();
+    void setDevicePixelRatio(qreal dpr);
+    qreal devicePixelRatio() const;
 
     /**
      * Enable/disable statusbar messages.
@@ -979,28 +980,28 @@ public:
      */
     KParts::ReadOnlyPart *findFramePart(const QString &f);
     /**
-     * Called by KJS.
+     * Called by the script engine (window.status).
      * Sets the StatusBarText assigned
      * via window.status
      */
     void setJSStatusBarText(const QString &text);
 
     /**
-     * Called by KJS.
+     * Called by the script engine (window.status).
      * Sets the DefaultStatusBarText assigned
      * via window.defaultStatus
      */
     void setJSDefaultStatusBarText(const QString &text);
 
     /**
-     * Called by KJS.
+     * Called by the script engine (window.status).
      * Returns the StatusBarText assigned
      * via window.status
      */
     QString jsStatusBarText() const;
 
     /**
-     * Called by KJS.
+     * Called by the script engine (window.status).
      * Returns the DefaultStatusBarText assigned
      * via window.defaultStatus
      */
@@ -1388,10 +1389,6 @@ private Q_SLOTS:
     /**
      * @internal
      */
-    void slotDebugScript();
-    /**
-     * @internal
-     */
     void slotDebugDOMTree();
     /**
      * @internal
@@ -1593,26 +1590,6 @@ private Q_SLOTS:
 
     /**
      * @internal
-     */
-    void launchJSErrorDialog();
-
-    /**
-     * @internal
-     */
-    void removeJSErrorExtension();
-
-    /**
-     * @internal
-     */
-    void disableJSErrorExtension();
-
-    /**
-     * @internal
-     */
-    void jsErrorDialogContextMenu();
-
-    /**
-     * @internal
      * used to restore or reset the view's scroll position (including positioning on anchors)
      * once a sufficient portion of the document as been laid out.
      */
@@ -1621,8 +1598,6 @@ private Q_SLOTS:
     void walletOpened(KWallet::Wallet *);
 
 private:
-
-    KJSErrorDlg *jsErrorExtension();
 
     enum StatusBarPriority { BarDefaultText, BarHoverText, BarOverrideText };
     void setStatusBarText(const QString &text, StatusBarPriority p);
@@ -1802,8 +1777,6 @@ private:
     void decFontSize(const int stepping[], int count);
 
     void emitCaretPositionChanged(const DOM::Position &pos);
-
-    void setDebugScript(bool enable);
 
     void runAdFilter();
 

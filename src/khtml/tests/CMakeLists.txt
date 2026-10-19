@@ -42,7 +42,6 @@ if(NOT MSVC)
     add_executable(khtmltest ${khtmltest_SRCS} )
     ecm_mark_as_test(khtmltest)
     target_link_libraries( khtmltest KF5::KHtml KF5::XmlGui KF5::TextWidgets KF5::Parts )
-    #KJS KF5::I18n
 
     ########### next target ###############
 endif()
@@ -77,20 +76,11 @@ if(NOT MSVC)
     ########### next target ###############
 endif()
 
-# Note that testregression can't be compiled by default, it needs private Qt headers.
-# See also BUILDING-TESTREGRESSION
+# Note: the upstream testregression suite (test_regression.cpp) was removed
+# with the script interpreter — it was built only against the script bindings
+# (the deleted binding headers) and could never compile in a
+# QuickJS-only tree.  The GUI variant below is engine-agnostic and stays.
 if (KHTML_BUILD_TESTREGRESSION AND HAVE_X11)
-
-    set(testregression_SRCS
-        test_regression.cpp
-        test_regression_fontoverload.cpp
-    )
-
-    include_directories( ${QT_INCLUDE_DIR}/../src/3rdparty/harfbuzz/src )
-
-    add_executable(testregression ${testregression_SRCS})
-    ecm_mark_as_test(testregression)
-    target_link_libraries(testregression  ${X11_X11_LIB} KF5::KHtml)
 
     ########### next target ###############
 

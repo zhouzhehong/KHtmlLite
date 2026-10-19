@@ -804,7 +804,7 @@ void PageLoader::onResourceFinished()
         }
         // External scripts pass through RAW: the page engine is QuickJS
         // (ES2020-capable) and parses ES2015+ natively.  The old Buble
-        // ES2015->ES3 lowering existed only for the removed KJS
+        // ES2015->ES3 lowering existed only for the removed legacy engine
         // interpreter and is gone.  The try/catch guard stays: one
         // throwing external script must never tear the page down.
         const QString resCt = QString::fromLatin1(r->header(QNetworkRequest::ContentTypeHeader).toByteArray()).toLower();
@@ -1166,7 +1166,7 @@ void PageLoader::rewriteAndSave()
                 && !body.trimmed().isEmpty();
             if (isJs) {
                 // Raw pass-through: QuickJS parses ES2015+ natively (the
-                // ES3 lowering was only for the removed KJS interpreter).
+                // ES3 lowering was only for the removed legacy interpreter).
                 QString t = QStringLiteral("try{") + body
                           + QStringLiteral("}catch(__qjs_e){}");
                 out.append(QStringLiteral("<script") + attrs + QStringLiteral(">")

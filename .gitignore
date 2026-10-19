@@ -107,3 +107,6 @@ tests/qs*.txt
 # DPI-probe screenshot artifacts (diagnostic outputs, regenerable)
 tests/shot_*.png
 tests/resize_offender.png
+
+# Probe-generated pages (tests/dpr_*.py write these)
+tests/dpr/

@@ -295,14 +295,12 @@ ecm_gperf_generate(html/doctypes.gperf ${CMAKE_CURRENT_BINARY_DIR}/doctypes.h kh
 ecm_gperf_generate(html/kentities.gperf ${CMAKE_CURRENT_BINARY_DIR}/kentities-gperf.h khtmlhtml_STAT_SRCS
                    GENERATION_FLAGS "--key-positions=* -D -s 2")
 
-# khtml/ecma/Makefile.am: kjs_html
-#
-# The legacy KF5JS (KJS) interpreter and all of its generated DOM bindings
-# have been removed. QuickJS is the only execution engine; the sources below
-# are the engine abstraction, the DOM bridge, and the ScriptProxy shim that
-# routes inline handlers and programmatic script evaluation to QuickJS.
+# ecma/: the QuickJS execution engine.  The legacy script interpreter
+# and all of its generated DOM bindings are gone; the sources below are the
+# engine abstraction, the DOM bridge, and the ScriptProxy shim that routes
+# inline handlers and programmatic script evaluation to QuickJS.
 
-set(kjs_html_STAT_SRCS
+set(khtml_ecma_SRCS
   ecma/js_proxy.cpp
   ecma/quickjs_engine.cpp
   ecma/qjs_dom_bridge.cpp
@@ -512,7 +510,7 @@ set(khtml_LIB_SRCS
    ${khtmlcss_STAT_SRCS}
    ${khtmlmisc_STAT_SRCS}
    ${khtmlediting_STAT_SRCS}
-   ${kjs_html_STAT_SRCS}
+   ${khtml_ecma_SRCS}
    ${khtmldom_STAT_SRCS}
    ${khtmlimload_STAT_SRCS}
    ${decoders_STAT_SRCS}
@@ -609,8 +607,8 @@ set_target_properties(KF5KHtml PROPERTIES VERSION ${KHTML_VERSION}
                      )
 
 
-# The legacy KJS hash-table (create_lut) and Perl generate-bindings.pl
-# steps have been removed along with KF5JS. QuickJS is the only engine.
+# No script-binding code generation: there is no second engine to generate
+# bindings for. QuickJS is the only engine (see ecma/ above).
 
 
 ########### khtmlpart ###############

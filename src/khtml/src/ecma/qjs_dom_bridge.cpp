@@ -10,8 +10,8 @@
  * so page code degrades gracefully; needsFallback() flags the truly
  * unsupported case so the caller (ScriptProxy) can degrade gracefully too.
  *
- * All QuickJS types live inside Impl so this translation unit never
- * pollutes KJS-using TUs with the global JSValue typedef.
+ * All QuickJS types live inside Impl so this translation unit never leaks
+ * the global JSValue typedef into unrelated headers.
  */
 #include "qjs_dom_bridge.h"
 
@@ -39,6 +39,7 @@
 #include <QSet>
 #include <QVector>
 #include <QTimer>
+#include <QElapsedTimer>
 
 // Trace log for the QuickJS DOM bridge. OFF by default: the old
 // unconditional fopen wrote khtml_qjs.log on EVERY evaluate/world reset —
@@ -148,7 +149,7 @@ static NodeWrap *unwrapNode(::JSContext *ctx, ::JSValueConst v)
 //
 // addEventListener() callbacks registered from page JS live here so that
 // DOM events can be dispatched through QuickJS instead of falling through
-// to the legacy KJS event path. Keyed by NodeImpl* identity + event type.
+// to the legacy event path. Keyed by NodeImpl* identity + event type.
 // ---------------------------------------------------------------------------
 struct QjsListenerEntry {
     QString type;
@@ -421,7 +422,7 @@ static ::JSValue elAddEventListener(::JSContext *ctx, ::JSValueConst this_val,
 {
     // Store the JS callback in g_qjsListeners keyed by the node impl handle.
     // DOM event dispatch later walks this table and JS_Call()s the function
-    // through QuickJS (see Impl::dispatchEvent), never via KJS.
+    // through QuickJS (see Impl::dispatchEvent), never via legacy dispatch.
     if (argc < 2) {
         return JS_UNDEFINED;
     }
@@ -556,14 +557,23 @@ static ::JSValue styleGetPropertyValueFn(::JSContext *ctx, ::JSValueConst this_v
     return jsStr(ctx, dstr(style.getPropertyValue(mk(jsValStr(ctx, argv[0])))));
 }
 
+static qint64 qjsTraceMs()
+{
+    static QElapsedTimer et;
+    static bool started = [] { et.start(); return true; }();
+    Q_UNUSED(started);
+    return et.elapsed();
+}
+
 // ---------------------------------------------------------------------------
 // document
 // ---------------------------------------------------------------------------
-// window.innerWidth / window.innerHeight — the live viewport size, exactly
-// the WebCore semantics (visibleWidth/visibleHeight exclude the scrollbar
-// area and track resize). window IS the document wrapper in this bridge,
-// so these are getter properties on the document object. magic 0 = width,
-// 1 = height.
+// window.innerWidth / window.innerHeight / window.devicePixelRatio — the live
+// viewport, exactly the WebCore semantics (visibleWidth/visibleHeight exclude
+// the scrollbar area and track resize; they are CSS pixels because the
+// renderer lays out at the logical size and rasters at dpr). window IS the
+// document wrapper in this bridge, so these are getter properties on the
+// document object. magic 0 = width, 1 = height, 2 = device pixel ratio.
 static ::JSValue windowViewportGetter(::JSContext *ctx, ::JSValueConst this_val, int magic)
 {
     NodeWrap *w = unwrapNode(ctx, this_val);
@@ -571,6 +581,10 @@ static ::JSValue windowViewportGetter(::JSContext *ctx, ::JSValueConst this_val,
     Document doc(w->node);
     KHTMLView *v = doc.view();
     if (!v) return JS_UNDEFINED;
+    if (magic == 2) {
+        KHTMLPart *part = v->part();
+        return ::JS_NewFloat64(ctx, part ? part->devicePixelRatio() : 1.0);
+    }
     return ::JS_NewInt32(ctx, magic == 0 ? v->visibleWidth() : v->visibleHeight());
 }
 
@@ -631,6 +645,14 @@ static ::JSValue docSetProp(::JSContext *ctx, ::JSValueConst this_val,
     }
     HTMLDocument doc(w->node);
     if (magic == 2) {
+        if (qjsTraceEnabled()) {
+            KHTMLView *v = doc.view();
+            fprintf(stderr, "[qjs title +%lld] set '%s' doc=%p view=%p parent=%d\n",
+                    (long long)qjsTraceMs(),
+                    jsValStr(ctx, val).left(24).toUtf8().constData(),
+                    (void *)w->node.handle(), (void *)v,
+                    (v && v->part() && v->part()->parentPart()) ? 1 : 0);
+        }
         doc.setTitle(mk(jsValStr(ctx, val)));
     }
     return JS_UNDEFINED;
@@ -675,6 +697,8 @@ static void qjsTimerFreeRec(::JSContext *ctx, QjsTimerRec *rec)
 // the JSValue references can be freed on a live context.  Idempotent.
 static void qjsTimerKillAll()
 {
+    if (qjsTraceEnabled())
+        fprintf(stderr, "[qjs timer +%lld] killall n=%d\n", (long long)qjsTraceMs(), g_qjsTimers.size());
     for (auto it = g_qjsTimers.begin(); it != g_qjsTimers.end(); ++it) {
         QjsTimerRec *rec = it.value();
         if (rec->t) {
@@ -692,6 +716,9 @@ static void qjsTimerKillAll()
 static ::JSValue jsWindowTimer(::JSContext *ctx, ::JSValueConst, int argc,
                                ::JSValueConst *argv, int magic)
 {
+    if (qjsTraceEnabled())
+        fprintf(stderr, "[qjs timer +%lld] create magic=%d argc=%d ctx=%p live=%p\n",
+                (long long)qjsTraceMs(), magic, argc, (void *)ctx, (void *)g_qjsTimerCtx);
     if (argc < 1 || !g_qjsTimerCtx || ctx != g_qjsTimerCtx)
         return ::JS_NewInt32(ctx, 0);
     QjsTimerRec *rec = new QjsTimerRec;
@@ -728,6 +755,9 @@ static ::JSValue jsWindowTimer(::JSContext *ctx, ::JSValueConst, int argc,
     QObject::connect(t, &QTimer::timeout, t, [t]() {
         const int id = g_qjsTimerIds.value(t, 0);
         QjsTimerRec *rec = g_qjsTimers.value(id, nullptr);
+        if (qjsTraceEnabled())
+            fprintf(stderr, "[qjs timer +%lld] fire id=%d rec=%p live=%p\n",
+                    (long long)qjsTraceMs(), id, (void *)rec, (void *)g_qjsTimerCtx);
         if (!rec || !g_qjsTimerCtx)
             return;
         ::JSContext *ctx2 = g_qjsTimerCtx;
@@ -747,7 +777,15 @@ static ::JSValue jsWindowTimer(::JSContext *ctx, ::JSValueConst, int argc,
         }
         if (JS_IsException(r)) {
             ::JSValue e = JS_GetException(ctx2);
+            if (qjsTraceEnabled()) {
+                const char *s = JS_ToCString(ctx2, e);
+                fprintf(stderr, "[qjs timer] callback exception: %s\n",
+                        s ? s : "(null)");
+                if (s) ::JS_FreeCString(ctx2, s);
+            }
             JS_FreeValue(ctx2, e);
+        } else if (qjsTraceEnabled()) {
+            fprintf(stderr, "[qjs timer] callback ok id=%d\n", id);
         }
         JS_FreeValue(ctx2, r);
         if (!rec->repeat) {
@@ -756,6 +794,9 @@ static ::JSValue jsWindowTimer(::JSContext *ctx, ::JSValueConst, int argc,
         }
     });
     t->start();
+    if (qjsTraceEnabled())
+        fprintf(stderr, "[qjs timer +%lld] started id=%d interval=%d active=%d\n",
+                (long long)qjsTraceMs(), rec->id, t->interval(), (int)t->isActive());
     return ::JS_NewInt32(ctx, rec->id);
 }
 
@@ -838,7 +879,7 @@ struct QJsDomBridge::Impl
     // Dispatch an event through QuickJS. First checks the listener table
     // (addEventListener callbacks); if handlerSource is non-empty, also
     // evaluates the inline handler code. Returns true if QuickJS handled
-    // the event (KJS must NOT re-run it).
+    // the event (legacy dispatch must NOT re-run it).
     bool dispatchEvent(DOM::EventImpl *event, DOM::NodeImpl *target,
                        const QString &handlerSource)
     {
@@ -1031,6 +1072,7 @@ struct QJsDomBridge::Impl
 
     Impl()
     {
+        if (qjsTraceEnabled()) fprintf(stderr, "[qjs +%lld] IMPL_CTOR\n", (long long)qjsTraceMs());
         enableNode = flagOn("KHTML_QJS_NODE");
         enableElement = flagOn("KHTML_QJS_ELEMENT");
         enableDocument = flagOn("KHTML_QJS_DOCUMENT");
@@ -1054,6 +1096,7 @@ struct QJsDomBridge::Impl
 
     ~Impl()
     {
+        if (qjsTraceEnabled()) fprintf(stderr, "[qjs +%lld] IMPL_DTOR\n", (long long)qjsTraceMs());
         qjslog2("IMPL_DESTRUCTOR_BEGIN", rt, ctx);
         // Pending timers reference JSValues of this world — they must die
         // with it, never after.
@@ -1116,10 +1159,14 @@ struct QJsDomBridge::Impl
             "window",
             JS_DupValue(ctx, documentObj)
         );
-        // window.innerWidth / innerHeight (magic 0/1) on the window object
-        // — live getters so resize is reflected without re-instantiation.
+        // window.innerWidth / innerHeight / devicePixelRatio (magic 0/1/2)
+        // on the window object — live getters so resize is reflected
+        // without re-instantiation. CSS-px viewport: innerWidth is the
+        // logical size and devicePixelRatio the raster scale (Safari
+        // semantics for a web process asked to lay out at CSS pixels).
         defCgetset("innerWidth", windowViewportGetter, nullptr, 0, documentObj);
         defCgetset("innerHeight", windowViewportGetter, nullptr, 1, documentObj);
+        defCgetset("devicePixelRatio", windowViewportGetter, nullptr, 2, documentObj);
 
         // window timers (setTimeout / setInterval / clearTimeout /
         // clearInterval / requestAnimationFrame / cancelAnimationFrame):

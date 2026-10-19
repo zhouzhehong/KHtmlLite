@@ -39,13 +39,9 @@ public:
     AtomicString(const char *s) : m_string(add(s)) { }
     AtomicString(const QChar *s, int length) : m_string(add(s, length)) { }
     AtomicString(const QChar *s) : m_string(add(s)) { }
-    //AtomicString(const KJS::UString& s) : m_string(add(s)) { }
-    //AtomicString(const KJS::Identifier& s) : m_string(add(s)) { }
     AtomicString(DOMStringImpl *imp) : m_string(add(imp)) { }
     AtomicString(AtomicStringImpl *imp) : m_string(imp) { }
     AtomicString(const DOMString &s) : m_string(add(s.implementation())) { }
-
-    //static AtomicStringImpl* find(const KJS::Identifier&);
 
     operator const DOMString &() const
     {
@@ -55,8 +51,6 @@ public:
     {
         return m_string;
     };
-
-    //operator KJS::UString() const;
 
     AtomicStringImpl *impl() const
     {
@@ -116,8 +110,6 @@ private:
     static DOMStringImpl *add(const QChar *, int length);
     static DOMStringImpl *add(const QChar *);
     static DOMStringImpl *add(DOMStringImpl *);
-    //static PassRefPtr<DOMStringImpl> add(const KJS::UString&);
-    //static PassRefPtr<DOMStringImpl> add(const KJS::Identifier&);
 };
 
 inline bool operator==(const AtomicString &a, const AtomicString &b)

@@ -3255,7 +3255,7 @@ DocumentImpl *WindowEventTargetImpl::eventTargetDocument()
 
 void *WindowEventTargetImpl::window()
 {
-    // KF5JS Window removed; QuickJS exposes no equivalent window object.
+    // The legacy engine Window is gone; QuickJS exposes no equivalent object.
     return nullptr;
 }
 // ----------------------------------------------------------------------------

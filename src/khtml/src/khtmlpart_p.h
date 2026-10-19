@@ -69,7 +69,6 @@ class KFindDialog;
 class KCodecAction;
 class KUrlLabel;
 class KJavaAppletContext;
-class KJSErrorDlg;
 class KToggleAction;
 class KHTMLViewBar;
 
@@ -131,7 +130,7 @@ public:
         m_haveEncoding = false;
         m_activeFrame = nullptr;
         m_ssl_in_use = false;
-        m_jsedlg = nullptr;
+        m_devicePixelRatio = 1.0;
         m_formNotification = KHTMLPart::NoNotification;
 
         m_cacheId = 0;
@@ -199,11 +198,9 @@ public:
         m_focusNodeRestored = false;
         m_opener = nullptr;
         m_openedByJS = false;
-        m_newJSInterpreterExists = false;
         m_jobspeed = 0;
         m_statusBarWalletLabel = nullptr;
         m_statusBarUALabel = nullptr;
-        m_statusBarJSErrorLabel = nullptr;
 #ifndef KHTML_NO_WALLET
         m_wq = nullptr;
 #endif
@@ -235,7 +232,6 @@ public:
     KUrlLabel *m_statusBarIconLabel;
     KUrlLabel *m_statusBarWalletLabel;
     KUrlLabel *m_statusBarUALabel;
-    KUrlLabel *m_statusBarJSErrorLabel;
     KUrlLabel *m_statusBarPopupLabel;
     QList<QPointer<KHTMLPart> > m_suppressedPopupOriginParts; // We need to guard these in case the origin
     // is a child part.
@@ -254,8 +250,8 @@ public:
     int m_runningScripts;
     bool m_bOpenMiddleClick;
     bool m_bJScriptEnabled;
-    bool m_bJScriptDebugEnabled;
     bool m_bJavaEnabled;
+    qreal m_devicePixelRatio;
     bool m_bPluginsEnabled;
     bool m_bJScriptForce;
     bool m_bJScriptOverride;
@@ -333,7 +329,6 @@ public:
     QAction *m_paFindAheadLinks;
     QAction *m_paPrintFrame;
     QAction *m_paSelectAll;
-    QAction *m_paDebugScript;
     QAction *m_paDebugDOMTree;
     QAction *m_paDebugRenderTree;
     QAction *m_paStopAnimations;
@@ -404,13 +399,10 @@ public:
     KHTMLFind m_find;
     StorePass m_storePass;
 
-    void *m_jsedlg;
-
     //QGuardedPtr<KParts::Part> m_activeFrame;
     KParts::Part *m_activeFrame;
     QPointer<KHTMLPart> m_opener;
     bool m_openedByJS;
-    bool m_newJSInterpreterExists; // set to 1 by setOpenedByJS, for window.open
 
     void setFlagRecursively(bool KHTMLPartPrivate::*flag, bool value);
 

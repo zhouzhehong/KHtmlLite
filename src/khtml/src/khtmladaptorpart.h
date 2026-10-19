@@ -25,7 +25,7 @@
 #include <kparts/browserextension.h>
 #include <kpluginfactory.h>
 
-// The legacy KJS DBus scripting interface has been removed along with KF5JS.
+// No DBus scripting interface in this build.
 
 class ScriptingInterface
 {

@@ -61,8 +61,6 @@ namespace khtmlImLoad
 class CanvasImage;
 }
 
-namespace KJS { class WebGLContext; }
-
 namespace DOM
 {
 

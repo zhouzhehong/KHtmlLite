@@ -72,7 +72,7 @@ include(ECMAddQch)
 # For a future Qt6/KF6 port: set QT_VERSION_MAJOR to 6 and adjust
 # Qt6/KF6 port: set QT_VERSION_MAJOR to 6 and adjust the find_package calls
 # below. Note: KHTML was removed from KF6, so a full Qt6 port requires
-# replacing KF5Parts, etc. The legacy KF5JS interpreter has been removed;
+# replacing KF5Parts, etc. The legacy script interpreter has been removed;
 # QuickJS is the only execution engine.
 # =============================================================================
 set(QT_VERSION_MAJOR 5 CACHE STRING "Qt major version (5 or 6)")

@@ -50,7 +50,7 @@ int ScriptProxy::s_count = 0;
 
 namespace {
 
-// A KJS-free replacement for the old KJS::JSLazyEventListener. It wraps an
+// A self-contained replacement for the historic lazy event listener. It wraps an
 // inline event-handler body (e.g. the value of an onclick attribute). At
 // dispatch time it resolves the KHTMLPart from the event target and feeds the
 // retained source to QuickJS. It holds no interpreter state.
@@ -96,7 +96,6 @@ private:
 ScriptProxy::ScriptProxy(khtml::ChildFrame *frame)
 {
     m_frame = frame;
-    m_debugEnabled = false;
     m_running = 0;
     m_handlerLineno = 0;
     m_qjs = nullptr;
@@ -203,15 +202,15 @@ bool ScriptProxy::isRunningScript()
 
 void ScriptProxy::clear()
 {
-    // KF5JS interpreter removed. The QuickJS bridge keeps its own document
-    // state; dropping it here would force a runtime rebuild on next page load.
+    // The QuickJS bridge keeps its own document state; dropping it here would
+    // force a runtime rebuild on the next page load.
 }
 
 DOM::EventListener *ScriptProxy::createHTMLEventHandler(const QString &sourceUrl, const QString &name, const QString &code, DOM::NodeImpl *node, bool svg)
 {
     // Hand back a self-contained inline listener that retains only the raw
-    // handler source. It parses nothing with KJS; at dispatch time it feeds
-    // the source to QuickJS.
+    // handler source. Nothing is parsed here; at dispatch time the source is
+    // fed to QuickJS.
     Q_UNUSED(node);
     Q_UNUSED(svg);
     return new InlineQJSListener(code, sourceUrl, m_handlerLineno, name);
@@ -219,29 +218,9 @@ DOM::EventListener *ScriptProxy::createHTMLEventHandler(const QString &sourceUrl
 
 void ScriptProxy::finishedWithEvent(const DOM::Event &event)
 {
-    // Used to tell the KJS interpreter to release its wrapper for this event.
-    // QuickJS owns no such cache, so this is a no-op.
+    // QuickJS owns no per-event listener wrapper cache, so there is nothing
+    // to release.
     Q_UNUSED(event);
-}
-
-void ScriptProxy::setDebugEnabled(bool enabled)
-{
-    m_debugEnabled = enabled;
-}
-
-bool ScriptProxy::debugEnabled() const
-{
-    return m_debugEnabled;
-}
-
-void ScriptProxy::showDebugWindow(bool /*show*/)
-{
-    // KJS debugger removed.
-}
-
-bool ScriptProxy::paused() const
-{
-    return false;
 }
 
 // Helper method, so that all classes which need jScript() don't need to be added

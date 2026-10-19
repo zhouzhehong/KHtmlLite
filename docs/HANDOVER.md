@@ -214,23 +214,55 @@ KHTML（5.116）改造的双进程浏览器：`khtml_browser.exe`（UI/合成）
   /bg_smoke/scroll_smoke/tombstone_probe/tit le_probe(三路径)/resize_probe
   （白闪 0.00%×2 相位）。启动采集 bing 冷启 TTFF **1545ms**（渲染 pass 4-21ms，
   大隙为网络/子资源，与既测 1694ms 同水位；5e 的 3106ms 为 file:// 冷页基线）。
-- **遗留（设计已定未施工）**：真 deviceScaleFactor CSS-px 视口（当前 CSS px=
-  物理 px，150% 屏元素比 OS 惯例小 1/3 但全清晰）。正解=渲染端逻辑尺寸
-  KHTMLView + 画布物理尺寸 + QPainter scale(dpr) 光栅缩放，KHTML 现有
-  setZoomFactor 是"放大镜"（layout 宽不随 zoom 收窄，render_canvas.cpp:171
-  m_width=visibleWidth）不可直接用；damage→瓦片需 ×dpr 换算，涉及已验证的
-  瓦片/滚动路径，独立成轮施工。
+
+## 5g. 真 deviceScaleFactor CSS-px 视口 + KJS 清零复查（2026-10-19，全实测）
+
+- **CSS-px 视口（Safari web-process 语义）**：浏览器只发**逻辑尺寸**（CSS px）
+  + dpr（resize 消息带 `dpr` 字段）；渲染端 KHTMLView 按逻辑尺寸布局，帧画布 =
+  逻辑 × dpr，渲染 pass `QPainter::scale(dpr,dpr)` **直接光栅到设备网格**
+  （1.5× 下的文字是真 1.5× 栅格化，不是逻辑图放大）。引擎 damage 全程 CSS px，
+  瓦片命中测试处 `QTransform::fromScale(dpr,dpr)` 映射一次；滚动条带用逻辑
+  坐标，浏览器 scroll authority 用**绝对**偏移 ×dpr（不用增量，长滚动无累积
+  取整误差）。瓦片协议/画布大小零改动。
+- **实测（tests/dpr_probe.py，直驱渲染进程）**：resize {680,356,dpr 1.5} →
+  页面报 `innerWidth=680 innerHeight=356 r=1.5`；tiles 报 `fw=1020 fh=534`
+  （= 680×1.5 / 356×1.5）→ 四项断言全 OK（PASS）。
+- **window.devicePixelRatio 桥**：KHTMLPart::setDevicePixelRatio + window 活
+  getter（magic 2）；innerWidth/innerHeight 语义回归 WebCore（CSS px）。
+- **输入坐标隐性 bug 修复**：旧模型 renderer 控件是物理像素、浏览器早已发
+  CSS px → 点击落点偏 1/1.5。新模型两者同为 CSS px。tests/input_coord_probe.py
+  在 (100,75)/(580,275) 两点点击两个目标全中（PASS）。
+- **title 传播真缺陷（探针撞出来的）**：原实现只在 `completed` 发一次 title
+  消息，加载后 `document.title` 的变更（计时器回调/未读计数/媒体状态）全部
+  丢弃 → 标签永久停在加载时标题。现在 caption 每次变化即发（m_lastSentTitle
+  去重，completed 同样去重）。排查用 KHTML_QJS_TRACE=1（create/fire/
+  callback ok 带毫秒戳）证明计时器桥本身没问题，问题在出口。
+- **KJS 清零复查（src/ 全树零命中）**：删上游 test_regression 三件套 + 构建
+  目标；libkhtml.map 删 kjs_html_init/KJS::* 四条导出模式/KJSCPUGuard；
+  kjs_html_STAT_SRCS → khtml_ecma_SRCS；删 KHTMLSettings 五组 KJSWindow*Policy
+  枚举+getter+位域（零调用者死 API）；删 KJSErrorDlg/jsError* 一族、
+  jScriptInterpreter()、setDebugScript/slotDebugScript/m_paDebugScript/
+  m_newJSInterpreterExists/m_bJScriptDebugEnabled、ScriptProxy 调试器空实现
+  与 paused() 分支、KJS_VERBOSE 宏；AtomicString 注释块、KJS 命名空间前向
+  声明、各文件 kjs 注释全清。校验命令：`\bKJS\b|KF5JS|kjs_|kjs` → 0 命中。
+- **回归账目**：tile_protocol/dpr_probe/input_coord_probe/bg_smoke/scroll_smoke/
+  resize_probe（白闪 0.00%×2、内容 >90% @0.228s、settle 0.27s）/tombstone/
+  title_probe(三路径) 全绿；quickjs 回归页标题 'QuickJS Test - OK' 正确上报；
+  bing 冷启 TTFF **1986ms**（历史区间 1545-3106，网络主导）。
+- **已知观察项（非本轮引入）**：同一导航内脚本执行两次、QuickJS World 随之
+  重建（title 可见 pending→ok→pending 回退，约 1s 后发生），疑似 KHTML 编码
+  探测触发的二次解析，会重置页面 JS 状态。记为下一轮候选。
 
 ## 6. 正在/马上要做的
 A. ~~拆那 1.1s~~ **已完成**（字体枚举缓存 + 图标懒加载，构造 1.1s→~0.35s，TTFF 2.0→1.1s）。
    下一步同部位残账：渲染进程镜像加载+socket 连接 ~500ms（每次新标签都付），
    ~~可做渲染进程预热~~ **prewarm 已落地**（本轮 quiet 标签即走领养路径）；
    残账是 load kicked→browser connected 1617ms 的对齐开销（见 5e 启动基线）。
-B. **真 deviceScaleFactor CSS-px 视口**（见 5f 遗留：设计已定，涉及瓦片 damage
-   ×dpr 换算，独立成轮）。QSettings 墓碑持久化（冷重启秒回）仍待做。
+B. ~~真 deviceScaleFactor CSS-px 视口~~ **已完成（5g）**。QSettings 墓碑
+   持久化（冷重启秒回）仍待做。
 C. 空闲 CPU 归零（挂起标签的计时器/渲染进程冻结）。
-D. ~~必应等现代重型站的 JS 转译流水线开销~~ **已删**（transpile 机器整体移除，
-   QuickJS 原生 ES2020 直通，见 5f）。
+D. **同导航二次解析**（5g 观察项：脚本跑两次、JS World 重建、约 1s 后发生），
+   疑编码探测重载 → 排查 KHTMLPart::begin 的二次调用与 encoding 分支。
 
 ## 7. 交付给下一个会话的操作步骤
 1. `cd C:\Users\zhouzhehong\Desktop\KHtmlLite`

@@ -650,7 +650,7 @@ const unsigned PHI = 0x9e3779b9U;
 template<typename FoldTag>
 static unsigned calcHash(const QChar *s, unsigned l, FoldTag foldMode)
 {
-    // Note: this is originally from KJS
+    // Note: this hash algorithm is inherited from the original engine
     unsigned hash = PHI;
     unsigned tmp;
 
