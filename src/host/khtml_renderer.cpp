@@ -547,10 +547,11 @@ public:
             // load completion: pages routinely change document.title after
             // load (unread counters, media playing, test runners, and any
             // setTimeout callback). Those used to be dropped here and the tab
-            // kept the load-time title forever.
-            if (c != m_lastSentTitle) {
+            // kept the load-time title forever.  The dedupe only records a
+            // title that was actually shipped — a caption that arrives before
+            // the browser connected must not be marked as delivered.
+            if (c != m_lastSentTitle && sendMessage(QStringLiteral("title"), c)) {
                 m_lastSentTitle = c;
-                sendMessage(QStringLiteral("title"), c);
             }
         });
         connect(m_view, QOverload<>::of(&KParts::ReadOnlyPart::completed), this, [this]() {
@@ -569,9 +570,9 @@ public:
                 if (v) v->setContentsPos(m_pendingRestoreX, m_pendingRestoreY);
                 m_hasPendingRestore = false;
             }
-            if (m_nativeTitle != m_lastSentTitle) {
+            if (m_nativeTitle != m_lastSentTitle
+                    && sendMessage(QStringLiteral("title"), m_nativeTitle)) {
                 m_lastSentTitle = m_nativeTitle;
-                sendMessage(QStringLiteral("title"), m_nativeTitle);
             }
             sendState();
         });
@@ -1282,6 +1283,13 @@ private slots:
         // exact clock skew for startup-log alignment (report script uses it).
         sendMessage(QStringLiteral("ready"),
                     QString::number(StartupLog::clock().elapsed()));
+        // Catch-up: the page's <title> is usually parsed before the browser
+        // connects, so the caption change happened while sendMessage had no
+        // socket. Ship the title the moment the channel exists.
+        if (!m_nativeTitle.isEmpty() && m_nativeTitle != m_lastSentTitle
+                && sendMessage(QStringLiteral("title"), m_nativeTitle)) {
+            m_lastSentTitle = m_nativeTitle;
+        }
         m_frameTimer->start();
     }
 
@@ -1385,14 +1393,15 @@ private slots:
     }
 
 private:
-    void sendMessage(const QString &type, const QString &data)
+    bool sendMessage(const QString &type, const QString &data)
     {
-        if (!m_socket) return;
+        if (!m_socket) return false;
         QJsonObject obj;
         obj[QStringLiteral("type")] = type;
         obj[QStringLiteral("data")] = data;
         m_socket->write(QJsonDocument(obj).toJson(QJsonDocument::Compact) + "\n");
         m_socket->flush();
+        return true;
     }
 
     // Report the webpage cursor shape to the Browser over the existing IPC

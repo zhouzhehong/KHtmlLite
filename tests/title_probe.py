@@ -52,13 +52,26 @@ def drive(case, url, navigate_to=None, browser_dance=False):
     titles = []
     try:
         pipe = Pipe(sock)
-        # Drain the ready handshake.
+        # Drain the ready handshake.  Messages that arrive in the SAME batch
+        # as "ready" must not be dropped: the renderer ships its catch-up
+        # title right after the handshake (a page whose <title> was parsed
+        # before the browser connected), and a real browser processes every
+        # message in order.
         got_ready = False
         end = time.time() + 5
         while time.time() < end and not got_ready:
             for _, m in pipe.recv(0.3):
-                if m.get("type") == "ready":
+                t = m.get("type")
+                if t == "ready":
                     got_ready = True
+                elif t == "title":
+                    titles.append((round(time.time() % 60, 1), m.get("data")))
+                elif t == "error":
+                    titles.append((round(time.time() % 60, 1),
+                                   f"<error:{m.get('data')}>"))
+                elif t == "url":
+                    titles.append((round(time.time() % 60, 1),
+                                   f"<url:{m.get('data')}>"))
         if navigate_to:
             time.sleep(1.0)  # let about:blank settle first (prewarm reality)
             if browser_dance:
