@@ -264,9 +264,11 @@ KHTML（5.116）改造的双进程浏览器：`khtml_browser.exe`（UI/合成）
   （Qt≥5.14，须在 QApplication 构造前）。修复后 ratio=1.50、
   availableGeometry=1280x672、页面自报 `window.devicePixelRatio='r1.5'`。
 - **默认窗口尺寸**：`resize(1024,720)` 是逻辑像素，在 150% 屏上会变成
-  1536x1080 物理（≈满屏）。现在按屏幕 ratio 反算，恢复启用 High-DPI 之前的
+  1536x1080 物理（≈满屏）。当时按屏幕 ratio 反算，恢复启用 High-DPI 之前的
   **物理足迹**（1024x720 设备像素，本机实测窗口 1047x776、客户区 1025x720），
   并居中到 availableGeometry。
+  **〔此不变量已被 5i 根因 B 推翻〕**683x480 逻辑只占工作区 53% 宽，页面
+  视口 ~641 CSpx，响应式站点落窄屏大字布局；现行方案为工作区 94%/92%。
 - **状态栏参数读数移除**：右下角"内存/CPU/GPU/压力等级"标签在 150% 下被
   状态栏高度裁切（只露半行字 → 乱码观感），且属诊断信息而非浏览器 UI。
   已删除整个 QStatusBar 与该标签；内存压力监测逻辑（缓存清理/标签驱逐）
@@ -288,6 +290,69 @@ KHTML（5.116）改造的双进程浏览器：`khtml_browser.exe`（UI/合成）
 - **启动基线**：bing 冷启 TTFF **1601ms**（取整修到 1.5 后光栅像素少 44%，
   比 2.0 时代的 1986ms 更好；历史区间 1514-3106）。
 
+## 5i. 「网页 UI 过大」真根因：引擎 CSS DPI 双计 + 窗口策略（2026-10-20，全实测）
+
+5h 修的是 **Qt 侧**（取整 2.0）；本轮修的是 **引擎侧 + 窗口侧** 三个叠加根因。
+用户观感"网页 UI 又调那么大"由 5g/5h 的 dpr 光栅正确放大后彻底暴露：
+
+- **根因 A（主根因）引擎 CSS DPI 双计**：渲染进程无 Qt High-DPI 缩放，
+  `DocumentImpl::logicalDpiY()` 返回 `m_paintDevice->logicalDpiY()` = 真实屏
+  144 → `cssstyleselector.cpp` `toPix = 144/72 = 2.0` → **medium = 12pt×2 =
+  24 CSS px**（Chrome/KHTML 约定 16），再叠 1.5× 光栅 → 屏幕 36 物理 px。
+  实测铁证（tests/fontdpi.png）：默认 `1em` = 36 物理 px（=24 CSpx，错）；
+  `16px` 显式 = 24 物理 ✓；`24px` = 36 物理 ✓（CSpx×1.5 光栅正确）；
+  `12pt` = 36 物理（应 24）。
+  修复：`logicalDpiY()` 屏幕路径返回 **96**（CSS 2.1 §4.3.2 参考 DPI；dpr
+  只在光栅处乘一次），`attach()` 的 `computeFontSizes` 改走 `logicalDpiY()`
+  （原来直接 `m_paintDevice->logicalDpiY()` 绕过）；**打印路径保留旧行为**
+  （`khtml::printpainter` 非空时仍返回 paint device DPI——打印布局按打印机
+  设备像素做，pt/cm/in 必须按打印 DPI 换算）。
+- **根因 B 窗口策略**：5h 的"按屏 ratio 反算恢复 1024x720 物理足迹"得到
+  683x480 逻辑 = 工作区 53% 宽 → 页面视口只有 ~641 CSpx，响应式站点落入
+  窄屏大字布局（观感"UI 大"的第二来源）。改为桌面浏览器惯例：工作区
+  94%/92%（上限 1280x800 逻辑、下限 720x480 客户区），预留 Win11 边框
+  预算 16x40 保证外框不越界，`qBound` 用 `qMin(lower,max)` 防 min>max
+  断言。实测 client 1805x927 物理（1203x618 逻辑），外框 1827x983
+  （1218x655 逻辑）≤ avail 1280x672，页面视口 **1161x553 CSpx**，
+  bing 呈桌面布局（导航横排），与 Chrome@150% 同窗口观感一致。
+- **根因 C 首屏 dpr 竞态**：dpr 原来只能靠 socket resize 下发，首个页面在
+  dpr=1.0 下解析（file:// 直载自报 'r1'），`@media (resolution)` 按错值
+  求值且**永不重算**。修复：浏览器启动 renderer 命令行带 `--dpr`（cold
+  spawn 与 prewarm 两处），renderer 在首次 loadInitial 前生效；resize 分支
+  先 `setDevicePixelRatio` 再 widget resize；`KHTMLPart::setDevicePixelRatio`
+  值变化时 `m_doc->updateStyleSelector()`（修 MQ 永不重算）。实测 file://
+  直载内联脚本首报 `'sync r1.5'`。
+- **连带修复（媒体查询语义）**：`device_pixel_ratio` MQ 原来用
+  `zoomFactor/100`（恒 1.0），改用 `part->devicePixelRatio()`；`resolution`
+  MQ 改 `96×dpr`（=144dpi）；新增真实网页方言别名 `-webkit-device-pixel-
+  ratio / -webkit-min-… / -webkit-max-…`（分别挂 NoPrefix/MinPrefix/MaxPrefix
+  eval）。实测三条 MQ（min-dpr 1.5 / resolution 144dpi / dpr 1.5）全命中。
+- **连带修复（QuickJS 桥 window===globalThis 语义）**：
+  `innerWidth/innerHeight/devicePixelRatio` 原来只装在 window wrapper 上，
+  页面裸写 `innerWidth` 报 ReferenceError 且**整段脚本早断**（无 fallback
+  引擎）；现同时装在 global 上，getter 以 global 为 this 时经
+  `global.window` 兜底取 wrapper（含 JS_IsObject/JS_IsException 防护）。
+  同模式缺口 `window.document / window.window` 返回 undefined（高频写法
+  `window.document.getElementById` 直接 TypeError）→ 在 wrapper 上补挂两个
+  自引用。实测 `R wd:true wdId:1 self:true bare:number dpr:number`。
+- **修复后实测**（tests/fontdpi2.png / mq_dpr.png，DPI-aware 截图）：
+  默认 `1em` = 24 物理 px（16 CSpx ✓）；`16px` = 24 ✓；`24px` = 36 ✓；
+  `12pt` 的 1em = 24 ✓（修前 36）。
+- **回归（全绿 9/9，两轮）**：tile_protocol / dpr_probe / input_coord_probe
+  / browser_click_probe / bg_smoke / title_probe(三路径) / scroll_smoke /
+  tombstone_probe / resize_probe。（input_coord_probe 一次时序抖动系 5g
+  已知"同导航二次解析"观察项，重跑 PASS。）
+- **验证流程（按用户要求）**：5 代理评审选方案 → 实施 → 5 代理独立核实
+  （css-dpi-semantics / dpi-pipeline-2 / bridge-global-scope /
+  regression-risk / product-behavior）。核实共识：无阻塞 bug，窗口越界/
+  打印注释失实/首屏竞态/MQ 永不重算/-webkit- 缺失五项已在核实后全部补修。
+- **记档不阻塞（核实代理排出，按价值排序）**：matchMedia（JS 侧 MQ 探测，
+  本轮 CSS 侧已修但 JS 侧仍 ReferenceError）> location/navigator/console/
+  getComputedStyle（"双侧皆缺"的裸标识符家族，任何缺失都会整段早断）>
+  窗口几何 QSettings 持久化 > 滚动条 QSS 定宽（150% 下 ~28px 观感）>
+  dppx 单位（需动 bison parser）> srcset/sizes > iframe 子 part dpr 传播
+  （KService 依赖，暂不可用）> 跨屏 ScreenChangeInternal。
+
 ## 6. 正在/马上要做的
 A. ~~拆那 1.1s~~ **已完成**（字体枚举缓存 + 图标懒加载，构造 1.1s→~0.35s，TTFF 2.0→1.1s）。
    下一步同部位残账：渲染进程镜像加载+socket 连接 ~500ms（每次新标签都付），
@@ -300,6 +365,14 @@ D. **同导航二次解析**（5g 观察项：脚本跑两次、JS World 重建�
    疑编码探测重载 → 排查 KHTMLPart::begin 的二次调用与 encoding 分支。
 E. **KHTML CSSOM 内联样式写入**（5h 缺口）：`style.backgroundColor=` 无效、
    `style.background=` 画残框 → 查 docSetProp 的 style 包装/属性转发。
+F. **JS 裸标识符家族**（5i 记档，缺失即整段脚本早断，按真实页面频率）：
+   matchMedia（MQ 的 JS 侧探测，本轮 CSS 侧已修）> location / navigator /
+   console / getComputedStyle > alert/confirm > screen/history/performance。
+G. **窗口体验**（5i 记档）：几何 QSettings 持久化（现在每次启动回默认
+   94%/92%）；滚动条 QSS 定宽（150% 下 ~28px 观感差）。
+H. **低层单位与传播**（5i 记档）：dppx 单位（需动 bison parser）；
+   srcset/sizes 高清图选择；iframe 子 part dpr 传播（KService 依赖暂缺）；
+   跨屏 ScreenChangeInternal。
 
 ## 7. 交付给下一个会话的操作步骤
 1. `cd C:\Users\zhouzhehong\Desktop\KHtmlLite`

@@ -116,3 +116,12 @@ tests/click_*.png
 tests/*_stderr.txt
 tests/run_*.txt
 tests/click_probe_out.txt
+
+# Regression-run outputs (this round: font/DPI/MQ/viewport probes)
+tests/r_*.txt
+tests/r2_*.txt
+tests/fontdpi*.png
+tests/mq_dpr.png
+tests/vp_*.png
+tests/bing_*.png
+tests/*_err.txt

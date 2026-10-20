@@ -41,6 +41,7 @@
 #include <css/css_stylesheetimpl.h>
 #include <misc/seed.h>
 #include <misc/loader.h>
+#include <misc/helper.h>
 #include <ecma/js_proxy.h>
 
 #include <QStack>
@@ -1564,7 +1565,10 @@ void DocumentImpl::attach()
     m_styleSelector = new CSSStyleSelector(this, m_usersheet, m_styleSheets, m_url,
                                            !inCompatMode());
     m_render = new(m_renderArena.get()) RenderCanvas(this, m_view);
-    m_styleSelector->computeFontSizes(m_paintDevice->logicalDpiY(), m_view ? m_view->part()->fontScaleFactor() : 100);
+    // NOTE: go through logicalDpiY(), not m_paintDevice->logicalDpiY(): the
+    // font-size table must use the same CSS reference DPI (96) as every other
+    // length conversion, otherwise the default font silently stays 1.5x big.
+    m_styleSelector->computeFontSizes(logicalDpiY(), m_view ? m_view->part()->fontScaleFactor() : 100);
     recalcStyle(Force);
 
     RenderObject *render = m_render;
@@ -1646,7 +1650,24 @@ khtml::Tokenizer *DocumentImpl::createTokenizer()
 
 int DocumentImpl::logicalDpiY()
 {
-    return m_paintDevice->logicalDpiY();
+    // Printing: keep the historical behaviour — absolute units map to the
+    // PRINT device's pixel grid (print layout happens in printer device
+    // pixels, see KHTMLView::print), so pt/cm/in must convert with the
+    // printer's DPI, not the CSS reference.
+    if (khtml::printpainter && m_paintDevice)
+        return m_paintDevice->logicalDpiY();
+    // Screen: the CSS reference DPI, per CSS 2.1 §4.3.2.  Absolute CSS units
+    // (pt/cm/in/mm) and the "medium" font keyword convert against 96 dpi,
+    // NOT against the screen's physical density.  The device scale factor is
+    // applied exactly once, when the renderer rasters the CSS-px layout onto
+    // the physical frame (KHTMLPart::setDevicePixelRatio +
+    // RendererHost::grabFrame's QPainter::scale(dpr)).  Returning the paint
+    // device's real DPI here made every length convert at 144/72 = 2.0 on a
+    // 150% display, so "medium" became 12pt*2 = 24 CSS px (Chromium/KHTML
+    // convention: 16 CSS px) and every em/rem/min-font size came out 1.5x
+    // too large on top of the 1.5x raster scale -- the page looked 1.5x
+    // zoomed versus Chrome at the same window size.
+    return 96;
 }
 
 void DocumentImpl::open(bool clearEventListeners)

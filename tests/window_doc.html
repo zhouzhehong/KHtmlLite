@@ -1,0 +1,11 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>wd</title></head><body>
+<div id="t"></div>
+<script>
+var ok=[];
+ok.push('wd:'+!!window.document);
+ok.push('wdId:'+(window.document.getElementById('t')?1:0));
+ok.push('self:'+(window.window===window));
+ok.push('bare:'+(typeof innerWidth));
+ok.push('dpr:'+(typeof window.devicePixelRatio));
+document.title='R '+ok.join(' ');
+</script></body></html>

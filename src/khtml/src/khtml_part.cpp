@@ -1125,7 +1125,19 @@ void KHTMLPart::setStatusMessagesEnabled(bool enable)
 
 void KHTMLPart::setDevicePixelRatio(qreal dpr)
 {
-    d->m_devicePixelRatio = (dpr > 0.0 && dpr < 8.0) ? dpr : 1.0;
+    const qreal clamped = (dpr > 0.0 && dpr < 8.0) ? dpr : 1.0;
+    if (qFuzzyCompare(d->m_devicePixelRatio, clamped))
+        return;
+    d->m_devicePixelRatio = clamped;
+    // Media queries read the ratio at style-selector time (see
+    // css_mediaquery.cpp device_pixel_ratio/resolution evals), so a changed
+    // ratio must rebuild the style or (device-pixel-ratio: 2) / (resolution)
+    // keep answering with the previous value for the rest of the page's
+    // life.  Pure ratio changes never alter CSS-px layout, so this is safe
+    // during the initial load too (attach() computes styles afterwards
+    // anyway; the guard skips the no-op).
+    if (d->m_doc && d->m_view)
+        d->m_doc->updateStyleSelector();
 }
 
 qreal KHTMLPart::devicePixelRatio() const

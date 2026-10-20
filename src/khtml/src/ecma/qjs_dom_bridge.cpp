@@ -576,8 +576,24 @@ static qint64 qjsTraceMs()
 // document object. magic 0 = width, 1 = height, 2 = device pixel ratio.
 static ::JSValue windowViewportGetter(::JSContext *ctx, ::JSValueConst this_val, int magic)
 {
+    // this_val is the wrapper when called as window.innerWidth, or the
+    // global object for bare `innerWidth` (both are defined).  Primitives
+    // (someone stole the receiver with .call(...)) have no wrapper at all.
+    if (!JS_IsObject(this_val))
+        return JS_UNDEFINED;
     NodeWrap *w = unwrapNode(ctx, this_val);
-    if (!w) return JS_UNDEFINED;
+    if (!w) {
+        // With the global as `this` there is no wrapper to unwrap: fetch
+        // global.window, which is the document wrapper this bridge installs.
+        // A page can redefine `window` as a throwing getter; QuickJS
+        // requires such an exception to propagate, not to be swallowed.
+        ::JSValue win = ::JS_GetPropertyStr(ctx, this_val, "window");
+        if (JS_IsException(win))
+            return JS_EXCEPTION;
+        w = unwrapNode(ctx, win);
+        ::JS_FreeValue(ctx, win);
+        if (!w) return JS_UNDEFINED;
+    }
     Document doc(w->node);
     KHTMLView *v = doc.view();
     if (!v) return JS_UNDEFINED;
@@ -1159,14 +1175,43 @@ struct QJsDomBridge::Impl
             "window",
             JS_DupValue(ctx, documentObj)
         );
+        // window.document / window.window: same duplicates on the WRAPPER
+        // itself.  Browsers have window === globalThis, so both spellings
+        // exist on the window object; real pages write
+        // window.document.getElementById(...) far more often than the bare
+        // form, and a missing own property there returned `undefined` ->
+        // TypeError, killing the rest of the <script>.
+        // window.window === window is a self-reference, exactly as in the
+        // DOM.  Both die with the world (resetRuntime frees the context),
+        // so the extra two references are not a leak.
+        JS_SetPropertyStr(
+            ctx,
+            documentObj,
+            "document",
+            JS_DupValue(ctx, documentObj)
+        );
+        JS_SetPropertyStr(
+            ctx,
+            documentObj,
+            "window",
+            JS_DupValue(ctx, documentObj)
+        );
         // window.innerWidth / innerHeight / devicePixelRatio (magic 0/1/2)
-        // on the window object — live getters so resize is reflected
-        // without re-instantiation. CSS-px viewport: innerWidth is the
-        // logical size and devicePixelRatio the raster scale (Safari
-        // semantics for a web process asked to lay out at CSS pixels).
-        defCgetset("innerWidth", windowViewportGetter, nullptr, 0, documentObj);
-        defCgetset("innerHeight", windowViewportGetter, nullptr, 1, documentObj);
-        defCgetset("devicePixelRatio", windowViewportGetter, nullptr, 2, documentObj);
+        // — live getters so resize is reflected without re-instantiation.
+        // CSS-px viewport: innerWidth is the logical size and
+        // devicePixelRatio the raster scale (Safari semantics for a web
+        // process asked to lay out at CSS pixels).
+        // Installed on BOTH the window wrapper and the global object: browsers
+        // have `window === globalThis`, so pages legitimately read bare
+        // `innerWidth` / `devicePixelRatio` (e.g. inside a setTimeout
+        // callback).  Only defining them on the wrapper made those throw
+        // "ReferenceError: 'innerWidth' is not defined".
+        const ::JSValue viewportTargets[2] = { documentObj, global };
+        for (const ::JSValue &target : viewportTargets) {
+            defCgetset("innerWidth", windowViewportGetter, nullptr, 0, target);
+            defCgetset("innerHeight", windowViewportGetter, nullptr, 1, target);
+            defCgetset("devicePixelRatio", windowViewportGetter, nullptr, 2, target);
+        }
 
         // window timers (setTimeout / setInterval / clearTimeout /
         // clearInterval / requestAnimationFrame / cancelAnimationFrame):

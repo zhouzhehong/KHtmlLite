@@ -226,6 +226,9 @@ tests/renderer_solo.py（无浏览器直驱渲染进程+帧颜色断言）。
    `window.devicePixelRatio=1.5`（生产链路，非探针注入）。
 2. **默认窗口尺寸**：改为按屏 ratio 反算，恢复 High-DPI 之前的物理足迹
    （1024x720 设备像素；本机窗口 1047x776、客户区 1025x720）并居中。
+   **〔已被 0h-2 推翻〕**该不变量错了：resize() 是客户区、窗口仍按逻辑
+   尺寸计，683x480 逻辑仅占工作区 53% 宽 → 响应式站点落窄屏大字布局，
+   恰是"网页 UI 又大"的第二根因。现行方案见 0h-2（工作区 94%/92%）。
 3. **状态栏参数读数删除**：150% 下被状态栏高度裁切成半行字（乱码观感），
    且为诊断信息非 UI。删 QStatusBar + 内存/CPU/GPU 标签；压力监测逻辑
    （缓存清理、标签驱逐、墓碑）不动。
@@ -236,6 +239,43 @@ tests/renderer_solo.py（无浏览器直驱渲染进程+帧颜色断言）。
    `style.background=` 画残框；class 切换 + CSS 级联正常。
 6. **工具**：tests/browser_click_probe.py、tests/win_shot.py（对已运行窗口
    DPI-aware BitBlt，避免子进程继承管道导致调用方挂起）。
+
+---
+
+## 0h. 修复批注（2026-10-20，引擎 CSS DPI 双计 + 窗口策略 + 首屏 dpr，全实测）
+
+0g 修的是 Qt 侧取整；本轮修三个叠加根因（细节见 HANDOVER §5i）：
+
+1. **引擎 CSS DPI 双计（主根因）**：`DocumentImpl::logicalDpiY()` 返回
+   真实屏 144 → `toPix=2.0` → medium=24 CSS px（应 16）→ 叠 1.5× 光栅
+   = 36 物理 px。修：屏幕路径返回 96（CSS 参考 DPI，dpr 只在光栅乘一次）；
+   `attach()` 改走 `logicalDpiY()`；打印路径保留旧行为（printpainter 时
+   用 paint device DPI）。实测默认 1em 24 物理 px（修前 36）。
+2. **窗口策略**：683x480 逻辑（工作区 53%）→ 响应式站点落窄屏大字布局。
+   修：工作区 94%/92%、上限 1280x800 逻辑、边框预算 16x40 防越界。实测
+   client 1805x927 物理、外框 1827x983 ≤ avail、页面视口 1161x553 CSpx、
+   bing 桌面布局。
+3. **首屏 dpr 竞态 + MQ 永不重算**：`--dpr` 命令行（cold+prewarm 两处）、
+   loadInitial 前生效、resize 先 setDevicePixelRatio、
+   `setDevicePixelRatio` 变化触发 `updateStyleSelector()`。实测 file://
+   直载首报 'sync r1.5'。
+4. **MQ 语义**：`device_pixel_ratio` 由错误的 `zoomFactor/100` 改
+   `devicePixelRatio()`；`resolution` = 96×dpr；新增 `-webkit-{,min-,max-}
+   device-pixel-ratio` 别名（真实网页方言）。三条 MQ 实测全命中。
+5. **桥 window===globalThis**：`innerWidth/innerHeight/devicePixelRatio`
+   双挂 global + 裸名兜底（原来裸写 ReferenceError 且整段脚本早断）；
+   补 `window.document/window.window` 自引用（原来 undefined →
+   `window.document.getElementById` TypeError）。实测
+   `wd:true wdId:1 self:true bare:number dpr:number`。
+6. **回归**：9/9 全绿两轮（tile_protocol/dpr_probe/input_coord/
+   browser_click/bg_smoke/title/scroll_smoke/tombstone/resize）。
+7. **流程**：按用户要求 5 代理评审 → 实施 → 5 代理独立核实；核实指出的
+   窗口越界、打印注释失实、首屏竞态、MQ 不重算、-webkit- 缺失五项全部
+   补修后复测。
+8. **记档候选（不阻塞，按价值）**：matchMedia > location/navigator/
+   console/getComputedStyle（裸标识符家族，缺失即整段早断）> 窗口几何
+   QSettings 持久化 > 滚动条 QSS 定宽 > dppx（需动 bison）> srcset >
+   iframe dpr 传播 > 跨屏 ScreenChangeInternal。
 
 ---
 

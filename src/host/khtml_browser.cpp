@@ -391,10 +391,19 @@ public:
             exe = QCoreApplication::applicationDirPath()
                   + QStringLiteral("/khtml_renderer.exe");
             QStringList args;
+            // Ship the ratio on the command line so the renderer's FIRST
+            // parse already lays out and evaluates @media at the real dpr —
+            // the socket resize arrives later than the initial load.
+            const qreal startDpr = m_container
+                    ? m_container->devicePixelRatioF()
+                    : (QGuiApplication::primaryScreen()
+                           ? QGuiApplication::primaryScreen()->devicePixelRatio()
+                           : 1.0);
             args << QStringLiteral("--url") << url.toString()
                  << QStringLiteral("--socket") << m_socketName
                  << QStringLiteral("--width") << QString::number(w)
-                 << QStringLiteral("--height") << QString::number(h);
+                 << QStringLiteral("--height") << QString::number(h)
+                 << QStringLiteral("--dpr") << QString::number(startDpr, 'g', 4);
             if (disableJs) args << QStringLiteral("--disable-js");
             STARTUP_MARK("tab start (cold)");
             m_process->start(exe, args);
@@ -711,10 +720,13 @@ public:
         // nowhere.  No Qt pipe is involved, so there is no buffer to fill
         // and no drain loop needed.
         p->setProcessChannelMode(QProcess::ForwardedChannels);
+        const qreal warmDpr = QGuiApplication::primaryScreen()
+                ? QGuiApplication::primaryScreen()->devicePixelRatio() : 1.0;
         p->start(exe, QStringList() << QStringLiteral("--url") << QStringLiteral("about:blank")
                  << QStringLiteral("--socket") << s_warmSocket
                  << QStringLiteral("--width") << QStringLiteral("800")
-                 << QStringLiteral("--height") << QStringLiteral("560"));
+                 << QStringLiteral("--height") << QStringLiteral("560")
+                 << QStringLiteral("--dpr") << QString::number(warmDpr, 'g', 4));
         s_warmProcess = p;
     }
 
@@ -1154,23 +1166,35 @@ public:
         : QMainWindow(parent)
     {
         setWindowTitle(QStringLiteral("KHtmlLite"));
-        // Default window size.  Qt sizes in LOGICAL (CSS) pixels, so the
-        // literal 1024x720 used here before High-DPI scaling was enabled now
-        // becomes a 1536x1080-device-px window on a 150% 1080p display —
-        // effectively full screen, which is why the startup window started
-        // feeling oversized.  Reproduce the pre-High-DPI PHYSICAL footprint
-        // (1024x720 device px) by dividing by the screen ratio, then centre
-        // the window on the available desktop.
+        // Default window size — LOGICAL (Qt/CSS) pixels.  Sizing follows the
+        // desktop-browser convention: a fraction of the work area, capped at
+        // a sane default DIP size (Chrome/Edge open ~1200x650 outer on this
+        // desktop), never smaller than 720x480 client.
+        //   History: a literal 1024x720 became 1536x1080 DEVICE px once
+        //   High-DPI scaling was on; the previous "fix" divided by the screen
+        //   ratio to restore the pre-High-DPI PHYSICAL footprint (683x480
+        //   logical).  That was wrong twice over: 683 logical is only 53% of
+        //   this desktop's work area (responsive sites fell into their
+        //   narrow/large-type layout — the "网页 UI 又被调大" complaint), and
+        //   resize() sets the CLIENT rect, so the frame still has to fit.
+        // The Win11 frame is ~15x37 logical px (measured: window 1047x776 for
+        // a 1025x720 client).  Reserve a conservative 16x40 budget so the
+        // OUTER window stays inside availableGeometry, and clamp with
+        // qMin(lower, max) first — qBound asserts min<=max in debug builds.
         if (QScreen *scr = QGuiApplication::primaryScreen()) {
-            const qreal ratio = scr->devicePixelRatio();
             const QRect avail = scr->availableGeometry();   // logical px
-            const int w = qBound(640, qRound(1024 / ratio), avail.width());
-            const int h = qBound(480, qRound(720 / ratio), avail.height());
+            const int frameW = 16, frameH = 40;             // logical frame budget
+            const int maxW = qMax(320, avail.width() - frameW);
+            const int maxH = qMax(240, avail.height() - frameH);
+            const int w = qBound(qMin(720, maxW),
+                                qMin(1280, qRound(avail.width() * 0.94)), maxW);
+            const int h = qBound(qMin(480, maxH),
+                                qMin(800, qRound(avail.height() * 0.92)), maxH);
             resize(w, h);
-            move(avail.x() + (avail.width() - w) / 2,
-                 avail.y() + (avail.height() - h) / 2);
+            move(avail.x() + (avail.width() - w - frameW) / 2,
+                 avail.y() + (avail.height() - h - frameH) / 2);
         } else {
-            resize(1024, 720);
+            resize(1200, 800);
         }
         STARTUP_MARK("chrome build begin");
         buildChrome();

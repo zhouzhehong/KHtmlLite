@@ -541,11 +541,16 @@ static bool orientationMediaFeatureEval(CSSValueImpl *value, RenderStyle *, KHTM
 
 static bool device_pixel_ratioMediaFeatureEval(CSSValueImpl *value, RenderStyle *, KHTMLPart *part, MediaFeaturePrefix op)
 {
+    // The CSS device-pixel-ratio is exactly KHTMLPart::devicePixelRatio() the
+    // renderer was configured with (1.5 on a 150% display).  It used to be
+    // derived from the page zoom factor, so it always evaluated to 1.0 no
+    // matter the display and every "2x image" media query picked 1x assets.
+    const qreal dpr = part ? part->devicePixelRatio() : 1.0;
     if (value) {
-        return value->isPrimitiveValue() && compareValue(part->zoomFactor() / 100.0, static_cast<CSSPrimitiveValueImpl *>(value)->floatValue(), op);
+        return value->isPrimitiveValue() && compareValue(dpr, static_cast<CSSPrimitiveValueImpl *>(value)->floatValue(), op);
     }
 
-    return part->zoomFactor() != 0;
+    return dpr > 0.0;
 }
 
 static bool gridMediaFeatureEval(CSSValueImpl *value, RenderStyle *, KHTMLPart * /*part*/,  MediaFeaturePrefix op)
@@ -664,14 +669,16 @@ static bool heightMediaFeatureEval(CSSValueImpl *value, RenderStyle *style, KHTM
 
 static bool resolutionMediaFeatureEval(CSSValueImpl *value, RenderStyle *, KHTMLPart *part,  MediaFeaturePrefix op)
 {
-    DOM::DocumentImpl *d = static_cast<DOM::DocumentImpl *>(part->document().handle());
-    int logicalDpiY = d ? d->logicalDpiY() : 0;
+    // Device resolution in dpi = 96 * devicePixelRatio (144 dpi on a 150%
+    // display).  DocumentImpl::logicalDpiY() is the CSS reference 96 dpi, so
+    // it cannot answer this question any more.
+    const int dpi = part ? qRound(part->devicePixelRatio() * 96.0) : 0;
 
-    if (value && logicalDpiY) {
-        return value->isPrimitiveValue() && compareValue(logicalDpiY, static_cast<CSSPrimitiveValueImpl *>(value)->getDPIResolution(), op);
+    if (value && dpi) {
+        return value->isPrimitiveValue() && compareValue(dpi, static_cast<CSSPrimitiveValueImpl *>(value)->getDPIResolution(), op);
     }
 
-    return logicalDpiY != 0;
+    return dpi != 0;
 }
 
 static bool scanMediaFeatureEval(CSSValueImpl * /*value*/, RenderStyle *, KHTMLPart * /*part*/,  MediaFeaturePrefix)
@@ -800,6 +807,17 @@ static void createFunctionMap()
     gFunctionMap->insert(DOMString(str), name##MediaFeatureEval);
     CSS_MEDIAQUERY_NAMES_FOR_EACH_MEDIAFEATURE(ADD_TO_FUNCTIONMAP);
 #undef ADD_TO_FUNCTIONMAP
+    // -webkit- aliases for the ratio features: real-world pages query
+    // (-webkit-min-device-pixel-ratio: 2) to pick high-DPI assets; the
+    // -khtml- spellings above never appear in the wild.  They evaluate
+    // through the SAME functions, so devicePixelRatio stays the single
+    // source of truth.
+    gFunctionMap->insert(DOMString("-webkit-device-pixel-ratio"),
+                         device_pixel_ratioMediaFeatureEval);
+    gFunctionMap->insert(DOMString("-webkit-min-device-pixel-ratio"),
+                         min_device_pixel_ratioMediaFeatureEval);
+    gFunctionMap->insert(DOMString("-webkit-max-device-pixel-ratio"),
+                         max_device_pixel_ratioMediaFeatureEval);
 }
 
 void MediaQueryEvaluator::cleanup() // static

@@ -584,6 +584,20 @@ public:
         m_stateTimer->start();
     }
 
+    // Set the device pixel ratio BEFORE the first page load.  The socket
+    // resize only arrives after the browser connects; without this, the
+    // initial parse would lay out and evaluate media queries at dpr 1.0 and
+    // window.devicePixelRatio would briefly report 1.  The browser always
+    // passes the real ratio on the command line (it knows its screen).
+    void setInitialDpr(qreal dpr)
+    {
+        if (!(dpr > 0.05) || dpr > 8.0)
+            return;                     // keep the 1.0 default on nonsense
+        m_dpr = dpr;
+        if (m_view)
+            m_view->setDevicePixelRatio(m_dpr);
+    }
+
     void showAt(int w, int h)
     {
         m_pendingW = w; m_pendingH = h;
@@ -591,7 +605,11 @@ public:
         // connects and sends a resize, or immediately if non-default.
         if (w > 0 && h > 0 && m_view) {
             m_view->widget()->resize(w, h);
-            ensureShm(w, h);
+            // The shared canvas is PHYSICAL pixels (logical x dpr) — the
+            // browser's resize message recomputes it anyway, but the very
+            // first frame must not be allocated at 1x before that arrives.
+            ensureShm(qMax(1, qRound(w * m_dpr)),
+                      qMax(1, qRound(h * m_dpr)));
         }
     }
 
@@ -1367,12 +1385,12 @@ private slots:
         // Apply only the final resize from this batch.
         if (hasPendingResize && m_view) {
             m_dpr = pendingDpr;
+            // Set the ratio BEFORE resizing the widget: the resize can relayout
+            // and re-evaluate @media, and those must see the new ratio (see
+            // KHTMLPart::setDevicePixelRatio's updateStyleSelector).
+            m_view->setDevicePixelRatio(m_dpr);
             // Logical (CSS px) layout size; the canvas is derived by dpr.
             m_view->widget()->resize(pendingW, pendingH);
-            // Expose the ratio to the page (window.devicePixelRatio) — the
-            // engine itself lays out in CSS px, so this is the only place
-            // the DOM learns what it is rasterized at.
-            m_view->setDevicePixelRatio(m_dpr);
             ensureShm(qMax(1, qRound(pendingW * m_dpr)),
                       qMax(1, qRound(pendingH * m_dpr)));
             // Damage policy for the tiled transport: a width change forces
@@ -1512,6 +1530,7 @@ int main(int argc, char **argv)
 
     QString urlStr, socketName;
     int w = 800, h = 600;
+    qreal dpr = 1.0;
     bool jsEnabled = true;
     for (int i = 1; i < argc; i++) {
         const QString a = QString::fromLocal8Bit(argv[i]);
@@ -1519,6 +1538,7 @@ int main(int argc, char **argv)
         else if (a == QLatin1String("--socket") && i + 1 < argc) socketName = QString::fromLocal8Bit(argv[++i]);
         else if (a == QLatin1String("--width") && i + 1 < argc) w = atoi(argv[++i]);
         else if (a == QLatin1String("--height") && i + 1 < argc) h = atoi(argv[++i]);
+        else if (a == QLatin1String("--dpr") && i + 1 < argc) dpr = QString::fromLocal8Bit(argv[++i]).toDouble();
         else if (a == QLatin1String("--disable-js")) jsEnabled = false;
     }
 
@@ -1527,6 +1547,10 @@ int main(int argc, char **argv)
 
     RendererHost host(socketName, jsEnabled);
     STARTUP_MARK("RendererHost constructed (KHTMLPart up)");
+    // The ratio must be in place before the first load: pages read
+    // window.devicePixelRatio and @media (resolution) during the initial
+    // parse, before any socket resize can arrive.
+    host.setInitialDpr(dpr);
     host.showAt(w, h);
     host.loadInitial(QUrl(urlStr));
     STARTUP_MARK("initial load kicked");
