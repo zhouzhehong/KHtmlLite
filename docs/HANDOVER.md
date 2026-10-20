@@ -285,6 +285,8 @@ KHTML（5.116）改造的双进程浏览器：`khtml_browser.exe`（UI/合成）
 - **回归（全绿）**：browser_click_probe / dpr_probe / input_coord_probe /
   bg_smoke / title_probe(三路径) / scroll_smoke / tombstone_probe /
   resize_probe（白闪 0.00%×2 等指标不变）。
+- **启动基线**：bing 冷启 TTFF **1601ms**（取整修到 1.5 后光栅像素少 44%，
+  比 2.0 时代的 1986ms 更好；历史区间 1514-3106）。
 
 ## 6. 正在/马上要做的
 A. ~~拆那 1.1s~~ **已完成**（字体枚举缓存 + 图标懒加载，构造 1.1s→~0.35s，TTFF 2.0→1.1s）。

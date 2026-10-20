@@ -1,0 +1,116 @@
+launched pid=10808, waiting 22s ...
+browser still running; terminating
+--- C:\Users\zhouzhehong\Desktop\KHtmlLite\build\host\khtml_startup.log ---
+47	KHtmlLite	QApplication ready
+49	KHtmlLite	chrome build begin
+220	KHtmlLite	chrome built
+223	KHtmlLite	tab start (cold)
+245	KHtmlLite	renderer process start
+249	KHtmlLite	first tab added
+250	KHtmlLite	window constructed
+558	KHtmlLite	window shown
+318	KHtmlLiteRenderer	QApplication ready
+395	KHtmlLiteRenderer	IPC server listening
+396	KHtmlLiteRenderer	RendererHost ctor: creating KHTMLPart
+0	KHtmlLiteRenderer	KP: before KHTMLGlobal::registerPart
+834	KHtmlLite	socket connected
+4	KHtmlLiteRenderer	KG: cache init begin
+20	KHtmlLiteRenderer	KG: cache init done; id tables + SVG names begin
+22	KHtmlLiteRenderer	KG: id tables + SVG names done
+31	KHtmlLiteRenderer	KP: KHTMLGlobal ready
+35	KHtmlLiteRenderer	Settings: init begin
+36	KHtmlLiteRenderer	Settings: khtmlrc read begin
+38	KHtmlLiteRenderer	Settings: HTML Settings group
+44	KHtmlLiteRenderer	Settings: defaultFonts begin (first QFontDatabase touch)
+46	KHtmlLiteRenderer	Settings: systemFont resolved
+47	KHtmlLiteRenderer	Settings: defaultFonts done (generic families resolved)
+48	KHtmlLiteRenderer	Settings: khtmlrc parsed; shared config begin
+49	KHtmlLiteRenderer	Settings: shared config parsed
+50	KHtmlLiteRenderer	Settings: init done
+51	KHtmlLiteRenderer	KV: ctor begin (private ready)
+52	KHtmlLiteRenderer	KV: ctor done
+103	KHtmlLiteRenderer	KP: KHTMLView constructed
+104	KHtmlLiteRenderer	KP init: begin
+119	KHtmlLiteRenderer	KP init: xmlfile set
+121	KHtmlLiteRenderer	KP priv: before defaultHTMLSettings
+122	KHtmlLiteRenderer	KP priv: settings copied
+128	KHtmlLiteRenderer	KP init: part private (settings) ready
+129	KHtmlLiteRenderer	KP init: widget/viewbars
+130	KHtmlLiteRenderer	KP init: extensions
+135	KHtmlLiteRenderer	KP init: codec action
+137	KHtmlLiteRenderer	KP init: actions created
+138	KHtmlLiteRenderer	KP init: widget associated
+278	KHtmlLiteRenderer	KP init: end
+279	KHtmlLiteRenderer	KP: init done
+678	KHtmlLiteRenderer	RV: base KHTMLPart returned
+679	KHtmlLiteRenderer	RV: setJScriptEnabled done
+680	KHtmlLiteRenderer	RV: java/plugins disabled
+681	KHtmlLiteRenderer	RV: setEncoding done
+681	KHtmlLiteRenderer	RV: browserExtension fetched
+682	KHtmlLiteRenderer	RV: ctor done
+683	KHtmlLiteRenderer	KHTMLPart created
+684	KHtmlLiteRenderer	RendererHost constructed (KHTMLPart up)
+120	KHtmlLiteRenderer	QApplication ready
+857	KHtmlLiteRenderer	initial load kicked
+860	KHtmlLiteRenderer	browser connected
+251	KHtmlLiteRenderer	IPC server listening
+253	KHtmlLiteRenderer	RendererHost ctor: creating KHTMLPart
+0	KHtmlLiteRenderer	KP: before KHTMLGlobal::registerPart
+1	KHtmlLiteRenderer	KG: cache init begin
+14	KHtmlLiteRenderer	KG: cache init done; id tables + SVG names begin
+16	KHtmlLiteRenderer	KG: id tables + SVG names done
+17	KHtmlLiteRenderer	KP: KHTMLGlobal ready
+27	KHtmlLiteRenderer	Settings: init begin
+28	KHtmlLiteRenderer	Settings: khtmlrc read begin
+31	KHtmlLiteRenderer	Settings: HTML Settings group
+32	KHtmlLiteRenderer	Settings: defaultFonts begin (first QFontDatabase touch)
+33	KHtmlLiteRenderer	Settings: systemFont resolved
+34	KHtmlLiteRenderer	Settings: defaultFonts done (generic families resolved)
+39	KHtmlLiteRenderer	Settings: khtmlrc parsed; shared config begin
+41	KHtmlLiteRenderer	Settings: shared config parsed
+42	KHtmlLiteRenderer	Settings: init done
+43	KHtmlLiteRenderer	KV: ctor begin (private ready)
+44	KHtmlLiteRenderer	KV: ctor done
+45	KHtmlLiteRenderer	KP: KHTMLView constructed
+46	KHtmlLiteRenderer	KP init: begin
+48	KHtmlLiteRenderer	KP init: xmlfile set
+56	KHtmlLiteRenderer	KP priv: before defaultHTMLSettings
+57	KHtmlLiteRenderer	KP priv: settings copied
+59	KHtmlLiteRenderer	KP init: part private (settings) ready
+60	KHtmlLiteRenderer	KP init: widget/viewbars
+61	KHtmlLiteRenderer	KP init: extensions
+72	KHtmlLiteRenderer	KP init: codec action
+77	KHtmlLiteRenderer	KP init: actions created
+78	KHtmlLiteRenderer	KP init: widget associated
+159	KHtmlLiteRenderer	KP init: end
+160	KHtmlLiteRenderer	KP: init done
+416	KHtmlLiteRenderer	RV: base KHTMLPart returned
+417	KHtmlLiteRenderer	RV: setJScriptEnabled done
+418	KHtmlLiteRenderer	RV: java/plugins disabled
+419	KHtmlLiteRenderer	RV: setEncoding done
+419	KHtmlLiteRenderer	RV: browserExtension fetched
+421	KHtmlLiteRenderer	RV: ctor done
+421	KHtmlLiteRenderer	KHTMLPart created
+423	KHtmlLiteRenderer	RendererHost constructed (KHTMLPart up)
+429	KHtmlLiteRenderer	initial load kicked
+1569	KHtmlLite	socket first data received
+1573	KHtmlLite	clock skew ms=437
+1144	KHtmlLiteRenderer	frame timer first tick
+1147	KHtmlLiteRenderer	render pass begin
+1149	KHtmlLiteRenderer	render pass done
+1167	KHtmlLiteRenderer	first frame uploaded
+1600	KHtmlLite	tiles message dispatched
+1601	KHtmlLite	first frame composited
+1932	KHtmlLiteRenderer	CSS: loadDefaultStyle begin (html4.css read+parse)
+1948	KHtmlLiteRenderer	CSS: html4.css parsed
+1951	KHtmlLiteRenderer	CSS: quirks.css parsed
+1955	KHtmlLiteRenderer	CSS: presentational.css parsed; default style ready
+4006	KHtmlLiteRenderer	render pass begin
+4027	KHtmlLiteRenderer	render pass done
+4146	KHtmlLiteRenderer	render pass begin
+4152	KHtmlLiteRenderer	render pass done
+16747	KHtmlLiteRenderer	render pass begin
+16797	KHtmlLiteRenderer	render pass done
+16836	KHtmlLiteRenderer	render pass begin
+16837	KHtmlLiteRenderer	render pass done
+
