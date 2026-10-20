@@ -214,6 +214,29 @@ tests/renderer_solo.py（无浏览器直驱渲染进程+帧颜色断言）。
    现象是 KHTML 对同一文档的二次解析（疑似编码探测触发的重载），会重置页面
    JS 状态。未在本轮处理，记为下一轮候选（对计时器/表单状态有实际影响）。
 
+## 0g. 修复批注（2026-10-20，高 DPI 取整 2.0 根因 + 窗口/输入/状态栏）
+
+1. **"小窗变大 / UI 变大"的底层原因**：`AA_EnableHighDpiScaling` 的默认取整
+   策略把 150% 屏的 dpr 由 1.5 四舍五入成 **2.0**（实测
+   `primaryScreen()->devicePixelRatio()=2.00`、`availableGeometry()=960x504`），
+   整窗按 2× 布局与光栅 → 比 OS 惯例大 33%，默认窗口 640x480 逻辑
+   = 1280x960 物理（近满屏）。修复：
+   `setHighDpiScaleFactorRoundingPolicy(PassThrough)`（QApplication 构造前）。
+   实测修复后 ratio=1.50、available=1280x672、页面自报
+   `window.devicePixelRatio=1.5`（生产链路，非探针注入）。
+2. **默认窗口尺寸**：改为按屏 ratio 反算，恢复 High-DPI 之前的物理足迹
+   （1024x720 设备像素；本机窗口 1047x776、客户区 1025x720）并居中。
+3. **状态栏参数读数删除**：150% 下被状态栏高度裁切成半行字（乱码观感），
+   且为诊断信息非 UI。删 QStatusBar + 内存/CPU/GPU 标签；压力监测逻辑
+   （缓存清理、标签驱逐、墓碑）不动。
+4. **输入映射真 bug**：CSS-px 视口后渲染端内容控件是逻辑尺寸，浏览器仍
+   ÷dpr → 真实点击向左上偏 1/1.5。改恒等映射。tests/browser_click_probe.py
+   真实窗口点击 CSS(530,270) 小目标，标题变 'click-ok'（PASS）。
+5. **CSSOM 缺口（记为下一轮）**：`element.style.backgroundColor=` 不生效，
+   `style.background=` 画残框；class 切换 + CSS 级联正常。
+6. **工具**：tests/browser_click_probe.py、tests/win_shot.py（对已运行窗口
+   DPI-aware BitBlt，避免子进程继承管道导致调用方挂起）。
+
 ---
 
 ## 1. 进程与沙箱模型

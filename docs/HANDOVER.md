@@ -253,6 +253,39 @@ KHTML（5.116）改造的双进程浏览器：`khtml_browser.exe`（UI/合成）
   重建（title 可见 pending→ok→pending 回退，约 1s 后发生），疑似 KHTML 编码
   探测触发的二次解析，会重置页面 JS 状态。记为下一轮候选。
 
+## 5h. 高 DPI 取整 2.0 根因 + 窗口/输入/状态栏修复（2026-10-20，全实测）
+
+- **根因：Qt 分数缩放取整**。`AA_EnableHighDpiScaling` 默认取整策略把 150%
+  显示屏的 devicePixelRatio 从 1.5 四舍五入成 **2.0**（实测
+  `primaryScreen()->devicePixelRatio()=2.00`、`availableGeometry()=960x504`），
+  于是整窗 chrome 和页面都按 2× 布局/栅格：默认窗口 640x480 逻辑 = 1280x960
+  物理、屏幕上一切 UI 比 OS 惯例大 33%，小窗"莫名其妙变大"。
+  修复：`QGuiApplication::setHighDpiScaleFactorRoundingPolicy(PassThrough)`
+  （Qt≥5.14，须在 QApplication 构造前）。修复后 ratio=1.50、
+  availableGeometry=1280x672、页面自报 `window.devicePixelRatio='r1.5'`。
+- **默认窗口尺寸**：`resize(1024,720)` 是逻辑像素，在 150% 屏上会变成
+  1536x1080 物理（≈满屏）。现在按屏幕 ratio 反算，恢复启用 High-DPI 之前的
+  **物理足迹**（1024x720 设备像素，本机实测窗口 1047x776、客户区 1025x720），
+  并居中到 availableGeometry。
+- **状态栏参数读数移除**：右下角"内存/CPU/GPU/压力等级"标签在 150% 下被
+  状态栏高度裁切（只露半行字 → 乱码观感），且属诊断信息而非浏览器 UI。
+  已删除整个 QStatusBar 与该标签；内存压力监测逻辑（缓存清理/标签驱逐）
+  原样保留（只去掉显示）。
+- **输入坐标映射（真 bug 修复）**：CSS-px 视口落地后渲染端内容控件是逻辑
+  尺寸，但浏览器 `PageSurface::mapToFrame()` 仍在 ÷devicePixelRatio，
+  导致真实点击落点向左上偏 1/dpr。改为恒等映射（布局坐标 = 控件坐标），
+  点击/拖拽/滚轮位置一致。tests/browser_click_probe.py 走真实浏览器窗口
+  （SetForegroundWindow + 鼠标注入 + DPI-aware 截图）在 CSS (530,270) 点
+  小目标，标签标题变 'click-ok' → PASS（生产 dpr 同页自报 'r1.5'）。
+- **已知缺口（非本轮）**：KHTML CSSOM 的 `element.style.backgroundColor=`
+  写入不生效（`style.background=` 还会画出残框）；class 切换 + CSS 级联
+  正常（ui_interaction_test 走 className 所以一直没暴露）。记为下一轮候选。
+- **新增工具**：tests/browser_click_probe.py（真实窗口点击端到端）、
+  tests/win_shot.py（对已运行窗口做 DPI-aware BitBlt，不占用调用方管道）。
+- **回归（全绿）**：browser_click_probe / dpr_probe / input_coord_probe /
+  bg_smoke / title_probe(三路径) / scroll_smoke / tombstone_probe /
+  resize_probe（白闪 0.00%×2 等指标不变）。
+
 ## 6. 正在/马上要做的
 A. ~~拆那 1.1s~~ **已完成**（字体枚举缓存 + 图标懒加载，构造 1.1s→~0.35s，TTFF 2.0→1.1s）。
    下一步同部位残账：渲染进程镜像加载+socket 连接 ~500ms（每次新标签都付），
@@ -263,6 +296,8 @@ B. ~~真 deviceScaleFactor CSS-px 视口~~ **已完成（5g）**。QSettings 墓
 C. 空闲 CPU 归零（挂起标签的计时器/渲染进程冻结）。
 D. **同导航二次解析**（5g 观察项：脚本跑两次、JS World 重建、约 1s 后发生），
    疑编码探测重载 → 排查 KHTMLPart::begin 的二次调用与 encoding 分支。
+E. **KHTML CSSOM 内联样式写入**（5h 缺口）：`style.backgroundColor=` 无效、
+   `style.background=` 画残框 → 查 docSetProp 的 style 包装/属性转发。
 
 ## 7. 交付给下一个会话的操作步骤
 1. `cd C:\Users\zhouzhehong\Desktop\KHtmlLite`

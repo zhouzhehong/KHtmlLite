@@ -23,11 +23,11 @@
 #include <QFileInfo>
 #include <QDir>
 #include <QUrl>
-#include <QStatusBar>
 #include <QLabel>
 #include <QTimer>
 #include <QStyle>
 #include <QApplication>
+#include <QScreen>
 #include <QRegularExpression>
 #include <QProcess>
 #include <QLocalSocket>
@@ -100,19 +100,15 @@ public:
         else
             update(dirty);
     }
-    // Map a widget-relative (logical) point to frame coordinates.  The
-    // frame is PHYSICAL pixels (size = surface * devicePixelRatio), so
-    // input positions divide by dpr.  During the <1-frame resize
-    // transition the sub-pixel click offset is below the perception
-    // threshold (WebKit makes no live-resize hit-test compensation
-    // either — input during that window targets the next committed
-    // frame's geometry).
-    QPoint mapToFrame(const QPoint &p) const {
-        const qreal dpr = devicePixelRatioF();
-        if (dpr == 1.0)
-            return p;
-        return QPoint(qRound(p.x() / dpr), qRound(p.y() / dpr));
-    }
+    // Map a widget-relative point to the coordinates the renderer's input
+    // path expects: CSS pixels of the page viewport.  This widget's own
+    // coordinate system IS that viewport (deviceScaleFactor: the renderer
+    // lays KHTML out at CSS pixels and rasters at dpr onto a physical frame),
+    // so the mapping is the identity.  The frame is physical, but input
+    // targets the LAYOUT, never the framebuffer — dividing by dpr here would
+    // shift every click toward the top-left by 1/dpr (the old model needed it
+    // because the renderer widget used to be physical).
+    QPoint mapToFrame(const QPoint &p) const { return p; }
 
 public:
     // Callback set by RenderTab to forward input events to the renderer.
@@ -1158,12 +1154,32 @@ public:
         : QMainWindow(parent)
     {
         setWindowTitle(QStringLiteral("KHtmlLite"));
-        resize(1024, 720);
+        // Default window size.  Qt sizes in LOGICAL (CSS) pixels, so the
+        // literal 1024x720 used here before High-DPI scaling was enabled now
+        // becomes a 1536x1080-device-px window on a 150% 1080p display —
+        // effectively full screen, which is why the startup window started
+        // feeling oversized.  Reproduce the pre-High-DPI PHYSICAL footprint
+        // (1024x720 device px) by dividing by the screen ratio, then centre
+        // the window on the available desktop.
+        if (QScreen *scr = QGuiApplication::primaryScreen()) {
+            const qreal ratio = scr->devicePixelRatio();
+            const QRect avail = scr->availableGeometry();   // logical px
+            const int w = qBound(640, qRound(1024 / ratio), avail.width());
+            const int h = qBound(480, qRound(720 / ratio), avail.height());
+            resize(w, h);
+            move(avail.x() + (avail.width() - w) / 2,
+                 avail.y() + (avail.height() - h) / 2);
+        } else {
+            resize(1024, 720);
+        }
         STARTUP_MARK("chrome build begin");
         buildChrome();
         STARTUP_MARK("chrome built");
-        m_memLabel = new QLabel(QStringLiteral("内存 -- MB"), this);
-        statusBar()->addPermanentWidget(m_memLabel);
+        // No status bar: its only content was the memory/CPU/GPU readout,
+        // which was removed (it clipped into unreadable text at 150% and the
+        // numbers are a diagnostics detail, not browser UI).  The pressure
+        // monitor itself keeps running — it still drives cache purges and
+        // tab eviction.
         m_memTimer = new QTimer(this);
         connect(m_memTimer, &QTimer::timeout, this, &KHtmlLiteWindow::checkMemoryBudget);
 
@@ -1744,16 +1760,13 @@ protected:
 
         static const char *names[] = {"正常", "低压", "高压", "危急"};
         // GPU utilization (PDH GPU Engine counters — the Task Manager data
-        // source).  Display + diagnosis pillar of the real-time monitor.
+        // source).  Sampled for the pressure monitor's own bookkeeping; the
+        // numbers are no longer rendered into browser UI (the status-bar
+        // readout was removed as noise).
         const int gpuPct = sampleGpuPct();
-        if (m_memLabel) {
-            m_memLabel->setText(QStringLiteral("内存 %1 MB | 内存%2% CPU%3% GPU%4% (%5)%6")
-                .arg(memKB / 1024).arg(loadPct).arg(sysCpuPct).arg(gpuPct)
-                .arg(QLatin1String(names[level]))
-                .arg(hottestPerMill >= 50
-                     ? QStringLiteral(" · 后台%1‰").arg(hottestPerMill)
-                     : QString()));
-        }
+        Q_UNUSED(gpuPct);
+        Q_UNUSED(names);
+        Q_UNUSED(memKB);
 
         if (level >= 1)
             purgeCache();
@@ -1941,7 +1954,6 @@ protected:
     }
 
     QTimer *m_memTimer = nullptr;
-    QLabel *m_memLabel = nullptr;
     QTimer *m_resizeTimer = nullptr;
     bool m_liveResize = false;
     bool m_purgingCache = false;
@@ -1969,12 +1981,23 @@ int main(int argc, char **argv)
     SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
     STARTUP_MARK("main entry");
     // High-DPI clarity (Safari deviceScaleFactor model): Qt reasons in
-    // device-independent pixels, and the page raster pipeline renders at
-    // PHYSICAL pixels (PageSurface sends size*dpr to the renderer and
-    // scales the frame down on paint — an exact n:n map on the device
-    // grid), so both chrome and page content stay crisp at 125/150%.
+    // device-independent pixels; the page pipeline keeps a CSS-px viewport in
+    // the renderer and rasters it at the device ratio onto a physical frame
+    // (PageSurface ships the LOGICAL size and composites the physical frame
+    // 1:1 on the device grid), so chrome and page content stay crisp and
+    // correctly sized at 125/150%.
     QApplication::setAttribute(Qt::AA_EnableHighDpiScaling);
     QApplication::setAttribute(Qt::AA_UseHighDpiPixmaps);
+    // Exact fractional scaling.  Qt's default rounding policy snaps a 150%
+    // display to a device pixel ratio of 2.0, so the whole chrome (and, since
+    // deviceScaleFactor, the page rasters too) is laid out at 2x instead of
+    // the OS's 1.5x — every window and every glyph ends up 33% larger than
+    // the user asked for, and a 1024x720 default window becomes 1280x960
+    // device pixels.  PassThrough keeps the real ratio (e.g. 1.5) end to end.
+#if QT_VERSION >= QT_VERSION_CHECK(5, 14, 0)
+    QGuiApplication::setHighDpiScaleFactorRoundingPolicy(
+        Qt::HighDpiScaleFactorRoundingPolicy::PassThrough);
+#endif
     QApplication app(argc, argv);
     app.setApplicationName(QStringLiteral("KHtmlLite"));
     app.setOrganizationName(QStringLiteral("KHtmlLite"));

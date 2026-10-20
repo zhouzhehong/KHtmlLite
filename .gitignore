@@ -110,3 +110,9 @@ tests/resize_offender.png
 
 # Probe-generated pages (tests/dpr_*.py write these)
 tests/dpr/
+tests/ui_*.png
+tests/click_*.raw
+tests/click_*.png
+tests/*_stderr.txt
+tests/run_*.txt
+tests/click_probe_out.txt
