@@ -46,6 +46,7 @@
 #include "misc/borderarcstroker.h"
 
 #include "khtml_debug.h"
+#include <cstdio>
 #include <QPainter>
 #include "khtmlview.h"
 #include <khtml_part.h>
@@ -2155,6 +2156,20 @@ void RenderObject::setStyle(RenderStyle *style)
     RenderStyle::Diff d = m_style ? m_style->diff(style) : RenderStyle::Layout;
     //qDebug("m_style: %p new style, diff=%d", m_style,  d);
 
+    // Damage tracing (KHTML_DAMAGE_TRACE=1): does a style change on an
+    // existing object reach this path at all, and with which diff?  The gate
+    // must use Qt, NOT getenv(): the mingw CRT's getenv() does not see the
+    // process environment in these binaries — measured with
+    // KHTML_STARTUP_TIMING (Qt read: works) vs KHTML_QJS_TRACE (getenv-gated
+    // kjlog: never fires, js_proxy.cpp).
+    static const bool s_trace = qEnvironmentVariableIsSet("KHTML_DAMAGE_TRACE");
+    if (s_trace) {
+        fprintf(stderr, "[setStyle] %p had=%d diff=%d layer=%d pos=%d\n",
+                (void *)this, m_style ? 1 : 0, (int)d,
+                layer() ? 1 : 0, m_style ? (int)m_style->position() : -1);
+        fflush(stderr);
+    }
+
     Priority pri = NormalPriority;
     if (m_style) {
         pri = HighPriority;
@@ -2315,6 +2330,16 @@ bool RenderObject::attemptDirectLayerTranslation()
         // qCDebug(KHTML_LOG) << "Layer translation failed for " << information();
         return false;
     }
+    // NOTE: the OLD rectangle of this translation is invalidated by the
+    // caller before we get here: setStyle() repaints with the old style and
+    // old coordinates for a Position diff (see the d == RenderStyle::Position
+    // case above), and the caller then repaints the NEW rectangle after the
+    // move.  An extra layer()->repaint(NormalPriority, true) here was tried
+    // and removed: it is redundant (and for PFIXED it re-computes the NEW
+    // rect, because absolutePosition() uses the already-updated m_x/m_y),
+    // while the m_markedForRepaint flag it sets stays set until the next
+    // layout, which made a second position-only change in the same frame
+    // skip its own old-rect invalidation.
     layer()->updateLayerPosition();
     if (m_style->position() != PFIXED) {
         bool needsDocSizeUpdate = true;

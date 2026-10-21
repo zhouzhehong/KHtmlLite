@@ -120,8 +120,18 @@ tests/click_probe_out.txt
 # Regression-run outputs (this round: font/DPI/MQ/viewport probes)
 tests/r_*.txt
 tests/r2_*.txt
+tests/r3_*.txt
 tests/fontdpi*.png
 tests/mq_dpr.png
 tests/vp_*.png
 tests/bing_*.png
 tests/*_err.txt
+
+# Ghost/resize-paint probe artifacts (regenerable screenshots)
+tests/resize_ghost_out.png
+tests/rg_diag*.png
+tests/rg_diag*_err.txt
+tests/portable_smoke.png
+tests/portable_smoke_err.txt
+tests/glitch1.png
+tests/user_window.png

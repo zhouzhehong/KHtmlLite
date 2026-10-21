@@ -436,6 +436,15 @@ public:
                 [this](const QRect &r) {
             QWidget *w = m_view ? m_view->widget() : nullptr;
             if (!w) return;
+            // Damage tracing (KHTML_DAMAGE_TRACE=1); Qt-gated, not getenv() —
+            // the mingw CRT's getenv() does not see the process environment.
+            static const bool s_trace = qEnvironmentVariableIsSet("KHTML_DAMAGE_TRACE");
+            if (s_trace) {
+                fprintf(stderr, "[host] contentsUpdated %d,%d,%d,%d widget=%dx%d\n",
+                        r.x(), r.y(), r.width(), r.height(),
+                        w->width(), w->height());
+                fflush(stderr);
+            }
             m_dirtyRegion += r.intersected(QRect(0, 0, w->width(), w->height()));
             scheduleFrame();
         });
@@ -643,8 +652,7 @@ public:
         if (!s_loggedFirstTick) {
             s_loggedFirstTick = true;
             STARTUP_MARK("frame timer first tick");
-        }
-        m_framePending = false;
+        }        m_framePending = false;
         if (!m_view || !m_shm) return;
         QWidget *w = m_view->widget();
         // === CSS-px viewport (deviceScaleFactor) ===
@@ -662,6 +670,30 @@ public:
         const int fw = qMax(1, qRound(lw * m_dpr));
         const int fh = qMax(1, qRound(lh * m_dpr));
 
+        // Damage tracing (KHTML_DAMAGE_TRACE=1): frames that carry work,
+        // i.e. the ones that would repaint the moved element.  Qt-gated, not
+        // getenv() — the mingw CRT's getenv() does not see the env here.
+        static const bool s_trace = qEnvironmentVariableIsSet("KHTML_DAMAGE_TRACE");
+        if ((m_dirtyRegion.rectCount() || m_relayoutPending) && s_trace) {
+            KHTMLView *kv0 = m_view ? m_view->view() : nullptr;
+            QString rr;
+            const QVector<QRect> dbg = m_dirtyRegion.rects();
+            for (const QRect &r : dbg)
+                rr += QStringLiteral("[%1,%2,%3,%4]").arg(r.x()).arg(r.y())
+                      .arg(r.width()).arg(r.height());
+            fprintf(stderr, "[host] grabFrame lw=%d lh=%d dirtyRectCount=%d "
+                            "dirtyBounds=%d,%d,%d,%d relayout=%d docW=%d docH=%d "
+                            "rects=%s\n",
+                    lw, lh, m_dirtyRegion.rectCount(),
+                    m_dirtyRegion.boundingRect().x(), m_dirtyRegion.boundingRect().y(),
+                    m_dirtyRegion.boundingRect().width(), m_dirtyRegion.boundingRect().height(),
+                    m_relayoutPending ? 1 : 0,
+                    kv0 ? kv0->contentsWidth() : -1,
+                    kv0 ? kv0->contentsHeight() : -1,
+                    rr.toUtf8().constData());
+            fflush(stderr);
+        }
+
         // Flush coalesced mousemove/wheel before rendering this frame.
         flushPendingInput();
 
@@ -675,17 +707,16 @@ public:
 
         // Damage policy (see resize handler): a width change forces a KHTML
         // relayout, so every tile is dirty — this also covers segment
-        // recreation (m_tilesX reset).  A pure height growth keeps all
-        // existing rows at the same tile indices: only the newly exposed
-        // bottom strip is painted.  A pure height shrink invalidates
-        // nothing; the browser simply crops its canvas.
+        // recreation (m_tilesX reset).  Any size change now sets
+        // m_relayoutPending in the resize handler, so the frame is always
+        // fully repainted when the canvas geometry changed — partial
+        // repaints across a geometry change are what produced stuck
+        // ghost pixels (see the resize handler comment).
         // m_dirtyRegion is kept in LOGICAL coordinates throughout (that is
         // the engine's damage space); it is mapped to physical exactly once,
         // where tiles are hit-tested.
         if (m_relayoutPending || tilesX != m_tilesX)
             m_dirtyRegion = QRegion(logicalRect);
-        else if (lh > m_frameLH)
-            m_dirtyRegion += QRect(0, m_frameLH, lw, lh - m_frameLH);
         m_relayoutPending = false;
 
         // === Scroll fast path (blit) ===
@@ -745,6 +776,21 @@ public:
             else if (sdx < 0) strip += QRect(0, 0, qMin(-sdx, lw), lh);
             m_dirtyRegion = strip;
 
+            // The browser blit-shifts its canvas by (sdx, sdy); the renderer
+            // keeps its own last frame as the base for the next partial
+            // frame, so it must be shifted by the SAME amount or every later
+            // partial frame would composite onto pre-scroll pixels.
+            if (!m_lastFrame.isNull()) {
+                QImage shifted(m_lastFrame.size(), m_lastFrame.format());
+                shifted.fill(Qt::white);
+                QPainter sp(&shifted);
+                // Physical pixels: the logical scroll offset scaled by dpr.
+                sp.drawImage(QPoint(-qRound(sdx * m_dpr), -qRound(sdy * m_dpr)),
+                             m_lastFrame);
+                sp.end();
+                m_lastFrame = shifted;
+            }
+
             // Tell the browser to shift its canvas first; the strip tiles in
             // this frame's "tiles" message land on the shifted canvas.  The
             // absolute scroll offset rides along so the browser can reconcile
@@ -787,12 +833,25 @@ public:
 
         // Same-tile suppression cache: FNV-1a hashes of the pixels most
         // recently uploaded for each tile slot.  Damage granularity is
-        // coarse (any input currently invalidates the full frame), so many
-        // "dirty" tiles render back pixel-identical; those are skipped
-        // below, before the memcpy and before entering the index list.  A
-        // zero entry means "unknown slot content" and never suppresses.
-        if (m_tileHashes.size() != tilesX * tilesY) {
-            m_tileHashes.fill(0, tilesX * tilesY);
+        // coarse, so many "dirty" tiles render back pixel-identical; those
+        // are skipped below, before the memcpy and before entering the index
+        // list.  A zero entry means "unknown slot content" and never
+        // suppresses.
+        //   - Column count changed (tilesX): slot index ty*tilesX+tx no
+        //     longer names the same tile (e.g. 6x2 -> 4x3, both 12 slots),
+        //     so every slot must be reset or a stale hash that happens to
+        //     match the NEW content at that index suppresses it forever.
+        //   - Same column count, different row count (a pure-height resize,
+        //     which does not move any tile index): every surviving slot still
+        //     names the same canvas rectangle, so keep the prefix and let the
+        //     new tail start at the 0 sentinel.  Resetting here would force a
+        //     full re-upload of the whole frame on every step of a
+        //     height-only drag.
+        const int tileCount = tilesX * tilesY;
+        if (m_tilesX != tilesX) {
+            m_tileHashes.fill(0, tileCount);
+        } else if (m_tileHashes.size() != tileCount) {
+            m_tileHashes.resize(tileCount);
         }
 
         if (m_shm->size() < shmNeeded(fw, fh)) {
@@ -810,7 +869,20 @@ public:
         // full render trees per frame), which was the dominant cost of every
         // frame.  Here we do one w->render() and crop.
         QImage frameImage(fw, fh, QImage::Format_RGB32);
-        frameImage.fill(Qt::white);
+        // A PARTIAL frame must start from the PREVIOUS frame's pixels: only
+        // the dirty region is re-rendered below, so anything left white here
+        // would be cropped into the uploaded tiles and ERASE correct canvas
+        // content outside the damage (measured: after a script-driven move
+        // the old button was painted over with white and the new position
+        // stayed empty).  A full frame (or the first frame, or a size change)
+        // legitimately starts from white.
+        const bool fullFrame = (dirty == QRegion(logicalRect))
+                               || m_lastFrame.size() != frameImage.size()
+                               || dimsChanged;
+        if (!fullFrame && m_lastFrame.format() == frameImage.format())
+            frameImage = m_lastFrame;
+        else
+            frameImage.fill(Qt::white);
         {
             QPainter fp(&frameImage);
             STARTUP_MARK("render pass begin");
@@ -820,7 +892,27 @@ public:
             // space; the painter transform maps it to the physical canvas.
             if (m_dpr != 1.0)
                 fp.scale(m_dpr, m_dpr);
-            w->render(&fp, QPoint(), QRegion(dirty));
+            // QWidget::render(painter, targetOffset, sourceRegion) CANCELS the
+            // source region's own translation and clips in place:
+            // QWidgetPrivate::render does
+            //     offset = targetOffset; offset -= paintRegion.boundingRect().topLeft();
+            // and then setRedirected(pdev, -offset), so with targetOffset (0,0)
+            // a damage region away from the origin is painted shifted by
+            // -boundingRect.topLeft().  Measured with
+            // tests/scratch_render_compare.cpp (two markers at CSS (200,100)
+            // and (60,40), dpr 1.5, diffed pixel-by-pixel against a full
+            // render inside the damage area):
+            //     offset=(0,0),  region  -> 7236 differing pixels   (WRONG)
+            //     offset=unionTL, region ->    0 differing pixels   (correct)
+            //     per-rect loop          ->    0 differing pixels   (correct)
+            // The old code passed QPoint(), so every PARTIAL frame painted
+            // damaged content at the wrong place (origin-anchored) and then
+            // uploaded those wrong pixels — the ghost.  Passing the damage
+            // region's top-left as the offset restores the true coordinates
+            // in ONE paint pass; a per-rect loop is equivalent but pays one
+            // engine paint traversal per rect, so it is not used.
+            const QRect src = dirty.boundingRect();
+            w->render(&fp, src.topLeft(), QRegion(dirty));
             fp.end();
             STARTUP_MARK("render pass done");
         }
@@ -909,8 +1001,22 @@ public:
             uploadImages.append(tile);
             uploadHashes.append(h);
         }
-        frameImage = QImage();  // release the frame surface before SHM write
+        // Keep this frame as the base for the NEXT partial frame (see the
+        // fullFrame logic at the top of the render pass).
+        m_lastFrame = frameImage;
+        frameImage = QImage();  // release the local handle before SHM write
         const int dirtyCount = uploadTiles.size();
+        if (s_trace) {
+            // The decisive number: if a re-render produced pixel-identical
+            // tiles, suppressed == dirtyTiles and nothing is uploaded at all
+            // (the engine painted a stale frame); if uploaded > 0, new
+            // content left this process and the loss is browser-side.
+            fprintf(stderr, "[host] tiles fw=%d fh=%d dirtyTiles=%d "
+                            "uploaded=%d suppressed=%d\n",
+                    fw, fh, dirtyTiles.size(), dirtyCount,
+                    dirtyTiles.size() - dirtyCount);
+            fflush(stderr);
+        }
         const int headerBytes = kHeaderBytes + dirtyCount * 4;
 
         // Pass 2: write the surviving index list and tile payloads.
@@ -1201,7 +1307,7 @@ public:
 
     // === Frame scheduling (WebKit DisplayRefreshMonitor, lightweight) ===
     // Input-triggered changes request an immediate frame instead of waiting
-    // for the next 33ms timer tick.  Multiple requests coalesce into one.
+    // for the next 16ms timer tick.  Multiple requests coalesce into one.
     void scheduleFrame()
     {
         if (m_framePending) return;
@@ -1214,7 +1320,26 @@ public:
         if (m_view) {
             QWidget *w = m_view->widget();
             m_dirtyRegion = QRegion(0, 0, w->width(), w->height());
+            // Damage tracing: who replaced partial damage with a full frame.
+            static const bool s_trace = qEnvironmentVariableIsSet("KHTML_DAMAGE_TRACE");
+            if (s_trace) {
+                fprintf(stderr, "[host] invalidateFull\n");
+                fflush(stderr);
+            }
         }
+    }
+
+    // A NEW DOCUMENT must not composite onto the previous document's pixels.
+    // m_lastFrame is the base every PARTIAL frame is rendered on top of, and
+    // navigating away does not necessarily damage the whole viewport (the old
+    // document tears down incrementally), so a stale base would show the old
+    // page underneath the new one for every tile the new page does not
+    // repaint.  Dropping it forces the next frame to start from white; the
+    // size/format check in grabFrame() then keeps it white until a real frame
+    // is composed.
+    void dropFrameBase()
+    {
+        m_lastFrame = QImage();
     }
 
     void invalidateRect(const QRect &r)
@@ -1337,6 +1462,9 @@ private slots:
                     PERF_BEGIN(u.toString().toUtf8().constData());
                     StartupLog::mark(("navigate_received " + u.toString()).toUtf8().constData());
                     m_pendingUrl = u;
+                    // New document: never composite it onto the old page's
+                    // pixels (see dropFrameBase()).
+                    dropFrameBase();
                     const QString sc = u.scheme().toLower();
                     if (sc == QLatin1String("about")) { PERF_MARK("khtmlpart_load_start"); loadBlankPage(); }
                     // file:// also routes through the loader (QFile read +
@@ -1368,7 +1496,10 @@ private slots:
                     m_frameTimer->stop();
                 }
             } else if (cmd == QLatin1String("reload")) {
-                if (m_pendingUrl.isValid()) m_loader->load(m_pendingUrl);
+                if (m_pendingUrl.isValid()) {
+                    dropFrameBase();   // new document, see dropFrameBase()
+                    m_loader->load(m_pendingUrl);
+                }
             } else if (cmd == QLatin1String("restore")) {
                 // Tombstone restore: store scroll/zoom, apply after page completes.
                 m_pendingRestoreX = obj.value(QStringLiteral("x")).toInt();
@@ -1393,16 +1524,29 @@ private slots:
             m_view->widget()->resize(pendingW, pendingH);
             ensureShm(qMax(1, qRound(pendingW * m_dpr)),
                       qMax(1, qRound(pendingH * m_dpr)));
-            // Damage policy for the tiled transport: a width change forces
-            // a KHTML relayout, so the whole frame must be repainted.
-            // A pure height change leaves the page layout untouched: the
-            // existing tiles stay valid and only the newly exposed bottom
-            // strip (if any) is painted — grabFrame() adds that strip from
-            // the committed-vs-new frame height.
-            if (qRound(pendingW * m_dpr) != m_frameW)
+            // Damage policy for the tiled transport: ANY applied size change
+            // must produce a full frame.  The old "only width changes
+            // relayout" assumption is false: a pure height change moves
+            // viewport-anchored (fixed/absolute/100%-height) elements, flips
+            // the vertical scrollbar (and thus changes visibleWidth), and
+            // re-evaluates viewport media queries.  Live-resize sequences
+            // end in pure-height batches, and those left the moved
+            // elements' old pixels painted forever (the user-visible
+            // "stuck blue ghost block" glitch on bing after dragging the
+            // window smaller).
+            if (qRound(pendingW * m_dpr) != m_frameW
+                    || qRound(pendingH * m_dpr) != m_frameH) {
                 m_relayoutPending = true;
+            }
+            if (qEnvironmentVariableIsSet("KHTML_DAMAGE_TRACE")) {
+                fprintf(stderr, "[host] resize applied lw=%d lh=%d frame=%dx%d "
+                                "relayoutPending=%d\n",
+                        pendingW, pendingH, m_frameW, m_frameH,
+                        m_relayoutPending ? 1 : 0);
+                fflush(stderr);
+            }
             // Request a frame immediately after the resize instead of
-            // waiting for the next 33 ms timer tick.  The synchronous
+            // waiting for the next 16 ms timer tick.  The synchronous
             // relayout above is already paid; the sooner the first frame
             // at the new size is delivered, the sooner the browser stops
             // scaling the stale frame.
@@ -1498,6 +1642,12 @@ private:
     // all tiles are dirty regardless of tile-grid coincidence.
     bool m_relayoutPending = false;
     bool m_framePending = false;
+    // Previous fully-composed frame (physical px).  A PARTIAL frame renders
+    // only the dirty region, so it must start from these pixels instead of
+    // white — otherwise the undamaged area inside every uploaded tile is
+    // white and erases correct canvas content.  Shifted with the canvas on
+    // the scroll fast path, dropped on a size change.
+    QImage m_lastFrame;
     bool m_visible = true;  // hidden tabs skip the 60 Hz frame path entirely
     bool m_sentFirstFrame = false;  // startup timing: first tiles upload
 };

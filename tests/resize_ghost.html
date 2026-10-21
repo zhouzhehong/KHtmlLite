@@ -1,0 +1,48 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>ghost</title>
+<style>
+html,body{margin:0;background:#ffffff}
+#anchor{position:fixed;left:0;top:0;width:6px;height:6px;background:#333333}
+/* The blue button starts OFF-ORIGIN and straddles tile boundaries: at
+   dpr=1.5 its physical rect is (570,300)-(651,355), crossing the 512 and
+   256 tile edges — the same geometry as the reported bing ghost.  That
+   matters: a dirty union anchored at the origin would be over-covered by
+   the old physical-as-logical update() bug and could hide it. */
+#btn{position:absolute;left:380px;top:200px;width:54px;height:37px;background:#0078d4}
+/* Bottom-anchored float: moves on a pure-height resize, which is the case
+   the old renderer damage policy never repainted (bottom strip only). */
+#tog{position:fixed;left:200px;bottom:8px;width:80px;height:24px;background:#cc6600}
+</style>
+<script>
+// Mirrors what bing does during a live window resize: JS moves an element
+// (the blue search button) on every resize event, while the fixed element
+// follows the new viewport height.  The title is the probe's proof that the
+// resize event really reached page JS.
+var fired=0;
+var moveTimer=null;
+var settled=false;
+function onrz(){
+  if (settled) return;   // after the delayed move, ignore further resizes so
+                         // a diagnostic can force extra frames without
+                         // moving the button again
+  fired++;
+  document.getElementById('btn').style.left='200px';
+  document.getElementById('btn').style.top='100px';
+  document.title='js'+fired;
+  // Debounced move WITHOUT any further window resize, fired after the resize
+  // storm settles: that frame is PARTIAL (the dirty union covers only a
+  // couple of tiles and is not origin-anchored), so it exercises the
+  // physical->logical update() mapping and the engine's old-rectangle
+  // invalidation for a layer that moves on its own.  Debouncing matters:
+  // the window creation itself already emits resize events.
+  if (moveTimer) clearTimeout(moveTimer);
+  moveTimer=setTimeout(function(){
+    settled=true;
+    document.getElementById('btn').style.left='600px';
+    document.getElementById('btn').style.top='60px';
+    document.title=document.title+'m';
+  }, 500);
+}
+window.addEventListener('resize', onrz);
+</script></head><body>
+<div id="anchor"></div><div id="btn"></div><div id="tog"></div>
+</body></html>

@@ -279,6 +279,39 @@ tests/renderer_solo.py（无浏览器直驱渲染进程+帧颜色断言）。
 
 ---
 
+## 0i. 修复批注（2026-10-21，拖窗口后蓝块卡住：引擎 timer 重算 + 渲染进程部分帧坐标）
+
+两个独立根因叠加（细节、红绿对照、回归见 HANDOVER §5j）：
+
+1. **timer 任务后的样式重算从未发生**：`setDocumentChanged()` 只把文档塞进静态
+   队列，唯一消费端 `updateDocumentsRendering()` 只挂在事件派发结束和脚本求值上；
+   `setTimeout/setInterval/rAF` 回调都不是 → 渲染树里元素停在旧坐标。
+   修：`qjs_dom_bridge.cpp` 的 timer timeout lambda 回调返回后调用
+   `updateDocumentsRendering()`（HTML 的 rendering update 本就在每个 task 结束时跑）。
+   实测：`[css] styleSetProp left=600px` 之后原本没有任何 `[setStyle]`，修后有
+   `diff=2` 且新旧两个矩形都产生 damage。
+2. **部分帧坐标 + 白底**：
+   a) `QWidget::render(painter, targetOffset, sourceRegion)` 会
+   `offset -= paintRegion.boundingRect().topLeft()`，旧代码传 `QPoint()` 等于把
+   damage 内容画到原点。逐像素实测：`offset=(0,0)` 差异 7236 px，
+   `offset=unionTL` / 逐矩形 差异 0。修：传 `dirty.boundingRect().topLeft()`。
+   b) 部分帧以白为底，未受损像素随 tile 一起上传、擦掉正确内容。修：`m_lastFrame`
+   作底图（滚动 fast path 同步平移；全幅/首帧/尺寸变化仍白底；导航时丢弃）。
+3. **顺带修死开关**：mingw CRT 的 `getenv()` 读不到进程环境（`KHTML_QJS_TRACE` /
+   `KHTML_QJS_RUNTIME` 从不起作用），改用 Qt 读取；注意
+   `qEnvironmentVariableIntValue` 对未设置变量返回 0，必须用 `ok` 出参区分，
+   否则会把「未设置」当成「显式关闭」而整体禁用 QuickJS（本轮踩过）。
+4. **流程**：按用户要求 5 代理独立核实；核实指出「render() 平移机制描述错误」
+   「FIX 1 因果链描述错误（drain 不 paint，缺的是 layout）」「m_lastFrame 导航
+   不清空」，三项已在提交前全部改正（注释重写 + `dropFrameBase()`）。
+5. **记档不阻塞**：DOM0 `window.onresize=fn`、内联 window 属性
+   （`<body onload>`，`InlineQJSListener` 仍用 `currentTarget()`）、world reset 后
+   `g_qjsShimmed` 地址复用、元素路径 shim 去重、Layout diff 的移动元素、
+   `m_dirtyRegion` 在帧末被清空、`readTiles` 丢弃分支无 resync、
+   scroll-fast 帧同时 dimsChanged 时底图与画布可能差一帧。
+
+---
+
 ## 1. 进程与沙箱模型
 
 | # | 机制 | 我们的实现（落点） | WebKit 对应 | 差距 | 量化影响 | 优先级 | 对齐成本 |

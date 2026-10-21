@@ -353,6 +353,74 @@ KHTML（5.116）改造的双进程浏览器：`khtml_browser.exe`（UI/合成）
   dppx 单位（需动 bison parser）> srcset/sizes > iframe 子 part dpr 传播
   （KService 依赖，暂不可用）> 跨屏 ScreenChangeInternal。
 
+## 5j. 「拖窗口后蓝块卡住」双根因修复（2026-10-21，全实测）
+
+用户现象：拖动窗口改变大小后，页面里被 JS 移动过的元素**旧位置的像素永久残留**
+（bing 上是搜索按钮的蓝色方块），新位置不出现。用户要求「不要重启 EXE，用我现在
+开着的那份状态来修」，因此全程用探针复现、不碰用户的进程。
+
+### 根因一（引擎）：timer 任务后的样式重算从未发生
+
+`el.style.left = ...` 只在 DOM 上打脏标记：
+`CSSStyleDeclarationImpl::setChanged` (css/css_valueimpl.cpp:817/1022) →
+`NodeImpl::setChanged` (xml/dom_nodeimpl.cpp:366) →
+`DocumentImpl::setDocumentChanged` (xml/dom_docimpl.cpp:1422)，后者**只把文档塞进
+静态队列** `s_changedDocuments()`。唯一消费端是
+`DocumentImpl::updateDocumentsRendering()` (dom_docimpl.cpp:1514)，其 KHTML 调用点
+只有 **事件派发结束** (dom_nodeimpl.cpp:527) 和脚本求值 (html_headimpl.cpp:592)。
+`setTimeout/setInterval/rAF` 回调两者都不是 → 队列永不消费 → `recalcStyle` 不跑 →
+渲染树里元素还停在旧坐标，之后的重绘和 damage 描述的都是旧位置。
+
+**实测**（`KHTML_DAMAGE_TRACE=1`，tests/rg_diag4.py）：页面 JS 里
+`[css] styleSetProp left=600px` 到达桥接层，**之后没有任何 `[setStyle]`**；而同样
+的写入如果发生在 resize 事件处理器里就会出现 `[setStyle]`。
+
+**修法**：qjs_dom_bridge.cpp 的 `jsWindowTimer` timeout lambda 里，回调返回后调用
+`DocumentImpl::updateDocumentsRendering()`。HTML 语义上「update the rendering」本来
+就在**每个 task 结束时**跑，不只在事件后。队列用 `takeFirst()` 消费，事件路径再
+排空时是空的；`recalcStyle` 另有 `m_inStyleRecalc` 重入保护。
+
+### 根因二（渲染进程）：部分帧被画到错误坐标，且未受损区域被刷白
+
+1. **`QWidget::render(painter, targetOffset, sourceRegion)` 会抵消 region 自身的平移**
+   （`QWidgetPrivate::render`：`offset -= paintRegion.boundingRect().topLeft()`）。
+   旧代码传 `QPoint()`，于是**每个部分帧都把 damage 内容画到原点附近**，再把这些
+   错误像素上传成 tile —— 这就是幽灵。逐像素实测（两标记 CSS (200,100)/(60,40)，
+   dpr 1.5，与全幅渲染对比 damage 区内差异）：
+   `offset=(0,0)` → **7236 个像素不同（错）**；
+   `offset=unionTL` → **0**；逐矩形循环 → **0**。
+   修法：`const QRect src = dirty.boundingRect(); w->render(&fp, src.topLeft(), QRegion(dirty));`
+   （单次 paint，比逐矩形省 N 次引擎遍历。）
+2. **部分帧以白色为底**：只重绘 damage 区，未受损像素留在 tile 里被一起上传，
+   把画布上正确的内容擦白。修法：新增 `QImage m_lastFrame` 保存上一帧合成结果，
+   部分帧以它为底；滚动 fast path 用与浏览器 blit 相同的 `(sdx,sdy)*dpr` 平移底图；
+   全幅帧/首帧/尺寸变化仍从白底开始。导航/重载时 `dropFrameBase()` 丢弃底图，
+   避免新文档叠在旧文档像素上。
+
+### 红/绿对照（探针判别力证明）
+
+单独回退根因二第 1 项 → 重建 → `tests/resize_ghost_probe.py`
+**FAIL**（mid-rect 残留 4536 像素、new-rect 0，exit 1），
+`tests/rg_diag4.py` **CONTROL FAIL**；恢复后重建 → 两者 **PASS**
+（mid 0、new 4536/4536=100%，橙色固定块恰好 1 个宽 119≈120）。
+
+### 顺带修掉的真 bug：getenv 门控开关全是死的
+
+这套 mingw 构建里 CRT 的 `getenv()` **读不到进程环境**（实测：
+`KHTML_STARTUP_TIMING` 走 Qt 的 `qEnvironmentVariableIntValue` 有效，
+而 `KHTML_QJS_TRACE` 的 getenv 门控从不触发）。因此把 `js_proxy.cpp` 的
+`kjlog()` 与文档承诺的急停开关 `KHTML_QJS_RUNTIME` 改为 Qt 读取。
+**注意坑**：`qEnvironmentVariableIntValue` 对**未设置**的变量也返回 0，
+必须用 `ok` 出参区分，否则「未设置」会被当成「显式关闭」，QuickJS 会被整体禁用
+（本轮真的踩到：页面 JS 全部不执行，由 rg_diag3 的 title 停在初始值发现）。
+
+### 回归（全绿）
+
+tile_protocol / scroll_probe(60px/notch, 收敛 3.1ms) / browser_click_probe /
+dpr_probe(1.5, canvas 1020×534) / resize_ghost_probe / rg_diag4 全部 PASS。
+`tests/tile_protocol_test.py` 的参考模型同步到新 damage 策略
+（**任意**尺寸变化都整幅重绘，不再有 bottom-strip 特例，hash 表仅在列数变化时重置）。
+
 ## 6. 正在/马上要做的
 A. ~~拆那 1.1s~~ **已完成**（字体枚举缓存 + 图标懒加载，构造 1.1s→~0.35s，TTFF 2.0→1.1s）。
    下一步同部位残账：渲染进程镜像加载+socket 连接 ~500ms（每次新标签都付），

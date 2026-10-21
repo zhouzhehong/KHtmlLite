@@ -27,6 +27,8 @@
 
 #include "khtmlview.h"
 
+#include <cstdio>
+
 #include "khtml_part.h"
 #include "khtml_events.h"
 #include <config-khtml.h>
@@ -4242,6 +4244,14 @@ void KHTMLView::timerEvent(QTimerEvent *e)
     QRect updateRegion;
     const QVector<QRect> rects = d->updateRegion.rects();
 
+    // Damage tracing: the repaint timer fired and the accumulated region is
+    // about to be flushed through repaintContents() -> contentsUpdated().
+    static const bool s_trace = qEnvironmentVariableIsSet("KHTML_DAMAGE_TRACE");
+    if (s_trace && rects.size()) {
+        fprintf(stderr, "[flush] rects=%d\n", rects.size());
+        fflush(stderr);
+    }
+
     d->updateRegion = QRegion();
 
     if (rects.size()) {
@@ -4367,6 +4377,17 @@ void KHTMLView::scheduleRepaint(int x, int y, int w, int h, bool asap)
 #endif
 
     d->updateRegion = d->updateRegion.united(QRect(x, y, w, h));
+
+    // Damage tracing (KHTML_DAMAGE_TRACE=1); Qt-gated, not getenv() — the
+    // mingw CRT's getenv() does not see the process environment here.
+    static const bool s_trace = qEnvironmentVariableIsSet("KHTML_DAMAGE_TRACE");
+    if (s_trace) {
+        fprintf(stderr, "[schedRepaint] %d,%d,%d,%d asap=%d parsing=%d "
+                       "complete=%d timer=%d region=%d\n",
+                x, y, w, h, asap ? 1 : 0, parsing ? 1 : 0, d->complete ? 1 : 0,
+                d->repaintTimerId, d->updateRegion.rectCount());
+        fflush(stderr);
+    }
 
     if (asap && !parsing) {
         unscheduleRepaint();

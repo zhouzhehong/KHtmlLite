@@ -28,13 +28,13 @@
 // measurable per-eval latency plus a file that grows forever on user
 // machines. KHTML_QJS_TRACE=1 turns it back on for debugging.
 static void kjlog(const char *m) {
-    static const bool s_trace = [] {
-        const char *v = getenv("KHTML_QJS_TRACE");
-        return v && v[0] == '1';
-    }();
+    // Qt read, NOT getenv(): the mingw CRT's getenv() does not see the
+    // process environment in these binaries (measured: KHTML_STARTUP_TIMING
+    // via qEnvironmentVariableIntValue works, getenv-gated flags never fire),
+    // so the getenv version of this switch was dead.
+    static const bool s_trace = qEnvironmentVariableIsSet("KHTML_QJS_TRACE");
     if (!s_trace) return;
-    FILE *f = fopen("C:/Users/zhouzhehong/khtml_qjs.log", "a");
-    if (f) { fprintf(f, "%s\n", m); fclose(f); }
+    fprintf(stderr, "%s\n", m);
 }
 
 #include "dom/dom2_events.h"
@@ -122,8 +122,16 @@ bool ScriptProxy::evaluateQuickJS(const QString &script, const QString &filename
         return false;
     }
     {
-        const char *v = getenv("KHTML_QJS_RUNTIME");
-        if (v && v[0] == '0') return false;
+        // Qt read, NOT getenv(): see kjlog() — the CRT getenv() does not see
+        // the process environment in these binaries, which made this
+        // documented kill-switch silently dead.  NOTE: without the ok-flag
+        // the value 0 is ambiguous (qEnvironmentVariableIntValue returns 0
+        // for UNSET variables as well) and QuickJS would be disabled for
+        // everyone — caught by tests/rg_diag3.py (page JS stopped running).
+        bool ok = false;
+        static const bool s_off =
+            qEnvironmentVariableIntValue("KHTML_QJS_RUNTIME", &ok) == 0 && ok;
+        if (s_off) return false;
     }
 
     if (!m_qjs) {

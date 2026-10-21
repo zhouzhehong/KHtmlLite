@@ -38,6 +38,8 @@
 #include <QSharedMemory>
 #include <QImage>
 #include <QPainter>
+#include <QTransform>
+#include <QtMath>
 #include <QMouseEvent>
 #include <QWheelEvent>
 #include <QKeyEvent>
@@ -92,13 +94,32 @@ public:
         m_frame = img;
         m_frameW = img.width();
         m_frameH = img.height();
-        // A scroll preview offsets the frame's draw position, so frame-space
-        // dirty rects do not map while a preview is active — repaint fully.
+        // paintEvent draws the frame 1:1 only while the frame's physical size
+        // matches this widget's.  Otherwise it stretches (live-resize preview,
+        // where the widget has been resized before the renderer answered), and
+        // frame-space dirty rects no longer describe widget space — repaint
+        // fully there.  A scroll preview likewise offsets the draw position.
+        const qreal dpr = devicePixelRatioF();
+        const bool frameMatchesWidget =
+                qAbs(img.width() - qRound(width() * dpr)) <= 1
+                && qAbs(img.height() - qRound(height() * dpr)) <= 1;
         if (sizeChanged || dirty.isNull() || !dirty.isValid()
-                || m_previewDX != 0 || m_previewDY != 0)
+                || !frameMatchesWidget
+                || m_previewDX != 0 || m_previewDY != 0) {
             update();
-        else
-            update(dirty);
+        } else {
+            // `dirty` is in PHYSICAL frame coordinates; update() takes this
+            // widget's LOGICAL coordinates.  Map through QRectF and round
+            // OUTWARD: QTransform::mapRect(QRect) rounds the origin and the
+            // size independently, which can fall a logical pixel short at a
+            // fractional dpr (that is exactly how the pre-fix code clipped
+            // the repaint to a 1.5x-offset region, leaving ghost pixels in
+            // the frame canvas visible on screen forever).
+            const QRectF f = QTransform::fromScale(1.0 / dpr, 1.0 / dpr)
+                                 .mapRect(QRectF(dirty));
+            update(QRect(QPoint(qFloor(f.left()), qFloor(f.top())),
+                         QPoint(qCeil(f.right()), qCeil(f.bottom()))));
+        }
     }
     // Map a widget-relative point to the coordinates the renderer's input
     // path expects: CSS pixels of the page viewport.  This widget's own

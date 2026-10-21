@@ -229,8 +229,15 @@ class RendererModel:
     def damage(self, x, y, w, h):
         self.dirty.append((x, y, w, h))
 
-    def resize(self, w, h, width_changed=False):
-        if width_changed:
+    def resize(self, w, h, size_changed=True):
+        # ANY applied size change must relayout and produce a full frame
+        # (khtml_renderer.cpp: "Damage policy for the tiled transport: ANY
+        # applied size change must produce a full frame").  A pure HEIGHT
+        # change is included: it moves viewport-anchored content, flips the
+        # vertical scrollbar and re-evaluates media queries.  The old model
+        # only relayouted when the WIDTH changed, which is what left the
+        # moved elements' old pixels painted forever.
+        if size_changed:
             self.relayout_pending = True
         self.new_size = (w, h)
 
@@ -244,10 +251,13 @@ class RendererModel:
                                         (browser is notified and composes)"""
         fw, fh = self.new_size
         tx, ty = grid(fw, fh)
+        # There is NO bottom-strip shortcut any more: a size change always
+        # damages the whole logical rect, and a change in the tile COLUMN
+        # count resets the whole grid (slots no longer name the same canvas
+        # rectangle).  The hash table keeps its row-major prefix across a
+        # pure-height resize because those slots still name the same rect.
         if self.relayout_pending or tx != self.tiles_x:
             self.dirty = [(0, 0, fw, fh)]
-        elif fh > self.fh:
-            self.dirty.append((0, self.fh, fw, fh - self.fh))
         self.relayout_pending = False
 
         eff = []
@@ -341,7 +351,7 @@ def run_random_sequence(seed, steps=40, dim=512, verbose=False):
     # True page: per-pixel content revision.  Rev 0 everywhere at first.
     true_rev = [[0 for _ in range(w)] for _ in range(h)]
     rev_counter = 0
-    renderer.resize(w, h, width_changed=True)
+    renderer.resize(w, h, size_changed=True)
 
     def render_tile(t, tx, ty):
         cxx, cyy = t % tx, t // tx
@@ -392,12 +402,15 @@ def run_random_sequence(seed, steps=40, dim=512, verbose=False):
                     new_rev[py][px] = true_rev[py][px]
             true_rev = new_rev
             rev_counter += 1
-            # A width change relayouts the whole page: every pixel may change.
-            if nw != w:
+            # ANY size change relayouts the whole page: every pixel may
+            # change (viewport-anchored elements, scrollbar flips, media
+            # queries) — this mirrors the C++ policy, which no longer
+            # special-cases a pure height change.
+            if (nw, nh) != (w, h):
                 for py in range(nh):
                     for px in range(nw):
                         true_rev[py][px] = rev_counter
-            renderer.resize(nw, nh, width_changed=(nw != w))
+            renderer.resize(nw, nh, size_changed=((nw, nh) != (w, h)))
             w, h = nw, nh
         # idle: no damage
 

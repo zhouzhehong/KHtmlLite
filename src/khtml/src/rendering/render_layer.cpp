@@ -274,8 +274,26 @@ void RenderLayer::updateLayerPositions(RenderLayer *rootLayer, bool doFullRepain
         QRect layerBounds, damageRect, fgrect;
         calculateRects(rootLayer, renderer()->viewRect(), layerBounds, damageRect, fgrect);
         QRect vr = damageRect.intersected(layerBounds);
-        if (vr != m_visibleRect && vr.isValid()) {
-            renderer()->canvas()->repaintViewRectangle(vr.x(), vr.y(), vr.width(), vr.height());
+        if (vr != m_visibleRect) {
+            // KHtmlLite: invalidate the OLD rectangle too.  This fork renders
+            // into a PERSISTENT offscreen tile canvas and uploads only tiles
+            // whose pixels changed, so a layer that moved leaves its old
+            // pixels standing there unless something repaints them.  Stock
+            // khtml (and upstream 5.116) only invalidates the new rect here —
+            // that is fine when the whole view is repainted every frame, but
+            // not with a persistent canvas: it produced stuck ghost pixels of
+            // moved elements (bing's blue search button / floating toggle
+            // buttons) after live window resizes.  Cost: damage area can
+            // roughly double for layouts that move layers; correctness first.
+            // The old rect is invalidated even when the new one is empty (the
+            // element moved out of the viewport) — that case used to skip the
+            // old rect entirely and leave it on screen.
+            if (m_visibleRect.isValid())
+                renderer()->canvas()->repaintViewRectangle(
+                    m_visibleRect.x(), m_visibleRect.y(),
+                    m_visibleRect.width(), m_visibleRect.height());
+            if (vr.isValid())
+                renderer()->canvas()->repaintViewRectangle(vr.x(), vr.y(), vr.width(), vr.height());
             m_visibleRect = vr;
         }
     }

@@ -170,13 +170,23 @@ static QHash<quintptr, QSet<QString>> g_qjsShimmed;
 class QJSNodeListener : public DOM::EventListener
 {
 public:
-    // Invoked by KHTML during native event dispatch on the node the shim is
-    // registered on. Routes through ScriptProxy so the QuickJS runtime is lazily
-    // brought up if needed, then walks g_qjsListeners for this node+type.
+    // The node captured at REGISTRATION is the lookup key for
+    // g_qjsListeners.  For window-level events the shim lives on
+    // WindowEventTargetImpl, which is not a NodeImpl: Event::currentTarget()
+    // guards on eventTargetType() == DOM_NODE and hands back an EMPTY Node
+    // there, so the previous implementation (which read currentTarget()) did
+    // not crash — it silently returned without ever running the callback.
+    // The registration node (the document, since window === the document
+    // wrapper here) is the key the JS listener table uses in both cases.
+    explicit QJSNodeListener(DOM::NodeImpl *lookupNode) : m_lookup(lookupNode) {}
+
+    // Invoked by KHTML during native event dispatch on the target the shim
+    // is registered on. Routes through ScriptProxy so the QuickJS runtime is
+    // lazily brought up if needed, then walks g_qjsListeners for
+    // m_lookup + type.
     void handleEvent(DOM::Event &evt) override
     {
-        DOM::Node ct = evt.currentTarget();
-        DOM::NodeImpl *target = ct.handle();
+        DOM::NodeImpl *target = m_lookup;
         if (!target || !target->document()) {
             return;
         }
@@ -192,6 +202,8 @@ public:
         }
     }
     DOM::DOMString eventListenerType() override { return "_khtml_QJSNodeListener"; }
+private:
+    DOM::NodeImpl *m_lookup;
 };
 
 static const char *kSupportedEvents[] = {
@@ -449,7 +461,37 @@ static ::JSValue elAddEventListener(::JSContext *ctx, ::JSValueConst this_val,
         shimmed.insert(type);
         NodeImpl *nodeImpl = w->node.handle();
         EventName evName = EventName::fromString(mk(type));
-        nodeImpl->addEventListener(evName, new QJSNodeListener(), false);
+        // Events the engine dispatches with target = WindowEventTargetImpl
+        // (NodeImpl::dispatchWindowEvent).  The dispatch chain then contains
+        // ONLY that target (NodeImpl::dispatchGenericEvent prepends it and
+        // never joins the ancestor chain for non-DOM_NODE targets), so a shim
+        // registered on the DOCUMENT node never fires for them — pages'
+        // window.addEventListener('resize', ...) silently did nothing.
+        // Register the shim on the window event target instead;
+        // QJSNodeListener still looks the callback up by the document node,
+        // which is the key used above.
+        //
+        // This list must only contain events that really are window-targeted
+        // in THIS tree: resize (khtmlview.cpp resizeEvent), load
+        // (html_documentimpl.cpp / dom_docimpl.cpp), unload (khtml_part.cpp),
+        // hashchange (khtml_part.cpp).  Names that have no static mapping in
+        // EventName would be allocated a dynamic id that the engine never
+        // dispatches, i.e. a listener that can never fire; do not add them.
+        // Document-targeted bubbling events (DOMContentLoaded) must NOT be
+        // listed: they reach window through the ancestor chain anyway and
+        // would then fire twice.
+        static const QSet<QString> kWindowOnlyEvents = {
+            QStringLiteral("resize"), QStringLiteral("hashchange"),
+            QStringLiteral("unload"), QStringLiteral("load"),
+        };
+        if (nodeImpl->nodeType() == Node::DOCUMENT_NODE
+                && kWindowOnlyEvents.contains(type)) {
+            DocumentImpl *di = static_cast<DocumentImpl *>(nodeImpl);
+            di->windowEventTarget()->addEventListener(
+                evName, new QJSNodeListener(nodeImpl), false);
+        } else {
+            nodeImpl->addEventListener(evName, new QJSNodeListener(nodeImpl), false);
+        }
     }
     qjslog2("ADD_EVENT_LISTENER", (void *)key, nullptr);
     return JS_UNDEFINED;
@@ -522,15 +564,36 @@ static ::JSValue styleGetProp(::JSContext *ctx, ::JSValueConst this_val, int mag
 static ::JSValue styleSetProp(::JSContext *ctx, ::JSValueConst this_val,
                               ::JSValueConst val, int magic)
 {
+    // Damage tracing: does a "el.style.left = ..." write reach the bridge at
+    // all, and does it resolve to a live element?  Qt-gated (the CRT getenv()
+    // does not see the environment in these binaries).
+    static const bool s_trace = qEnvironmentVariableIsSet("KHTML_DAMAGE_TRACE");
     StyleWrap *w = unwrapStyle(ctx, this_val);
     if (!w || magic < 0 || magic >= (int)_countof(kStyleProps)) {
+        if (s_trace) {
+            fprintf(stderr, "[css] styleSetProp REJECTED wrap=%p magic=%d\n",
+                    (void *)w, magic);
+            fflush(stderr);
+        }
         return JS_UNDEFINED;
     }
     Element el(w->node);
-    if (el.isNull()) return JS_UNDEFINED;
+    if (el.isNull()) {
+        if (s_trace) {
+            fprintf(stderr, "[css] styleSetProp NULL element magic=%d\n", magic);
+            fflush(stderr);
+        }
+        return JS_UNDEFINED;
+    }
     CSSStyleDeclaration style = el.style();
     QString name = QString::fromLatin1(kStyleProps[magic]);
-    style.setProperty(mk(cssKebab(name)), mk(jsValStr(ctx, val)), DOM::DOMString());
+    QString v = jsValStr(ctx, val);
+    style.setProperty(mk(cssKebab(name)), mk(v), DOM::DOMString());
+    if (s_trace) {
+        fprintf(stderr, "[css] styleSetProp %s=%s\n",
+                kStyleProps[magic], v.toUtf8().constData());
+        fflush(stderr);
+    }
     return JS_UNDEFINED;
 }
 
@@ -804,6 +867,41 @@ static ::JSValue jsWindowTimer(::JSContext *ctx, ::JSValueConst, int argc,
             fprintf(stderr, "[qjs timer] callback ok id=%d\n", id);
         }
         JS_FreeValue(ctx2, r);
+
+        // RENDERING UPDATE after a script task.
+        //
+        // A style write from a timer callback (el.style.left = ...) only marks
+        // the document dirty: CSSStyleDeclarationImpl::setChanged() ->
+        // NodeImpl::setChanged() -> DocumentImpl::setDocumentChanged() pushes
+        // the document onto the static s_changedDocuments() queue.  That queue
+        // is drained by DocumentImpl::updateDocumentsRendering(), whose only
+        // KHTML call site is the END OF EVENT DISPATCH
+        // (xml/dom_nodeimpl.cpp:527) plus script evaluation
+        // (html/html_headimpl.cpp:592).  A setTimeout/setInterval/rAF callback
+        // is neither, so the drain never ran for it.
+        //
+        // What the drain does (and therefore what was missing): recalcStyle()
+        // for the dirty subtree and — when anything actually changed —
+        // m_view->layout() (xml/dom_docimpl.cpp:1486-1494).  It does NOT
+        // paint.  The missing piece was the LAYOUT: the render tree kept the
+        // element at its old coordinates, so the next paint (and the damage
+        // reported for it) described the old position.  Measured with
+        // KHTML_DAMAGE_TRACE=1 (tests/rg_diag4.py): "[css] styleSetProp
+        // left=600px" arrived from this bridge with NO "[setStyle]" after it,
+        // while the identical write made from a resize event handler did
+        // produce one — and once this call was added, the same timer write
+        // produced "[setStyle] diff=2" plus damage for both the old and the
+        // new rectangle, and the moved element painted correctly with no
+        // window resize anywhere.
+        //
+        // HTML semantics: the "update the rendering" step runs at the end of
+        // every task, not only after events.  This is the minimal equivalent;
+        // the DOM API is untouched and an event-dispatched script still gets
+        // its single update at the end of dispatch.  Drained with
+        // takeFirst(), so a second drain (event dispatch) finds the queue
+        // empty; recalcStyle() is additionally guarded by m_inStyleRecalc.
+        DocumentImpl::updateDocumentsRendering();
+
         if (!rec->repeat) {
             qjsTimerFreeRec(ctx2, rec);
             t->deleteLater();            // we are inside its own handler

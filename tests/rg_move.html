@@ -1,0 +1,22 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>rgmove</title>
+<style>
+html,body{margin:0;background:#ffffff}
+#anchor{position:fixed;left:0;top:0;width:6px;height:6px;background:#333333}
+#btn{position:absolute;left:380px;top:200px;width:54px;height:37px;background:#0078d4}
+</style>
+<script>
+// Moves the element purely on a timer: no window resize, no user input.
+// Used by rg_diag3.py to isolate whether a style-driven move produces a
+// damage notification in the engine (khtml_renderer driven directly).
+setTimeout(function(){
+  document.getElementById('btn').style.left='200px';
+  document.getElementById('btn').style.top='100px';
+  document.title='moved';
+}, 1500);
+setTimeout(function(){
+  document.getElementById('btn').style.backgroundColor='#cc6600';
+  document.title='moved2';
+}, 3000);
+</script></head><body>
+<div id="anchor"></div><div id="btn"></div>
+</body></html>
