@@ -12,6 +12,7 @@ import time
 ROOT = r"C:\Users\zhouzhehong\Desktop\KHtmlLite"
 BUILD = os.path.join(ROOT, "build", "host")
 OUT = os.path.join(ROOT, "tests", "bing_ghost_after.png")
+OUT_BEFORE = os.path.join(ROOT, "tests", "bing_ghost_before.png")
 
 try:
     ctypes.windll.shcore.SetProcessDpiAwareness(2)
@@ -61,6 +62,28 @@ def solid_blue_blocks(px, w, h):
     return [b for b in blocks if b["rows"] >= 5]
 
 
+def page_loaded(path, w, h):
+    """Sanity gate: a blank/failed load must not be judged as a clean page.
+
+    Do NOT require site-specific colours here: cn.bing.com serves different
+    layouts (and a degraded one when the network is restricted), so a
+    "must contain the blue search button" gate produces false LOAD GATE
+    FAILs on pages that did load fine — measured: a loaded page was 47%
+    non-white with only grey content.  What matters is that the page painted
+    real content rather than staying blank.
+    """
+    from PIL import Image
+    im = Image.open(path).convert("RGB")
+    px = im.load()
+    nonwhite = 0
+    for y in range(0, h, 3):
+        for x in range(0, w, 3):
+            if px[x, y] != (255, 255, 255):
+                nonwhite += 1
+    total = (h // 3 + 1) * (w // 3 + 1)
+    return nonwhite >= total * 0.03
+
+
 def main():
     env = dict(os.environ)
     env["PATH"] = r"C:\msys64\mingw64\bin;" + env["PATH"]
@@ -80,6 +103,21 @@ def main():
             print("no window")
             return 1
         time.sleep(8.0)  # bing load
+
+        # Baseline BEFORE any resize: how many solid blue blocks does the
+        # intact page have?  Comparing after-vs-before removes the need to
+        # hard-code the site's own blue elements (the old "<= 1" threshold
+        # was a guess that also passed on a blank page).
+        w0, h0 = grab(hwnd, OUT_BEFORE)
+        if not page_loaded(OUT_BEFORE, w0, h0):
+            print("LOAD GATE FAIL: cn.bing.com did not paint (page is blank) "
+                  "— cannot judge ghosts")
+            return 1
+        from PIL import Image
+        px0 = Image.open(OUT_BEFORE).convert("RGB").load()
+        blocks_before = solid_blue_blocks(px0, w0, h0)
+        print(f"baseline {w0}x{h0}: solid #0078D4 blocks: {len(blocks_before)}")
+
         seq = [(1100, 560), (1000, 520), (1000, 460), (1000, 499)]
         for cw, ch in seq:
             USER32.SetWindowPos(hwnd, 0, 0, 0,
@@ -89,18 +127,20 @@ def main():
             time.sleep(0.04)
         time.sleep(2.5)  # resize JS + repaint settle
         w, h = grab(hwnd, OUT)
-        from PIL import Image
         px = Image.open(OUT).convert("RGB").load()
         blocks = solid_blue_blocks(px, w, h)
-        print(f"bing shot {w}x{h}; solid #0078D4 blocks found: {len(blocks)}")
+        print(f"after    {w}x{h}: solid #0078D4 blocks found: {len(blocks)}")
         for b in blocks:
             print("  block x %d-%d y %d-%d (physical)"
                   % (b["x0"], b["x1"], b["y0"], b["y1"]))
-        # The intact page has ONE solid blue element (the search button);
-        # ghosts would add more solid blocks. Judgement printed for review.
-        ok = len(blocks) <= 1
-        print("BING GHOST CHECK " + ("PASS" if ok else "REVIEW"))
-        return 0
+        # A ghost is EXTRA solid-blue content that the baseline did not have.
+        # The window got smaller, so the page can legitimately show fewer
+        # elements; it must never show more solid blue blocks than before.
+        extra = len(blocks) - len(blocks_before)
+        ok = extra <= 0
+        print(f"extra solid-blue blocks vs baseline: {extra} (ghost if > 0)")
+        print("BING GHOST CHECK " + ("PASS" if ok else "FAIL"))
+        return 0 if ok else 1
     finally:
         subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
                        capture_output=True)

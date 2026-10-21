@@ -136,3 +136,4 @@ tests/portable_smoke_err.txt
 tests/glitch1.png
 tests/user_window.png
 tests/resize_ghost_trace.txt
+tests/bing_ghost_before.png
