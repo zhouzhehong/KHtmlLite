@@ -121,10 +121,22 @@ def orange_blocks(px, w, h):
 def main():
     env = dict(os.environ)
     env["PATH"] = r"C:\msys64\mingw64\bin;" + env["PATH"]
+    # KHTML_TRACE=1 turns on the renderer's damage tracing and captures the
+    # browser+renderer stderr, so a PASS can be audited afterwards (which
+    # damage rects reached the host, how many tiles were uploaded/suppressed).
+    # Without it stderr is discarded to keep the probe quiet.
+    trace = os.environ.get("KHTML_TRACE") == "1"
+    if trace:
+        env["KHTML_DAMAGE_TRACE"] = "1"
+        errf = open(os.path.join(ROOT, "tests", "resize_ghost_trace.txt"), "wb")
+        stderr = errf
+    else:
+        errf = None
+        stderr = subprocess.DEVNULL
     proc = subprocess.Popen(
         [os.path.join(BUILD, "khtml_browser.exe"), PAGE],
         cwd=BUILD, env=env,
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        stdout=subprocess.DEVNULL, stderr=stderr)
     try:
         time.sleep(1.0)
         hwnd = None
@@ -237,6 +249,9 @@ def main():
     finally:
         subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
                        capture_output=True)
+        if errf is not None:
+            errf.close()
+            print("damage trace: tests/resize_ghost_trace.txt")
 
 
 if __name__ == "__main__":
