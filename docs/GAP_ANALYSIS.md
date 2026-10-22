@@ -288,23 +288,79 @@ tests/renderer_solo.py（无浏览器直驱渲染进程+帧颜色断言）。
    `setTimeout/setInterval/rAF` 回调都不是 → 渲染树里元素停在旧坐标。
    修：`qjs_dom_bridge.cpp` 的 timer timeout lambda 回调返回后调用
    `updateDocumentsRendering()`（HTML 的 rendering update 本就在每个 task 结束时跑）。
-   实测：`[css] styleSetProp left=600px` 之后原本没有任何 `[setStyle]`，修后有
-   `diff=2` 且新旧两个矩形都产生 damage。
+   实测：`[css] styleSetProp left=600px` 之后、下一次事件/尺寸变化之前没有
+   `[setStyle]`（推迟而非丢失：脏标志保留、下一次 drain 补上），修后有
+   `diff=2` 且新旧两个矩形都产生 damage。⚠️ 当时的"修前干净 trace"已被修后运行
+   覆盖（同一输出文件名），该前后对比现无法从仓库重导；现存证据见
+   `tests/rg_diag2_err.txt`。
 2. **部分帧坐标 + 白底**：
    a) `QWidget::render(painter, targetOffset, sourceRegion)` 会
    `offset -= paintRegion.boundingRect().topLeft()`，旧代码传 `QPoint()` 等于把
-   damage 内容画到原点。逐像素实测：`offset=(0,0)` 差异 7236 px，
-   `offset=unionTL` / 逐矩形 差异 0。修：传 `dirty.boundingRect().topLeft()`。
+   damage 内容画到原点。修：传 `dirty.boundingRect().topLeft()`。
+   ⚠️ 更正（2026-10-22）：原引「逐像素实测 7236 px 差异」来自一个**不在仓库里**的
+   一次性程序（`tests/scratch_render_compare.cpp` 从来不存在），不可复现，已删除。
+   可复现证据是行为级红/绿对照：offset 改回 `QPoint()` → `resize_ghost_probe` RED
+   （new-rect 0、mid-rect 4536 卡住）。
    b) 部分帧以白为底，未受损像素随 tile 一起上传、擦掉正确内容。修：`m_lastFrame`
    作底图（滚动 fast path 同步平移；全幅/首帧/尺寸变化仍白底；导航时丢弃）。
+   ⚠️ **覆盖缺口**（2026-10-22 核实）：这一项目前**只有源码契约断言兜着**
+   （`tests/tile_protocol_test.py` Part 1），没有行为级回归——`tests/resize_ghost.html`
+   的按钮所在 tile 未受损区域本来就是白底，把底图改回全白两个探针依然 PASS。
+   要补的行为级方案：在共享 damage tile 里放非白内容，或让探针直接 diff 底图。
 3. **顺带修死开关**：mingw CRT 的 `getenv()` 读不到进程环境（`KHTML_QJS_TRACE` /
    `KHTML_QJS_RUNTIME` 从不起作用），改用 Qt 读取；注意
    `qEnvironmentVariableIntValue` 对未设置变量返回 0，必须用 `ok` 出参区分，
    否则会把「未设置」当成「显式关闭」而整体禁用 QuickJS（本轮踩过）。
+   ⚠️ **行为变化（2026-10-22）**：这些开关修好后从「永远 ON」变成**真的生效**——
+   环境里残留 `KHTML_QJS_STYLE=0` / `KHTML_QJS_TIMERS=0` 会静默禁用对应模块、
+   复现本轮修的病症（样式写被忽略 / 没有 setTimeout-rAF 回调）。排查前先查环境变量。
+   （变量设为空串的边界行为未实测，实际影响低。）
 4. **流程**：按用户要求 5 代理独立核实；核实指出「render() 平移机制描述错误」
-   「FIX 1 因果链描述错误（drain 不 paint，缺的是 layout）」「m_lastFrame 导航
-   不清空」，三项已在提交前全部改正（注释重写 + `dropFrameBase()`）。
-5. **记档不阻塞**：DOM0 `window.onresize=fn`、内联 window 属性
+   「m_lastFrame 导航不清空」，两项在提交前改正（注释重写 + `dropFrameBase()`）。
+   同一批核实里「FIX 1 因果链：drain 不 paint，缺的是 layout」这条**采纳错了**，
+   见下条更正。
+5. **机制更正（2026-10-22，二次核实）**：FIX 1 缺的是 **recalcStyle**，不是 layout。
+   元素级样式写入置位的是元素自身 `m_changed` + 祖先 `hasChangedChild` + 文档
+   `m_docChanged`（`NodeImpl::setChanged`，xml/dom_nodeimpl.cpp:366-381），
+   **从不置位文档节点自身的 `m_changed`**；而 `recalcStyle()` 末尾的门控
+   `if (changed() && m_view) m_view->layout()`（xml/dom_docimpl.cpp:1486-1488）
+   用的正是文档自身 `m_changed`（`DocumentImpl` 未覆写 `changed()`；
+   dom_docimpl.h:611 那个访问器返回的是 `m_docChanged`，不是同一标志）→ 该门控
+   不成立，这个 case 里 layout 根本不跑。实测证据：修后 trace 为
+   `[setStyle] ... diff=2`，而 `RenderStyle::Diff`（rendering/render_style.h:2454）
+   = `{ Equal, NonVisible = Equal, Visible, Position, Layout, CbLayout }`，**diff=2 = Position**，
+   不是 Layout(3)。准确表述：缺的是「样式重算」——`recalcStyle` 把新样式应用到
+   渲染树，由 `RenderObject::setStyle` 产生新旧两块 damage，之后的重绘才描述新位置。
+   提交 `9e6f1db` 信息里的 "recalcStyle/layout never ran" 属旧措辞，历史不改写，以本条为准。
+6. **同日补修（2026-10-22，二次核实的 must_fix 清理）**：
+   - `dropFrameBase()` 补到**链接点击路径**（`khtml_renderer.cpp` 里
+     `PageLoader::finished` 的 `begin()/write()/end()` 重喂）：这条路走
+     `BrowserExtension::openUrlRequestDelayed → RendererView::navigateRequested →
+     m_loader->load()`，**不会**收到 `navigate` 命令，所以之前没有走到
+     navigate/reload 路径上的 `dropFrameBase()`。
+     ⚠️ 措辞更正（2026-10-22 核实）：原文「一直拿旧文档像素当底图」是**过度宣称**。
+     底图影响不到**没被上传**的 tile（tile 只在引擎 damage 命中时才上传），而换文档
+     本身就触发整视口重绘（`KHTMLPart::begin → KHTMLView::clear → reset()` 置
+     `firstLayoutPending/needsFullRepaint` → 全层 repaint → `contentsUpdated`）。
+     该调用是**防御性不变量**（引擎 flush 的是视口矩形，未必严格等于
+     `QRegion(logicalRect)`），不是可测量的关键修复。
+     `refreshed`（同文档重喂、保滚动/缩放）**故意不丢底图**——白底起步正是本轮修掉的
+     擦除 bug，丢底图反而会让未受损区域变白。
+   - **第三轮补丁（同日，5 代理核实的 must_fix 收口；本轮核实 3/5 代理返回）**：
+     `rg_diag4.py` 的 `CONTROL FAIL` 原来也 `return 0` → 现按判定返回 0/1；
+     `run_regression.ps1` 把「退出码 0 但无 PASS/INCONCLUSIVE」判为失败、自检用独立
+     名字登记、跑前先删旧报告；`bing_ghost_check.py` 退化 baseline → INCONCLUSIVE
+     且真实截图改相对判据；`tile_protocol_test.py` Part 1 增加底图契约断言；
+     `khtml_renderer.cpp` 修正 `:720`→`:734`、删除引用不存在文件的 7236 数字、
+     链接点击块注释改为诚实范围（见本条上半）。
+   - **仍未完成**：底图修复缺行为级覆盖（见第 2 条 b）、回归报告不入库、
+     回归脚本无单探针超时、5 代理核实有 2 个角度未返回。
+   - 三处残留的 `getenv()` 死开关改用 Qt（`src/khtml/src/ecma/qjs_dom_bridge.cpp`：
+     `KHTML_QJS_TRACE`、模块级 kill switch（`flagOn`）、`KHTML_QJS_TIMERS`）。
+   - 删死代码：scroll fast path 里恒真的 `!m_relayoutPending`（该标志在同一函数更早处
+     已清零，且 relayout 帧本就整幅带 damage，`isEmpty()` 已能排除）、无调用者的
+     `invalidateRect()`。
+7. **记档不阻塞**：DOM0 `window.onresize=fn`、内联 window 属性
    （`<body onload>`，`InlineQJSListener` 仍用 `currentTarget()`）、world reset 后
    `g_qjsShimmed` 地址复用、元素路径 shim 去重、Layout diff 的移动元素、
    `m_dirtyRegion` 在帧末被清空、`readTiles` 丢弃分支无 resync、

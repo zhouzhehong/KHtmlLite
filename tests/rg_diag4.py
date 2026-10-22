@@ -109,10 +109,10 @@ def main():
             print("CONTROL PASS: the style move IS painted correctly when no "
                   "window resize happens -> the defect is in the first "
                   "post-resize frame, not in the style-move path")
-        else:
-            print("CONTROL FAIL: the style move is NOT painted even without a "
-                  "resize -> the style-move paint path itself is broken")
-        return 0
+            return 0
+        print("CONTROL FAIL: the style move is NOT painted even without a "
+              "resize -> the style-move paint path itself is broken")
+        return 1
     finally:
         subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
                        capture_output=True)

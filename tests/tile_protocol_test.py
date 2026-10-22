@@ -8,10 +8,17 @@
 #
 # Part 2 (reference model): a pure-Python re-implementation of the renderer's
 # damage->dirty-tile algorithm and the browser's compositing loop, driven by
-# randomized frame-size/damage sequences.  For every step it recomposites the
-# browser canvas and asserts it pixel-matches a straight render of the true
-# page image.  This catches edge-clip, resize-carry and stale-tile bugs in
-# the protocol logic without needing the C++ build.
+# randomized frame-size/damage sequences.  The renderer does NOT render whole
+# tiles: it composes ONE frame per grabFrame() and crops tiles out of it, and a
+# PARTIAL frame starts from the PREVIOUS frame's pixels (only the damage rects
+# are repainted, at their true coordinates) rather than from white.  The model
+# reproduces that composition, then for every step recomposites the browser
+# canvas and asserts it pixel-matches a straight render of the true page image.
+# This catches edge-clip, resize-carry, stale-tile AND "partial frame must not
+# start from white" bugs in the protocol logic without needing the C++ build.
+# A negative control re-runs the same sequences with the OLD white-based
+# partial composition and asserts it DOES produce a wrong canvas, proving the
+# property test above is discriminating rather than self-fulfilling.
 #
 # Run: python tests/tile_protocol_test.py   (no Qt, no compiler needed)
 
@@ -89,6 +96,36 @@ def test_static_consistency():
     n_render = len(re.findall(r"\bw->render\(&", rend))
     assert n_render == 1, "expected exactly 1 frame render call, got %d" % n_render
     print("  frame rendered exactly once per grabFrame (tiles are crops)")
+
+    # Partial-frame composition contract (the 2026-10-21/22 ghost fix).  A
+    # PARTIAL frame must start from the PREVIOUS composed frame and then repaint
+    # only the damage rects at their true coordinates.  Starting every partial
+    # frame from white re-uploads white into the un-damaged remainder of a
+    # damaged 256x256 tile (tiles are CROPS of the frame), erasing correct
+    # browser canvas content — the erasure half of the user-visible ghost bug.
+    # Guarded statically here; Part 2's negative control covers the same
+    # property behaviourally in the reference model.
+    assert "frameImage = m_lastFrame" in rend, \
+        "partial frames no longer start from the previous composed frame"
+    assert re.search(r"m_lastFrame\.size\(\)\s*!=\s*frameImage\.size\(\)", rend), \
+        "full-frame decision ignores the previous frame size"
+    print("  partial frames compose onto the previous frame (not white)")
+
+    # The frame base must be dropped on every path that swaps in a NEW document
+    # (link click, navigate command, reload), or the new document composites
+    # onto the old one's pixels...
+    n_drop = rend.count("dropFrameBase();")
+    assert n_drop >= 3, "expected >=3 dropFrameBase() sites, got %d" % n_drop
+    assert re.search(r"dropFrameBase\(\);\s*\n\s*m_view->begin\(localFile\)", rend), \
+        "link-click document swap does not drop the frame base first"
+    # ...but deliberately KEPT on the same-document 'refreshed' re-feed (same
+    # URL/layout, scroll+zoom preserved): dropping it there would restart the
+    # next partial frame from white, i.e. the erasure bug again.
+    ref = rend.split("PageLoader::refreshed", 1)
+    assert len(ref) == 2, "PageLoader::refreshed handler not found"
+    assert "dropFrameBase()" not in ref[1][:900], \
+        "refreshed re-feed must not drop the frame base"
+    print("  frame base dropped on new-document paths, kept on refreshed")
 
     # Resize presentation contract (AppKit live-resize stretch, the rule the
     # macOS/Windows UI processes follow while the content process catches up):
@@ -209,17 +246,51 @@ def shm_needed(w, h):
 
 
 class RendererModel:
-    """Models khtml_renderer.cpp grabFrame() tile bookkeeping (no pixels)."""
+    """Models khtml_renderer.cpp grabFrame() frame composition + tile bookkeeping.
 
-    def __init__(self):
+    The renderer does NOT render whole tiles: it composes ONE frame and crops
+    tiles out of it ("Pass 1: render the frame ONCE into a surface, then treat
+    tiles as CROPS of that surface").  Rules modelled here (dpr == 1, so
+    logical CSS px == framebuffer px):
+
+      1. damage (m_dirtyRegion) is LOGICAL CSS px; fw = round(lw*dpr).
+      2. fullFrame = (dirty == QRegion(logicalRect))
+                     || m_lastFrame.size() != frameImage.size()
+                     || dimsChanged.  A FULL frame starts from WHITE; a
+         PARTIAL frame starts from the PREVIOUS frame's pixels
+         (`frameImage = m_lastFrame`).
+      3. A relayout frame (m_relayoutPending) or a change in the tile COLUMN
+         count sets dirty = the whole logical rect (=> full frame).
+      4. Exactly ONE paint: w->render(&fp, src.topLeft(), QRegion(dirty)) with
+         src = dirty.boundingRect().  QWidget::render cancels the source
+         region's own translation, so damaged content lands at its TRUE
+         coordinates: this model repaints ONLY the pixels inside the effective
+         damage rects, with the true page pixels (no offset/anchor error).
+      5. Tiles are CROPS of that composed frame; a tile is uploaded only when
+         its FNV-1a hash differs from the previous frame's tile in that slot.
+      6. The composed frame becomes the base for the next grabFrame().
+
+    buggy_compose=True reproduces the OLD composition and is used ONLY by the
+    negative control: the frame starts from WHITE on EVERY partial frame and
+    only the damage rects are painted.  Since a tile is a 256x256 CROP, its
+    un-damaged remainder is cropped as white and the upload erases correct
+    browser canvas content (the real user-visible bug).  Never the default.
+    """
+
+    def __init__(self, buggy_compose=False):
         self.fw = 0
         self.fh = 0
+        self.new_size = (0, 0)
         self.tiles_x = 0
         self.tiles_y = 0
-        self.dirty = []  # list of rects (x, y, w, h)
+        self.dirty = []  # list of rects (x, y, w, h), LOGICAL CSS px
         self.relayout_pending = False
         # Same-tile suppression cache (mirrors m_tileHashes): 0 = unknown.
         self.tile_hashes = []
+        # m_lastFrame: the previously composed physical frame (rows of
+        # pixels), or None while there is no valid base (null QImage).
+        self.last_frame = None
+        self.buggy_compose = buggy_compose
 
     @staticmethod
     def _rects_intersect(a, b):
@@ -241,25 +312,45 @@ class RendererModel:
             self.relayout_pending = True
         self.new_size = (w, h)
 
-    def grab_frame(self, render_tile):
-        """render_tile(t, tx, ty) -> TILE x TILE pixel rows for slot t.
+    @staticmethod
+    def _crop_tile(frame, t, fw, fh, tiles_x):
+        """Crop tile slot t out of the composed frame, mirroring the C++
+        upload loop: rows outside the frame hash as white, and the region to
+        the right of the frame within a row is white-padded to kTileSize."""
+        cxx, cyy = t % tiles_x, t // tiles_x
+        tile_x, tile_y = cxx * TILE, cyy * TILE
+        img = []
+        for y in range(TILE):
+            fy = tile_y + y
+            if 0 <= fy < fh:
+                xs = min(max(tile_x, 0), fw)           # qBound(0, tileX, fw)
+                xe = min(max(xs, tile_x + TILE), fw)   # qBound(xs, .., fw)
+                row = frame[fy][xs:xe] + [(255, 255, 255)] * (TILE - (xe - xs))
+            else:
+                row = [(255, 255, 255)] * TILE  # whole row outside the frame
+            img.append(row)
+        return img
+
+    def grab_frame(self, page_pixel):
+        """page_pixel(x, y) -> (r, g, b) TRUE page pixel at frame coords.
+
         Returns:
           None                        — pure no-op (no damage, no size change)
-          ("suppressed", tx, ty)      — damaged, but every tile rendered
-                                        identical: no upload, no IPC either
+          ("suppressed", tx, ty)      — damaged, but every dirty tile composed
+                                        identical to the last upload: no
+                                        upload, no IPC either
           (tx, ty, tiles, images)     — tiles actually uploaded this frame
                                         (browser is notified and composes)"""
         fw, fh = self.new_size
         tx, ty = grid(fw, fh)
-        # There is NO bottom-strip shortcut any more: a size change always
-        # damages the whole logical rect, and a change in the tile COLUMN
-        # count resets the whole grid (slots no longer name the same canvas
-        # rectangle).  The hash table keeps its row-major prefix across a
-        # pure-height resize because those slots still name the same rect.
+        # Rule 3: a relayout frame, or a change in the tile COLUMN count
+        # (slot indices no longer name the same canvas rect), replaces the
+        # damage with the whole logical rect, which makes the frame full.
         if self.relayout_pending or tx != self.tiles_x:
             self.dirty = [(0, 0, fw, fh)]
         self.relayout_pending = False
 
+        # Effective damage = m_dirtyRegion.intersected(logicalRect).
         eff = []
         for r in self.dirty:
             x1, y1 = max(r[0], 0), max(r[1], 0)
@@ -268,8 +359,29 @@ class RendererModel:
                 eff.append((x1, y1, x2 - x1, y2 - y1))
         dims_changed = (fw != self.fw or fh != self.fh)
         if not eff and not dims_changed:
-            return None
+            return None  # nothing changed; m_lastFrame is NOT touched
 
+        # Rule 2: full frame iff the dirty region IS the whole logical rect,
+        # there is no previous frame, or the frame dimensions changed.
+        dirty_is_full = len(eff) == 1 and eff[0] == (0, 0, fw, fh)
+        full_frame = dirty_is_full or self.last_frame is None \
+            or self.fw != fw or self.fh != fh
+
+        # Compose the frame the engine paints into.  A PARTIAL frame keeps the
+        # previous frame's pixels outside the damage (`frameImage =
+        # m_lastFrame`, rule 2); the buggy control starts white there instead.
+        if not full_frame and not self.buggy_compose:
+            frame = [row[:] for row in self.last_frame]      # = m_lastFrame
+        else:
+            frame = [[(255, 255, 255)] * fw for _ in range(fh)]  # fill white
+        # Rule 4: ONE paint in TRUE coordinates, only inside the damage.
+        for (x, y, rw, rh) in eff:
+            for py in range(y, y + rh):
+                row = frame[py]
+                for px in range(x, x + rw):
+                    row[px] = page_pixel(px, py)
+
+        # Dirty tiles are hit-tested against the physical damage, row-major.
         dirty_tiles = []
         for yy in range(ty):
             for xx in range(tx):
@@ -277,13 +389,21 @@ class RendererModel:
                 if any(self._rects_intersect(r, tr) for r in eff):
                     dirty_tiles.append(yy * tx + xx)
 
-        # Same-tile suppression: render+hash each damaged tile, keep only
-        # changed ones (mirrors grabFrame pass 1 with deferred hash commit).
-        if len(self.tile_hashes) != tx * ty:
+        # Same-tile suppression cache.  Column count changed => every slot is
+        # renamed, reset all; same columns, different rows => keep the prefix
+        # the way QVector::resize does (surviving slots keep their hash, the
+        # new tail starts at the 0 sentinel).
+        if self.tiles_x != tx:
             self.tile_hashes = [0] * (tx * ty)
+        elif len(self.tile_hashes) != tx * ty:
+            self.tile_hashes = (self.tile_hashes[:tx * ty]
+                                + [0] * max(0, tx * ty - len(self.tile_hashes)))
+
+        # Rule 5: crop+hash each dirty tile, keep only changed ones (mirrors
+        # grabFrame pass 1 with deferred hash commit).
         up_tiles, up_images, up_hashes = [], [], []
         for t in dirty_tiles:
-            img = render_tile(t, tx, ty)
+            img = self._crop_tile(frame, t, fw, fh, tx)
             h = fnv1a_tile(img)
             if h == self.tile_hashes[t]:
                 continue
@@ -295,6 +415,8 @@ class RendererModel:
         for t, h in zip(up_tiles, up_hashes):
             self.tile_hashes[t] = h
 
+        # Rule 6: this composition is the base for the NEXT partial frame.
+        self.last_frame = frame
         self.fw, self.fh = fw, fh
         self.tiles_x, self.tiles_y = tx, ty
         self.dirty = []
@@ -343,9 +465,23 @@ def region_color(rev, x, y):
             ((x ^ y) + rev * 3) % 256)
 
 
-def run_random_sequence(seed, steps=40, dim=512, verbose=False):
+def _fmt_mismatch(m):
+    x, y = m["pixel"]
+    return ("seed=%d step=%d action=%s pixel(%d,%d) got=%s want=%s"
+            % (m["seed"], m["step"], m["action"], x, y, m["got"], m["want"]))
+
+
+def run_random_sequence(seed, steps=40, dim=512, verbose=False,
+                        buggy_compose=False, sample_step=7):
+    """Drive one randomized damage/resize sequence through the reference models
+    and verify the browser canvas after every committed step.
+
+    buggy_compose=True selects the OLD white-based partial composition and is
+    used ONLY by the negative control.  Returns (stats, first_mismatch), where
+    first_mismatch is None on success or a dict with seed/step/action/pixel/
+    got/want describing the FIRST canvas-vs-true-page disagreement."""
     rnd = random.Random(seed)
-    renderer = RendererModel()
+    renderer = RendererModel(buggy_compose=buggy_compose)
     browser = BrowserModel()
     w, h = dim, dim
     # True page: per-pixel content revision.  Rev 0 everywhere at first.
@@ -353,21 +489,11 @@ def run_random_sequence(seed, steps=40, dim=512, verbose=False):
     rev_counter = 0
     renderer.resize(w, h, size_changed=True)
 
-    def render_tile(t, tx, ty):
-        cxx, cyy = t % tx, t // tx
-        out = []
-        for y in range(TILE):
-            row = []
-            py = cyy * TILE + y
-            for x in range(TILE):
-                px = cxx * TILE + x
-                if px < w and py < h:
-                    row.append(region_color(true_rev[py][px], px, py))
-                else:
-                    # tiles render white outside the frame (tile.fill white)
-                    row.append((255, 255, 255))
-            out.append(row)
-        return out
+    def page_pixel(px, py):
+        # TRUE page pixel: what a full render would put at (px, py).  The
+        # composition's damage paint writes exactly these, so a correct
+        # partial frame ends up equal to a straight render of the page.
+        return region_color(true_rev[py][px], px, py)
 
     stats = {"none": 0, "suppressed": 0, "upload": 0, "noop_dmg": 0}
 
@@ -414,7 +540,7 @@ def run_random_sequence(seed, steps=40, dim=512, verbose=False):
             w, h = nw, nh
         # idle: no damage
 
-        result = renderer.grab_frame(render_tile)
+        result = renderer.grab_frame(page_pixel)
         if result is None:
             stats["none"] += 1
         elif result[0] == "suppressed":
@@ -424,17 +550,24 @@ def run_random_sequence(seed, steps=40, dim=512, verbose=False):
             stats["upload"] += 1
             browser.commit(w, h, tx, ty, up_tiles, up_images)
 
-        # Verify: browser canvas == true page, everywhere.
+        # Verify: browser canvas == true page, everywhere (sampled).  Return
+        # the FIRST disagreement so the negative control can report it.
         if browser.canvas is None:
             continue
         assert len(browser.canvas) == h and len(browser.canvas[0]) == w
-        for y in range(0, h, 7):  # sample rows (dense enough for regressions)
-            for x in range(0, w, 7):
+        mismatch = None
+        for y in range(0, h, sample_step):  # dense enough for regressions
+            for x in range(0, w, sample_step):
                 got = browser.canvas[y][x]
-                want = region_color(true_rev[y][x], x, y)
+                want = page_pixel(x, y)
                 if got != want:
-                    fail("seed=%d step=%d action=%s pixel(%d,%d) got=%s want=%s"
-                         % (seed, step, action, x, y, got, want))
+                    mismatch = {"seed": seed, "step": step, "action": action,
+                                "pixel": (x, y), "got": got, "want": want}
+                    break
+            if mismatch:
+                break
+        if mismatch:
+            return stats, mismatch
         if verbose:
             print("  step %02d ok (%s, %dx%d)" % (step, action, w, h))
 
@@ -443,18 +576,49 @@ def run_random_sequence(seed, steps=40, dim=512, verbose=False):
     if stats["noop_dmg"] >= 3:
         assert stats["suppressed"] >= 1, \
             "same-tile suppression never fired: %s" % (stats,)
-    return stats
+    return stats, None
 
 
 def test_model():
     total = {"none": 0, "suppressed": 0, "upload": 0, "noop_dmg": 0}
     for seed in range(20):
-        s = run_random_sequence(seed)
+        s, mismatch = run_random_sequence(seed)
+        if mismatch is not None:
+            fail(_fmt_mismatch(mismatch))
         for k in total:
             total[k] += s[k]
-    print("  20 random sequences x 40 steps: canvas matches true page")
+    print("  20 random sequences x 40 steps: partial-frame composition "
+          "(previous frame base) -> canvas matches true page")
     print("  frame stats: %s" % total)
     assert total["suppressed"] > 0, "suppression path never exercised"
+
+
+def test_buggy_composition_negative_control():
+    """Discriminating-power check for the model asserted in test_model().
+
+    Re-run the SAME random sequences with the OLD white-based partial
+    composition (buggy_compose=True): the frame starts from WHITE on every
+    partial frame and only the damage rects are painted, so the un-damaged
+    remainder of each dirty 256x256 CROP is uploaded as white and erases
+    correct browser canvas content.  At least one step must therefore show a
+    browser canvas that does NOT match the true page.  Finding it proves the
+    composition rule encoded in RendererModel (and asserted above) is what the
+    bug violates, instead of the property test being untestable by
+    construction.  Dense sampling here so a small erasure cannot slip through
+    the 7-px grid used by the positive test."""
+    first = None
+    for seed in range(20):
+        _, mismatch = run_random_sequence(seed, buggy_compose=True,
+                                          sample_step=1)
+        if mismatch is not None:
+            first = mismatch
+            break
+    assert first is not None, (
+        "negative control did not reproduce a mismatch: the white-base "
+        "composition is NOT detected, so the positive test proves nothing "
+        "about partial frames")
+    print("  negative control: white-base partial composition reproduced the "
+          "bug -> " + _fmt_mismatch(first))
 
 
 def test_segment_layout():
@@ -575,12 +739,14 @@ def test_scroll_blit():
 
 
 if __name__ == "__main__":
-    print("[1/4] static protocol consistency (renderer vs browser)")
+    print("[1/5] static protocol consistency (renderer vs browser)")
     test_static_consistency()
-    print("[2/4] segment layout worst-case bounds")
+    print("[2/5] segment layout worst-case bounds")
     test_segment_layout()
-    print("[3/4] reference model property tests (random damage/resize)")
+    print("[3/5] reference model property tests (random damage/resize)")
     test_model()
-    print("[4/4] scroll blit scenario")
+    print("[4/5] negative control: white-base composition must FAIL")
+    test_buggy_composition_negative_control()
+    print("[5/5] scroll blit scenario")
     test_scroll_blit()
     print("TILE PROTOCOL PASS")

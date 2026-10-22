@@ -32,7 +32,14 @@ static void kjlog(const char *m) {
     // process environment in these binaries (measured: KHTML_STARTUP_TIMING
     // via qEnvironmentVariableIntValue works, getenv-gated flags never fire),
     // so the getenv version of this switch was dead.
-    static const bool s_trace = qEnvironmentVariableIsSet("KHTML_QJS_TRACE");
+    // Same predicate as qjs_dom_bridge.cpp's qjsTraceEnabled(): IntValue+ok,
+    // so KHTML_QJS_TRACE=0 really disables the trace everywhere instead of
+    // meaning ON here and OFF there.
+    static const bool s_trace = [] {
+        bool ok = false;
+        const int v = qEnvironmentVariableIntValue("KHTML_QJS_TRACE", &ok);
+        return ok && v != 0;
+    }();
     if (!s_trace) return;
     fprintf(stderr, "%s\n", m);
 }

@@ -139,6 +139,15 @@ def main():
         extra = len(blocks) - len(blocks_before)
         ok = extra <= 0
         print(f"extra solid-blue blocks vs baseline: {extra} (ghost if > 0)")
+        if not blocks_before and not blocks:
+            # Degenerate run: this page painted no solid #0078D4 element at all
+            # here, so "extra <= 0" would be true for ANY rendering — the check
+            # measured nothing.  Say so instead of printing a green PASS; the
+            # discriminating local coverage is tests/resize_ghost_probe.py.
+            print("BING GHOST CHECK INCONCLUSIVE: no solid #0078D4 element in "
+                  "either capture (this machine's cn.bing.com layout/colour "
+                  "differs) — cannot detect a ghost this way")
+            return 0
         print("BING GHOST CHECK " + ("PASS" if ok else "FAIL"))
         return 0 if ok else 1
     finally:
@@ -146,5 +155,69 @@ def main():
                        capture_output=True)
 
 
+def selftest():
+    """Offline validation of the ghost DETECTOR itself — no browser needed.
+
+    The real captures this detector was tuned on are regenerable probe
+    artifacts (gitignored), so a fresh checkout would have no fixture to test
+    against.  The two synthetic cases below pin the thresholds instead: a
+    synthetic ghost MUST be found, a clean frame MUST NOT.  The real captures
+    are additionally gated RELATIVELY (ghost capture must show more solid blue
+    than the fixed capture) when they happen to be present locally.
+    """
+    from PIL import Image, ImageDraw
+
+    failures = []
+
+    def synthetic(want_any, label):
+        w, h = 400, 300          # scan starts at y=85, so 300 is enough
+        im = Image.new("RGB", (w, h), (255, 255, 255))
+        if want_any:
+            # 80x50 solid #0078D4 block: well below y=85, runs >> 30 px, so it
+            # must cluster into exactly one detected block.
+            ImageDraw.Draw(im).rectangle([100, 150, 179, 199], fill=BLUE)
+        got = len(solid_blue_blocks(im.load(), w, h))
+        ok = (got > 0) == bool(want_any)
+        print("  synthetic %-6s -> blocks=%d (want %s) %s"
+              % (label, got, ">=1" if want_any else "0", "OK" if ok else "FAIL"))
+        if not ok:
+            failures.append("synthetic-" + label)
+
+    print("[detector selftest]")
+    synthetic(True, "ghost")
+    synthetic(False, "clean")
+
+    # The real captures are regenerable artifacts whose ABSOLUTE block counts
+    # depend on how the site happened to render (this machine's cn.bing.com has
+    # measured 0 solid-#0078D4 blocks), so the gate between them is RELATIVE —
+    # the known ghost capture must show MORE solid blue than the fixed one — and
+    # it only applies when both are present.
+    blk = {}
+    for name in ("glitch1.png", "bing_ghost_after.png"):
+        p = os.path.join(ROOT, "tests", name)
+        if not os.path.exists(p):
+            print("  %-22s absent (regenerable artifact) -> SKIP" % name)
+            continue
+        im = Image.open(p).convert("RGB")
+        blk[name] = len(solid_blue_blocks(im.load(), im.size[0], im.size[1]))
+        print("  %-22s blocks=%d (informational)" % (name, blk[name]))
+    if "glitch1.png" in blk and "bing_ghost_after.png" in blk:
+        if blk["glitch1.png"] > blk["bing_ghost_after.png"]:
+            print("  relative gate: ghost capture %d > fixed capture %d OK"
+                  % (blk["glitch1.png"], blk["bing_ghost_after.png"]))
+        else:
+            print("  relative gate: ghost capture %d <= fixed capture %d FAIL"
+                  % (blk["glitch1.png"], blk["bing_ghost_after.png"]))
+            failures.append("relative-gate")
+
+    if failures:
+        print("DETECTOR SELFTEST FAIL: " + ", ".join(failures))
+        return 1
+    print("DETECTOR SELFTEST PASS")
+    return 0
+
+
 if __name__ == "__main__":
+    if "--selftest" in sys.argv:
+        sys.exit(selftest())
     sys.exit(main())

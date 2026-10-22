@@ -47,7 +47,13 @@
 // KHTML_QJS_TRACE=1 turns it back on for debugging.
 static bool qjsTraceEnabled()
 {
-    static const bool on = [] { const char *v = getenv("KHTML_QJS_TRACE"); return v && v[0] == '1'; }();
+    // Qt-gated on purpose: the CRT getenv() in this mingw build does not see
+    // the process environment, so a getenv() gate here is silently dead.
+    static const bool on = [] {
+        bool ok = false;
+        const int v = qEnvironmentVariableIntValue("KHTML_QJS_TRACE", &ok);
+        return ok && v != 0;
+    }();
     return on;
 }
 
@@ -878,21 +884,40 @@ static ::JSValue jsWindowTimer(::JSContext *ctx, ::JSValueConst, int argc,
         // KHTML call site is the END OF EVENT DISPATCH
         // (xml/dom_nodeimpl.cpp:527) plus script evaluation
         // (html/html_headimpl.cpp:592).  A setTimeout/setInterval/rAF callback
-        // is neither, so the drain never ran for it.
+        // is neither, so no drain happened at that point — the dirty flags stay
+        // set (dom_nodeimpl.cpp:366-381) and only the NEXT event or resize
+        // consumed them, which is why the style write looked lost.
         //
-        // What the drain does (and therefore what was missing): recalcStyle()
-        // for the dirty subtree and — when anything actually changed —
-        // m_view->layout() (xml/dom_docimpl.cpp:1486-1494).  It does NOT
-        // paint.  The missing piece was the LAYOUT: the render tree kept the
-        // element at its old coordinates, so the next paint (and the damage
-        // reported for it) described the old position.  Measured with
-        // KHTML_DAMAGE_TRACE=1 (tests/rg_diag4.py): "[css] styleSetProp
-        // left=600px" arrived from this bridge with NO "[setStyle]" after it,
-        // while the identical write made from a resize event handler did
-        // produce one — and once this call was added, the same timer write
-        // produced "[setStyle] diff=2" plus damage for both the old and the
-        // new rectangle, and the moved element painted correctly with no
-        // window resize anywhere.
+        // What the drain does (and therefore what was missing):
+        // updateRendering() -> recalcStyle() (xml/dom_docimpl.cpp:1498-1512,
+        // :1432-1496) re-resolves style for the dirty subtree and applies it
+        // to the render tree — that application is what emits the repaint
+        // damage.  It does NOT paint.
+        //
+        // It also does NOT run layout in this case, and that distinction is
+        // easy to get backwards.  recalcStyle() ends with
+        //     if (changed() && m_view) m_view->layout();   (:1486-1488)
+        // but `changed()` there is NodeImpl::changed() — the DOCUMENT node's
+        // own m_changed (DocumentImpl does not override it).  An element
+        // style write sets the ELEMENT's m_changed plus hasChangedChild on
+        // its ancestors and m_docChanged on the document
+        // (dom_nodeimpl.cpp:366-381), never the document's m_changed, so that
+        // gate stays closed.  Measured confirmation: the trace this call
+        // produces is "[setStyle] ... diff=2", and RenderStyle::Diff
+        // (rendering/render_style.h:2454) is
+        //     { Equal, NonVisible = Equal, Visible, Position, Layout, CbLayout }
+        // so diff=2 is Position — a style application, not a Layout(3) pass.
+        //
+        // Therefore the missing piece was the STYLE RECALCULATION: without it
+        // the render tree kept the element's old style/geometry, so the next
+        // paint — and the damage reported for it — described the old
+        // position.  Measured with KHTML_DAMAGE_TRACE=1 (tests/rg_diag4.py):
+        // "[css] styleSetProp left=600px" arrived from this bridge with NO
+        // "[setStyle]" after it, while the identical write made from a resize
+        // event handler did produce one — and once this call was added, the
+        // same timer write produced "[setStyle] diff=2" plus damage for both
+        // the old and the new rectangle, and the moved element painted
+        // correctly with no window resize anywhere.
         //
         // HTML semantics: the "update the rendering" step runs at the end of
         // every task, not only after events.  This is the minimal equivalent;
@@ -951,9 +976,13 @@ struct QJsDomBridge::Impl
     // Module kill-switches (env vars: KHTML_QJS_NODE=0 etc.)
     bool enableNode = true, enableElement = true, enableDocument = true;
     bool enableStyle = true, enableEvent = true;
+    // Qt-gated: getenv() is dead in this mingw build (see qjsTraceEnabled).
+    // Unset means ON, "0" means OFF — hence the ok out-parameter instead of a
+    // bare `== 0`, which would disable the module for everyone.
     static bool flagOn(const char *name) {
-        const char *v = getenv(name);
-        return !v || v[0] != '0';
+        bool ok = false;
+        const int v = qEnvironmentVariableIntValue(name, &ok);
+        return !ok || v != 0;
     }
     void *lastDocHandle = nullptr;
 
@@ -1319,8 +1348,9 @@ struct QJsDomBridge::Impl
         // hard-require requestAnimationFrame) actually run.
         {
             static const bool s_timersOn = [] {
-                const char *v = getenv("KHTML_QJS_TIMERS");
-                return !v || v[0] != '0';
+                bool ok = false;    // Qt-gated: getenv() is dead in mingw
+                const int v = qEnvironmentVariableIntValue("KHTML_QJS_TIMERS", &ok);
+                return !ok || v != 0;
             }();
             if (s_timersOn) {
                 g_qjsTimerCtx = ctx;

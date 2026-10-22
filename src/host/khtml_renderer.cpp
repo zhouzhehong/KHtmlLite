@@ -508,6 +508,25 @@ public:
                     QStringLiteral("Cached document is empty: %1").arg(localPath));
                 return;
             }
+            // A NEW document is about to replace the current one.  This is the
+            // path a LINK CLICK takes (BrowserExtension::openUrlRequestDelayed
+            // -> RendererView::navigateRequested -> m_loader->load()), which
+            // never arrives as a "navigate" command, so it did not get the
+            // dropFrameBase() that the navigate/reload commands do.
+            //
+            // Honest scope (corrected after the 2026-10-22 five-agent audit):
+            // clearing m_lastFrame here is DEFENSIVE, not load-bearing.  A tile
+            // is uploaded only when the engine damage intersects it (dirtyTiles
+            // is built from m_dirtyRegion alone), so a base change cannot
+            // affect tiles that are never uploaded — and a document swap
+            // already forces a viewport-wide repaint (KHTMLPart::begin ->
+            // KHTMLView::clear -> reset(): firstLayoutPending/needsFullRepaint
+            // -> RenderCanvas::layout -> full-layer repaint -> contentsUpdated
+            // -> m_dirtyRegion).  Keeping the call states the invariant "never
+            // composite a new document onto a base from the old one" explicitly
+            // for the case where the flushed rect does not exactly equal
+            // QRegion(logicalRect) (the engine flushes viewport rects).
+            dropFrameBase();
             m_view->begin(localFile);
             m_view->write(html.constData(), html.size());
             m_view->end();
@@ -520,6 +539,12 @@ public:
         // Scroll/zoom are preserved so the swap is visually lossless — this
         // is our "final consistency" step, same job as WebKit's incremental
         // subresource load replacing placeholders.
+        //
+        // Deliberately NOT a dropFrameBase() site, unlike the link-click path
+        // above: this re-feeds the SAME document (same URL, same layout), so
+        // the existing frame base is still valid for every pixel the re-parse
+        // does not damage.  Dropping it would start the next partial frame
+        // from white, which is exactly the erasure bug grabFrame() fixes.
         connect(m_loader, &PageLoader::refreshed, this,
                 [this](const QUrl &localFile, const QUrl &finalUrl) {
             Q_UNUSED(finalUrl);
@@ -738,8 +763,11 @@ public:
                 if (m_pendingScrollCheck) {
                     m_pendingScrollCheck = false;
                     scrollChecked = true;
+                    // No m_relayoutPending test here: a relayout frame was just
+                    // given FULL damage above, so m_dirtyRegion.isEmpty() can
+                    // never hold for it, and the flag itself was cleared at
+                    // :734 (the only clearing site; it is set at :1550).
                     if (m_haveScrollPos && m_dirtyRegion.isEmpty()
-                            && !m_relayoutPending
                             && fw == m_frameW && fh == m_frameH) {
                         sdx = cx - m_lastCX;
                         sdy = cy - m_lastCY;
@@ -898,13 +926,17 @@ public:
             //     offset = targetOffset; offset -= paintRegion.boundingRect().topLeft();
             // and then setRedirected(pdev, -offset), so with targetOffset (0,0)
             // a damage region away from the origin is painted shifted by
-            // -boundingRect.topLeft().  Measured with
-            // tests/scratch_render_compare.cpp (two markers at CSS (200,100)
-            // and (60,40), dpr 1.5, diffed pixel-by-pixel against a full
-            // render inside the damage area):
-            //     offset=(0,0),  region  -> 7236 differing pixels   (WRONG)
-            //     offset=unionTL, region ->    0 differing pixels   (correct)
-            //     per-rect loop          ->    0 differing pixels   (correct)
+            // -boundingRect.topLeft().
+            //
+            // The pixel-diff numbers once quoted here ("7236 differing
+            // pixels") came from a throwaway harness that is NOT in this repo —
+            // there is no tests/scratch_render_compare.cpp — so they are not
+            // reproducible evidence and are no longer quoted.  The in-tree
+            // evidence for this offset fix is behavioural:
+            // tests/resize_ghost_probe.py (previous round's red/green control:
+            // reverting this offset to QPoint() turned it RED with new-rect 0
+            // and mid-rect 4536 stuck) plus the source assertions in
+            // tests/tile_protocol_test.py.
             // The old code passed QPoint(), so every PARTIAL frame painted
             // damaged content at the wrong place (origin-anchored) and then
             // uploaded those wrong pixels — the ghost.  Passing the damage
@@ -1340,11 +1372,6 @@ public:
     void dropFrameBase()
     {
         m_lastFrame = QImage();
-    }
-
-    void invalidateRect(const QRect &r)
-    {
-        m_dirtyRegion += r;
     }
 
     // Report current scroll position + zoom factor to the browser. Used for

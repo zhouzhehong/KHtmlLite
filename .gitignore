@@ -137,3 +137,6 @@ tests/glitch1.png
 tests/user_window.png
 tests/resize_ghost_trace.txt
 tests/bing_ghost_before.png
+
+# Probe regression runner output (regenerable)
+tests/regression_report.txt

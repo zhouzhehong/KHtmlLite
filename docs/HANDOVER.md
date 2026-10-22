@@ -368,34 +368,59 @@ KHTML（5.116）改造的双进程浏览器：`khtml_browser.exe`（UI/合成）
 静态队列** `s_changedDocuments()`。唯一消费端是
 `DocumentImpl::updateDocumentsRendering()` (dom_docimpl.cpp:1514)，其 KHTML 调用点
 只有 **事件派发结束** (dom_nodeimpl.cpp:527) 和脚本求值 (html_headimpl.cpp:592)。
-`setTimeout/setInterval/rAF` 回调两者都不是 → 队列永不消费 → `recalcStyle` 不跑 →
-渲染树里元素还停在旧坐标，之后的重绘和 damage 描述的都是旧位置。
+`setTimeout/setInterval/rAF` 回调两者都不是 → 该时刻没有 drain（脏标志一直保留，
+要等下一次事件/尺寸变化才被消费）→ `recalcStyle` 不跑 → 渲染树里元素还停在旧坐标，
+之后的重绘和 damage 描述的都是旧位置。
 
 **实测**（`KHTML_DAMAGE_TRACE=1`，tests/rg_diag4.py）：页面 JS 里
-`[css] styleSetProp left=600px` 到达桥接层，**之后没有任何 `[setStyle]`**；而同样
-的写入如果发生在 resize 事件处理器里就会出现 `[setStyle]`。
+`[css] styleSetProp left=600px` 到达桥接层，**在下一次事件/尺寸变化之前没有
+`[setStyle]`**（样式写是**被推迟**、不是丢失：脏标志一直保留，
+`dom_docimpl.cpp:1480-1483`/`:1520-1525` 说明下一次 drain 会补上）；而同样的写入
+如果发生在 resize 事件处理器里会立刻出现 `[setStyle]`。
+⚠️ 可复现性说明（2026-10-22 核实）：当时那份"修前干净 trace"已被修后运行覆盖
+（`tests/rg_diag4.py:27` 写同一个文件名），所以这组前后对比**现在无法从仓库重新
+导出**；现存证据是 `tests/rg_diag2_err.txt` 里 `[setStyle] diff=2` 紧跟两个移动矩形。
 
 **修法**：qjs_dom_bridge.cpp 的 `jsWindowTimer` timeout lambda 里，回调返回后调用
 `DocumentImpl::updateDocumentsRendering()`。HTML 语义上「update the rendering」本来
 就在**每个 task 结束时**跑，不只在事件后。队列用 `takeFirst()` 消费，事件路径再
 排空时是空的；`recalcStyle` 另有 `m_inStyleRecalc` 重入保护。
 
+**机制精度（2026-10-22 二次核实更正）**：缺的**只是 `recalcStyle`，不是 layout**。
+`recalcStyle()` 末尾确实有 `if (changed() && m_view) m_view->layout()`
+（xml/dom_docimpl.cpp:1486-1488），但那里的 `changed()` 是 `NodeImpl::changed()`
+= **文档节点自身**的 `m_changed`（`DocumentImpl` 没有覆写 `changed()`；
+dom_docimpl.h:611 那个访问器返回的是 `m_docChanged`，不是同一标志）。元素级样式
+写入置位的是元素自身 `m_changed` + 祖先 `hasChangedChild` + 文档 `m_docChanged`
+（xml/dom_nodeimpl.cpp:366-381），**从不置位文档自身 `m_changed`** → 该门控不成立，
+这个 case 里 layout 不跑。实测：修后 trace 是 `[setStyle] ... diff=2`，而
+`RenderStyle::Diff`（rendering/render_style.h:2454）=
+`{ Equal, NonVisible = Equal, Visible, Position, Layout, CbLayout }`，**diff=2 = Position**（不是 Layout(3)）。
+准确说法：缺的是「样式重算」——`recalcStyle` 把新样式应用到渲染树，由
+`RenderObject::setStyle` 产生新旧两块 damage。提交 `9e6f1db` 信息里的
+"recalcStyle/layout never ran" 属旧措辞，历史不改写，以本段为准。
+
 ### 根因二（渲染进程）：部分帧被画到错误坐标，且未受损区域被刷白
 
 1. **`QWidget::render(painter, targetOffset, sourceRegion)` 会抵消 region 自身的平移**
    （`QWidgetPrivate::render`：`offset -= paintRegion.boundingRect().topLeft()`）。
    旧代码传 `QPoint()`，于是**每个部分帧都把 damage 内容画到原点附近**，再把这些
-   错误像素上传成 tile —— 这就是幽灵。逐像素实测（两标记 CSS (200,100)/(60,40)，
-   dpr 1.5，与全幅渲染对比 damage 区内差异）：
-   `offset=(0,0)` → **7236 个像素不同（错）**；
-   `offset=unionTL` → **0**；逐矩形循环 → **0**。
+   错误像素上传成 tile —— 这就是幽灵。
+   ⚠️ 更正（2026-10-22 五次独立核实）：此处原引的「逐像素 7236 px 差异」来自一个
+   **不在仓库里**的一次性测量程序（`tests/scratch_render_compare.cpp` 从来不存在），
+   属不可复现证据，已删除。本仓可复现的证据是行为级的：把 offset 改回 `QPoint()`
+   会让 `tests/resize_ghost_probe.py` 变 RED（new-rect 0、mid-rect 4536 卡住），
+   另有 `tests/tile_protocol_test.py` Part 1 的源码契约断言。
    修法：`const QRect src = dirty.boundingRect(); w->render(&fp, src.topLeft(), QRegion(dirty));`
    （单次 paint，比逐矩形省 N 次引擎遍历。）
 2. **部分帧以白色为底**：只重绘 damage 区，未受损像素留在 tile 里被一起上传，
    把画布上正确的内容擦白。修法：新增 `QImage m_lastFrame` 保存上一帧合成结果，
    部分帧以它为底；滚动 fast path 用与浏览器 blit 相同的 `(sdx,sdy)*dpr` 平移底图；
-   全幅帧/首帧/尺寸变化仍从白底开始。导航/重载时 `dropFrameBase()` 丢弃底图，
-   避免新文档叠在旧文档像素上。
+   全幅帧/首帧/尺寸变化仍从白底开始。`navigate`/`reload` 命令、以及**链接点击**
+   （`openUrlRequestDelayed → navigateRequested → m_loader->load()`，
+   khtml_renderer.cpp 里 `PageLoader::finished` 的 `begin()/write()/end()` 重喂）
+   都调 `dropFrameBase()` 丢弃底图，避免新文档叠在旧文档像素上；`refreshed`
+   （同文档重喂、保滚动/缩放）故意保留底图——白底起步正是本轮修掉的擦除 bug。
 
 ### 红/绿对照（探针判别力证明）
 
@@ -420,6 +445,80 @@ tile_protocol / scroll_probe(60px/notch, 收敛 3.1ms) / browser_click_probe /
 dpr_probe(1.5, canvas 1020×534) / resize_ghost_probe / rg_diag4 全部 PASS。
 `tests/tile_protocol_test.py` 的参考模型同步到新 damage 策略
 （**任意**尺寸变化都整幅重绘，不再有 bottom-strip 特例，hash 表仅在列数变化时重置）。
+
+### 2026-10-22 补修轮（二次核实的 must_fix 清理 + 全量回归复跑）
+
+**修了什么**（细节见 GAP_ANALYSIS §0i 第 5/6 条）：
+1. `qjs_dom_bridge.cpp` 的 FIX 1 注释改写为 **recalcStyle**（原文写 layout 是错的；
+   含 layout 门控分析与 `diff=2 = Position` 证据）。
+2. 链接点击路径补 `dropFrameBase()`（`PageLoader::finished` 里 `begin()/write()/end()`
+   重喂处）：这条路走 `openUrlRequestDelayed → navigateRequested → m_loader->load()`，
+   **收不到** `navigate` 命令，所以没拿到 navigate/reload 路径上的 `dropFrameBase()`
+   （该调用的真实作用范围见下方"第三轮"更正：防御性，不是可测量的关键修复）；
+   `refreshed`（同文档重喂）故意保留底图并写明理由。
+3. 三处残留 `getenv()` 死开关改 Qt；删两处死代码（恒真的 `!m_relayoutPending`、
+   无调用者的 `invalidateRect()`）。
+
+**回归 12/12 全绿 + 1 项 INCONCLUSIVE**（最终验收跑在 2026-10-23 01:53 重新构建的 exe
+上，运行窗口 01:53:40→02:40:17；报告尾 `failed: none` / `inconclusive: bing_ghost_check.py`）。
+新增顺序回归脚本 `pwsh -File tests\run_regression.ps1`：先跑离线检测器自检，再顺序跑
+10 个常备探针 + `rg_diag4` + bing 集成，报告落 `tests/regression_report.txt`。
+每步记录 `exit` 与 `verdict`：**退出码非 0、或退出码 0 但输出里既没有 PASS 也没有
+INCONCLUSIVE，都算失败**（INCONCLUSIVE 单独记：这是"这一项没测到东西"，不是绿）。
+
+- `resize_ghost_probe` **PASS**：old-rect 0 / mid-rect 0（精确与近蓝都是 0）、
+  new-rect **4536/4536**、橙色固定块恰好 1 个（x 311-430，宽 119≈120），anchor (11,87)。
+- `rg_diag4`（完全不 resize 的对照）**CONTROL PASS**：mid=0/4536、new=4536/4536
+  → 缺陷在 resize 后第一帧，不在样式移动路径本身。
+- `bing_ghost_check` **INCONCLUSIVE（诚实结论，不是 PASS）**（真实站点 cn.bing.com）：
+  baseline 1805×927 与拖动后 1500×748 的实心 #0078D4 块**都为 0**，说明本机 bing
+  渲染里根本没有这个元素 → `extra = after - before <= 0` 对任何渲染都成立，这一项
+  **什么都没测到**。探针已改为在这种情况下打印 INCONCLUSIVE（退出 0，回归脚本记为
+  warning 而非 fail），不再假绿；真正能抓 ghost 的本地覆盖是 `resize_ghost_probe`。
+- `bg_smoke` / `browser_click_probe` / `dpr_probe`(1.5, canvas 1020×534) /
+  `input_coord_probe` / `resize_probe`（maximize：内容 0.0s、白闪 0.00%、0.18s 收敛
+  (38 采样)；restore：0.00% / 0.07s。⚠️ 该指标 run-to-run 有噪声：同代码前一次是
+  0.28s/29 采样，引用时必须带上是哪一次运行的报告）/ `scroll_smoke`（像素哈希精确还原）
+  / `title_probe`
+  （fresh + adopted）/ `tombstone_probe`（busy 后台 tab t+21s 墓碑、无自动恢复、
+  点击可恢复）全部 **PASS**。
+- `tile_protocol_test` **PASS**（5 段）：参考模型补上**帧合成**语义（部分帧以
+  `m_lastFrame` 为底、只重绘 damage 区、tile 是合成帧的裁剪；hash 表按
+  `QVector::resize` 保留同列前缀），并新增**反向对照**：用旧的白底+仅 damage 合成
+  必须复现出画布与真页面不一致 → 首错 `seed=0 step=1 pixel(256,256) got=白
+  want=(13,29,3)`。**这条对照让模型真的能抓住 ghost 这一类 bug**（旧模型假设 tile
+  可独立整块渲染，所以永远抓不到）。统计：none 159 / suppressed 147 / upload 494 /
+  noop_dmg 150。
+- 检测器自检 `python tests\bing_ghost_check.py --selftest` **PASS**：合成 ghost→1 块、
+  合成 clean→0 块；真实截图改判**相对判据**（`glitch1.png` 1 块 > `bing_ghost_after.png`
+  0 块）。
+
+**同日再补（第三轮：把 5 代理核实的 12 条 must_fix 收口；本轮核实 3/5 代理返回）**
+
+- ⚠️ **死开关修好后的行为变化，排查前必看**：`getenv()` 修好后，5 个模块开关
+  （`KHTML_QJS_NODE/ELEMENT/DOCUMENT/STYLE/EVENT`）与 `KHTML_QJS_TIMERS` 从
+  「永远 ON」变成**真的生效**。环境里若残留 `KHTML_QJS_STYLE=0` 或
+  `KHTML_QJS_TIMERS=0`，会静默禁用对应模块、**复现本轮修的病症**（样式写被忽略 /
+  没有 setTimeout-rAF 回调）。先 `set | findstr KHTML_QJS` 再怀疑渲染。
+- **链接点击 `dropFrameBase()` 的诚实范围**：它是**防御性不变量**，不是关键修复。
+  tile 只在引擎 damage 命中时才上传，底图影响不到「没上传的 tile」；而换文档本身
+  已触发整视口重绘（`KHTMLPart::begin → KHTMLView::clear → reset()` 置
+  `firstLayoutPending/needsFullRepaint` → 全层 repaint → `contentsUpdated`）。
+- **本轮顺手堵掉的测试漏洞**（都是这次核实发现的真问题）：
+  1. `tests/rg_diag4.py`：`CONTROL FAIL` 原来也 `return 0` → 现按判定返回 0/1
+     （它被回归脚本当 gate，之前"控制失败"会被记成通过）。
+  2. `tests/run_regression.ps1`：退出码 0 但输出里既无 `PASS` 也无 `INCONCLUSIVE`
+     判为失败；自检用独立名字登记（`-Skip detector-selftest`）；跑前先删旧报告。
+  3. `tests/bing_ghost_check.py`：退化 baseline → INCONCLUSIVE（见上）。
+  4. `tests/tile_protocol_test.py` Part 1 新增底图源码契约断言：部分帧必须
+     `frameImage = m_lastFrame`、full-frame 判定必须比 `m_lastFrame.size()`、
+     `dropFrameBase()` ≥3 处（链接点击在 `m_view->begin()` 之前）、`refreshed` 块内
+     **不得**出现 `dropFrameBase()`。
+- **仍未完成的账（诚实记录）**：`m_lastFrame` 底图修复**没有行为级**回归覆盖
+  （`tests/resize_ghost.html` 的按钮所在 tile 未受损区域本来就是白底，把底图改回全白
+  探针仍然 PASS，现只有 Part 1 源码断言兜着）；`tests/regression_report.txt` 是
+  gitignore 的可再生产物、不随提交带走；回归脚本无单探针超时（一次约 46 分钟）；
+  5 代理核实有 2 个角度未返回结果（provider 超时）。
 
 ## 6. 正在/马上要做的
 A. ~~拆那 1.1s~~ **已完成**（字体枚举缓存 + 图标懒加载，构造 1.1s→~0.35s，TTFF 2.0→1.1s）。
@@ -446,7 +545,10 @@ H. **低层单位与传播**（5i 记档）：dppx 单位（需动 bison parser�
 1. `cd C:\Users\zhouzhehong\Desktop\KHtmlLite`
 2. 先 `git status` 看有没有未提交的、主人没推的 commit，`git log --oneline -6` 验身世
 3. 修代码前重读 **`docs/ARCHITECTURE.md`**（别造成条文冲突）
-4. 改完必须跑 `python tests\tile_protocol_test.py`（非 MSYS2 下）+ 使用者确认构建
+4. 改完必须跑 `python tests\tile_protocol_test.py`（非 MSYS2 下）+ 使用者确认构建；
+   动到 damage/tile/resize/导航通路时再跑全量顺序回归
+   `pwsh -File tests\run_regression.ps1`（约 30 分钟；报告 `tests/regression_report.txt`；
+   bing 一项需联网，离线用 `-Skip bing_ghost_check.py`）
 5. 启动采集：`python tests\run_startup_capture.py https://cn.bing.com 25` → `python tests\startup_timing_report.py build\host`
 6. 已知 fail 模式：
    - `stdlib.h: No such file`：`CMAKE_NO_SYSTEM_FROM_IMPORTED` 被误删
