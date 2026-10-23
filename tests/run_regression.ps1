@@ -75,11 +75,17 @@ function Invoke-Probe {
     $text = ($out | Out-String)
     $tail = @($out | Select-Object -Last 25)
 
-    # Verdict: exit code alone is not enough (a probe can print FAIL and still
-    # return 0), so require a verdict token as well.
+    # Verdict: exit code alone is not enough (a probe can print FAIL and
+    # still return 0), so require a verdict token as well — and a verdict-
+    # shaped FAIL token overrides any PASS token in the same output (the
+    # 2026-10-23 audit's exploit: a probe printing both).  Verdict-shaped =
+    # FAIL at line start, or uppercase words followed by FAIL; prose such as
+    # "negative control: ... must FAIL" (lowercase, mid-line) cannot match.
+    $failTok = $text -match "(?m)^\s*(?:\[[^\]]*\]\s*)?(?:FAIL\w*\b|[A-Z][A-Z -]*\s+FAIL\w*\b)"
     $verdict = ""
-    if ($text -match "INCONCLUSIVE") { $verdict = "INCONCLUSIVE" }
-    if ($text -match "\bPASS\b") { $verdict = if ($verdict -eq "INCONCLUSIVE") { "PASS+INCONCLUSIVE" } else { "PASS" } }
+    if ($failTok) { $verdict = "FAIL" }
+    elseif ($text -match "INCONCLUSIVE") { $verdict = "INCONCLUSIVE" }
+    elseif ($text -match "\bPASS\b") { $verdict = "PASS" }
 
     $script:lines += "=== $shown  exit=$code  seconds=$secs  verdict=$($verdict -replace '^$','NONE')"
     $script:lines += $tail
@@ -89,6 +95,8 @@ function Invoke-Probe {
 
     if ($code -ne 0) {
         $script:failed += "$shown (exit $code)"
+    } elseif ($failTok) {
+        $script:failed += "$shown (FAIL verdict token with exit 0)"
     } elseif (-not $verdict) {
         $script:failed += "$shown (no PASS/INCONCLUSIVE verdict)"
     } elseif ($verdict -match "INCONCLUSIVE") {

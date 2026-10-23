@@ -1,6 +1,12 @@
 <!DOCTYPE html><html><head><meta charset="utf-8"><title>ghost</title>
 <style>
-html,body{margin:0;background:#ffffff}
+/* The page background is deliberately NOT white (2026-10-23 audit item):
+   the delayed no-resize move leaves the UN-damaged remainder of its two
+   damaged tiles showing the composed base, and on a white page a WHITE
+   base (the erasure regression) is invisible to resize_ghost_probe — both
+   halves of the tile look identical.  The grey background makes the
+   probe's background samples catch that regression. */
+html,body{margin:0;background:#f0f0f0}
 #anchor{position:fixed;left:0;top:0;width:6px;height:6px;background:#333333}
 /* The blue button starts OFF-ORIGIN and straddles tile boundaries: at
    dpr=1.5 its physical rect is (570,300)-(651,355), crossing the 512 and

@@ -881,9 +881,12 @@ static ::JSValue jsWindowTimer(::JSContext *ctx, ::JSValueConst, int argc,
         // NodeImpl::setChanged() -> DocumentImpl::setDocumentChanged() pushes
         // the document onto the static s_changedDocuments() queue.  That queue
         // is drained by DocumentImpl::updateDocumentsRendering(), whose only
-        // KHTML call site is the END OF EVENT DISPATCH
-        // (xml/dom_nodeimpl.cpp:527) plus script evaluation
-        // (html/html_headimpl.cpp:592).  A setTimeout/setInterval/rAF callback
+        // KHTML call sites in COMPILED code are the END OF EVENT DISPATCH
+        // (xml/dom_nodeimpl.cpp:527) and script evaluation
+        // (html/html_headimpl.cpp:592).  (A third textual match sits in
+        // vendored svg/animation/SMILTimeContainer.cpp, which no build file
+        // compiles — verified by the 2026-10-23 audit.)  A
+        // setTimeout/setInterval/rAF callback
         // is neither, so no drain happened at that point — the dirty flags stay
         // set (dom_nodeimpl.cpp:366-381) and only the NEXT event or resize
         // consumed them, which is why the style write looked lost.

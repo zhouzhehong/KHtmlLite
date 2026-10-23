@@ -1,0 +1,36 @@
+[tomb] currentChanged idx=0
+[setStyle] 000001a7b9feefb0 had=0 diff=3 layer=1 pos=-1
+[setStyle] 000001a7b9feefb0 had=1 diff=4 layer=1 pos=0
+[setStyle] 000001a7b9feefb0 had=1 diff=4 layer=1 pos=0
+[setStyle] 000001a7b9fef1b8 had=0 diff=3 layer=0 pos=-1
+[setStyle] 000001a7b9fef1b8 had=1 diff=4 layer=1 pos=0
+[setStyle] 000001a7b9fef1b8 had=1 diff=4 layer=1 pos=0
+[setStyle] 000001a7b9fef1b8 had=1 diff=4 layer=1 pos=0
+[setStyle] 000001a7b9fef348 had=0 diff=3 layer=0 pos=-1
+[setStyle] 000001a7b9fef420 had=0 diff=3 layer=0 pos=-1
+[setStyle] 000001a7b9fef5b0 had=0 diff=3 layer=0 pos=-1
+[setStyle] 000001a7b9fef740 had=0 diff=3 layer=0 pos=-1
+[schedRepaint] 0,0,800,560 asap=0 parsing=0 complete=1 timer=0 region=1
+[tomb] titleChanged title=[setStyle] 000001a7b9fef5b0 had=1 diff=2 layer=1 pos=2
+[schedRepaint] 380,200,54,37 asap=1 parsing=0 complete=1 timer=8 region=1
+[schedRepaint] 200,100,54,37 asap=1 parsing=0 complete=1 timer=8 region=1
+js1 cur=1
+[schedRepaint] 0,0,1161,553 asap=0 parsing=0 complete=1 timer=8 region=2
+[tomb] titleChanged title=js2 cur=1
+[host] resize applied lw=1161 lh=553 frame=0x0 relayoutPending=1
+[flush] rects=2
+[host] contentsUpdated 0,0,1161,560 widget=1161x553
+[host] grabFrame lw=1161 lh=553 dirtyRectCount=1 dirtyBounds=0,0,1161,553 relayout=1 widgetDone=1 docW=1161 docH=553
+[host] tiles fw=1742 fh=830 dirtyTiles=28 uploaded=28 suppressed=0
+[tomb] titleChanged title=js2m cur=1
+[schedRepaint] 0,0,1167,553 asap=0 parsing=0 complete=1 timer=0 region=1
+[setStyle] 000001a7b9fef5b0 had=1 diff=2 layer=1 pos=2
+[schedRepaint] 200,100,54,37 asap=1 parsing=0 complete=1 timer=5 region=1
+[schedRepaint] 600,60,54,37 asap=1 parsing=0 complete=1 timer=5 region=1
+[host] resize applied lw=1167 lh=553 frame=1742x830 relayoutPending=1
+[host] grabFrame lw=1167 lh=553 dirtyRectCount=0 dirtyBounds=0,0,0,0 relayout=1 widgetDone=1 docW=1167 docH=553
+[host] tiles fw=1751 fh=830 dirtyTiles=28 uploaded=2 suppressed=26
+[flush] rects=1
+[host] contentsUpdated 0,0,1167,553 widget=1167x553
+[host] grabFrame lw=1167 lh=553 dirtyRectCount=1 dirtyBounds=0,0,1167,553 relayout=0 widgetDone=1 docW=1167 docH=553
+[host] tiles fw=1751 fh=830 dirtyTiles=28 uploaded=0 suppressed=28

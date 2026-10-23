@@ -62,6 +62,20 @@ def solid_blue_blocks(px, w, h):
     return [b for b in blocks if b["rows"] >= 5]
 
 
+def nonwhite_fraction(path, w, h):
+    """Sampled fraction of the capture that is not pure white."""
+    from PIL import Image
+    im = Image.open(path).convert("RGB")
+    px = im.load()
+    nonwhite = 0
+    for y in range(0, h, 3):
+        for x in range(0, w, 3):
+            if px[x, y] != (255, 255, 255):
+                nonwhite += 1
+    total = (h // 3 + 1) * (w // 3 + 1)
+    return nonwhite / total
+
+
 def page_loaded(path, w, h):
     """Sanity gate: a blank/failed load must not be judged as a clean page.
 
@@ -72,16 +86,18 @@ def page_loaded(path, w, h):
     non-white with only grey content.  What matters is that the page painted
     real content rather than staying blank.
     """
-    from PIL import Image
-    im = Image.open(path).convert("RGB")
-    px = im.load()
-    nonwhite = 0
-    for y in range(0, h, 3):
-        for x in range(0, w, 3):
-            if px[x, y] != (255, 255, 255):
-                nonwhite += 1
-    total = (h // 3 + 1) * (w // 3 + 1)
-    return nonwhite >= total * 0.03
+    return nonwhite_fraction(path, w, h) >= 0.03
+
+
+def after_liveness_ok(frac_before, frac_after):
+    """Gate for the AFTER capture (2026-10-23 audit item): a resize that
+    blanks the content area must read as a hard failure, not as a clean
+    ghost check.  The absolute 3% floor alone is not enough — browser
+    chrome alone can exceed it — so also require the after capture to
+    keep at least half of the baseline's non-white fraction.  This run
+    only SHRINKS the window, so a healthy page cannot legitimately lose
+    half of its painted area between the two captures."""
+    return frac_after >= 0.03 and frac_after >= 0.5 * frac_before
 
 
 def main():
@@ -109,6 +125,7 @@ def main():
         # hard-code the site's own blue elements (the old "<= 1" threshold
         # was a guess that also passed on a blank page).
         w0, h0 = grab(hwnd, OUT_BEFORE)
+        frac_before = nonwhite_fraction(OUT_BEFORE, w0, h0)
         if not page_loaded(OUT_BEFORE, w0, h0):
             print("LOAD GATE FAIL: cn.bing.com did not paint (page is blank) "
                   "— cannot judge ghosts")
@@ -127,6 +144,18 @@ def main():
             time.sleep(0.04)
         time.sleep(2.5)  # resize JS + repaint settle
         w, h = grab(hwnd, OUT)
+        # Liveness gate on the AFTER capture (2026-10-23 audit item): a
+        # resize that blanks the content area must read as a hard failure,
+        # not as a clean ghost check ("blocks dropped to 0" would otherwise
+        # PASS as extra <= 0).
+        frac_after = nonwhite_fraction(OUT, w, h)
+        if not after_liveness_ok(frac_before, frac_after):
+            print("LOAD GATE FAIL (after): the resized window painted far "
+                  "less than the baseline (before %.1f%% vs after %.1f%% "
+                  "non-white) — an erasure/paint-loss regression must not "
+                  "read as a clean ghost check"
+                  % (100.0 * frac_before, 100.0 * frac_after))
+            return 1
         px = Image.open(OUT).convert("RGB").load()
         blocks = solid_blue_blocks(px, w, h)
         print(f"after    {w}x{h}: solid #0078D4 blocks found: {len(blocks)}")
@@ -186,6 +215,20 @@ def selftest():
     print("[detector selftest]")
     synthetic(True, "ghost")
     synthetic(False, "clean")
+
+    # The after-capture liveness gate is a pure function; pin its edges
+    # offline too (2026-10-23 audit item).
+    for fb, fa, want, label in ((0.47, 0.45, True, "healthy shrink"),
+                                (0.47, 0.10, False, "content blanked"),
+                                (0.47, 0.02, False, "near-total blank"),
+                                (0.03, 0.029, False, "under floor"),
+                                (0.04, 0.03, True, "small page ok")):
+        got = after_liveness_ok(fb, fa)
+        good = got == want
+        print("  after-liveness %-16s before=%.3f after=%.3f -> %s %s"
+              % (label, fb, fa, got, "OK" if good else "FAIL"))
+        if not good:
+            failures.append("after-liveness-" + label)
 
     # The real captures are regenerable artifacts whose ABSOLUTE block counts
     # depend on how the site happened to render (this machine's cn.bing.com has

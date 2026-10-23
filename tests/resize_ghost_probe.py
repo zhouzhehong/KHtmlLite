@@ -46,6 +46,12 @@ FRAME_W, FRAME_H = 22, 56   # physical outer-frame budget (Win11)
 BLUE = (0, 120, 212)
 ORANGE = (204, 102, 0)
 ANCHOR = (51, 51, 51)
+BG = (240, 240, 240)   # page background #f0f0f0 (deliberately NOT white —
+                      # see check 5 and the comment in resize_ghost.html)
+# CSS points inside tiles (1,0)/(3,0) — the delayed move damages exactly
+# those two tiles — but OUTSIDE the MID/NEW/GONE button rects, the anchor
+# and the orange tog: they read the UN-damaged remainder of a damaged tile.
+BG_SAMPLES_CSS = [(200, 10), (300, 10), (300, 150), (550, 20), (650, 150)]
 
 BTN_W, BTN_H = 54, 37       # CSS
 GONE_BTN = (380, 200)       # CSS: position before the resize sequence
@@ -242,6 +248,25 @@ def main():
             print(f"  expected width ~{round(TOG_W * s)}, x ~{round(TOG_X * s)}")
             if abs(bw - round(TOG_W * s)) > 10 or abs(bx - round(TOG_X * s)) > 12:
                 ok = False
+
+        # 5) The un-damaged remainder of the partial frame's damaged tiles
+        #    must keep its true background.  A partial frame composed on a
+        #    WHITE base paints white over these samples — the erasure
+        #    regression this probe could NOT see while the page background
+        #    was white (the 2026-10-22 audit's coverage gap, closed here).
+        badbg = []
+        for gx, gy in BG_SAMPLES_CSS:
+            x, y = ax + round(gx * s), ay + round(gy * s)
+            if px[x, y] != BG:
+                badbg.append((gx, gy, px[x, y]))
+        print("background samples: %d/%d grey #f0f0f0 (want %d/%d)"
+              % (len(BG_SAMPLES_CSS) - len(badbg), len(BG_SAMPLES_CSS),
+                 len(BG_SAMPLES_CSS), len(BG_SAMPLES_CSS)))
+        for gx, gy, got in badbg:
+            print("  bad sample css(%d,%d): got %s want %s"
+                  % (gx, gy, got, BG))
+        if badbg:
+            ok = False
 
         print(f"anchor physical=({ax},{ay}) shot={w}x{h}")
         print("RESIZE GHOST PROBE " + ("PASS" if ok else "FAIL"))

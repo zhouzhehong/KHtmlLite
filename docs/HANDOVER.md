@@ -379,7 +379,9 @@ KHTML（5.116）改造的双进程浏览器：`khtml_browser.exe`（UI/合成）
 如果发生在 resize 事件处理器里会立刻出现 `[setStyle]`。
 ⚠️ 可复现性说明（2026-10-22 核实）：当时那份"修前干净 trace"已被修后运行覆盖
 （`tests/rg_diag4.py:27` 写同一个文件名），所以这组前后对比**现在无法从仓库重新
-导出**；现存证据是 `tests/rg_diag2_err.txt` 里 `[setStyle] diff=2` 紧跟两个移动矩形。
+导出**；现存证据是 `tests/rg_diag2_err.txt`（已冻结入库为
+    `tests/evidence/rg_diag2_trace_2026-10-21.txt`，原文件仍是 gitignore 的
+    再生产物）里 `[setStyle] diff=2` 紧跟两个移动矩形。
 
 **修法**：qjs_dom_bridge.cpp 的 `jsWindowTimer` timeout lambda 里，回调返回后调用
 `DocumentImpl::updateDocumentsRendering()`。HTML 语义上「update the rendering」本来
@@ -459,15 +461,17 @@ dpr_probe(1.5, canvas 1020×534) / resize_ghost_probe / rg_diag4 全部 PASS。
 3. 三处残留 `getenv()` 死开关改 Qt；删两处死代码（恒真的 `!m_relayoutPending`、
    无调用者的 `invalidateRect()`）。
 
-**回归 12/12 全绿 + 1 项 INCONCLUSIVE**（最终验收跑在 2026-10-23 01:53 重新构建的 exe
-上，运行窗口 01:53:40→02:40:17；报告尾 `failed: none` / `inconclusive: bing_ghost_check.py`）。
+**回归 12/12 全绿 + 1 项 INCONCLUSIVE**（最终验收跑在 2026-10-23 16:58 重新构建的 exe
+上，运行窗口 17:03:01→17:50:06（报告 started:/finished: 原文）；报告尾 `failed: none` / `inconclusive: bing_ghost_check.py`）。
 新增顺序回归脚本 `pwsh -File tests\run_regression.ps1`：先跑离线检测器自检，再顺序跑
 10 个常备探针 + `rg_diag4` + bing 集成，报告落 `tests/regression_report.txt`。
 每步记录 `exit` 与 `verdict`：**退出码非 0、或退出码 0 但输出里既没有 PASS 也没有
-INCONCLUSIVE，都算失败**（INCONCLUSIVE 单独记：这是"这一项没测到东西"，不是绿）。
+INCONCLUSIVE、或退出码 0 但输出里出现判定形 FAIL 令牌，都算失败**（INCONCLUSIVE 单独记：
+这是"这一项没测到东西"，不是绿）。
 
 - `resize_ghost_probe` **PASS**：old-rect 0 / mid-rect 0（精确与近蓝都是 0）、
-  new-rect **4536/4536**、橙色固定块恰好 1 个（x 311-430，宽 119≈120），anchor (11,87)。
+  new-rect **4536/4536**、橙色固定块恰好 1 个（x 311-430，宽 119≈120）、
+  **背景采样 5/5 灰 #f0f0f0**（第四轮新增的行为级覆盖，见下），anchor (11,87)。
 - `rg_diag4`（完全不 resize 的对照）**CONTROL PASS**：mid=0/4536、new=4536/4536
   → 缺陷在 resize 后第一帧，不在样式移动路径本身。
 - `bing_ghost_check` **INCONCLUSIVE（诚实结论，不是 PASS）**（真实站点 cn.bing.com）：
@@ -476,11 +480,11 @@ INCONCLUSIVE，都算失败**（INCONCLUSIVE 单独记：这是"这一项没测�
   **什么都没测到**。探针已改为在这种情况下打印 INCONCLUSIVE（退出 0，回归脚本记为
   warning 而非 fail），不再假绿；真正能抓 ghost 的本地覆盖是 `resize_ghost_probe`。
 - `bg_smoke` / `browser_click_probe` / `dpr_probe`(1.5, canvas 1020×534) /
-  `input_coord_probe` / `resize_probe`（maximize：内容 0.0s、白闪 0.00%、0.18s 收敛
-  (38 采样)；restore：0.00% / 0.07s。⚠️ 该指标 run-to-run 有噪声：同代码前一次是
-  0.28s/29 采样，引用时必须带上是哪一次运行的报告）/ `scroll_smoke`（像素哈希精确还原）
+  `input_coord_probe` / `resize_probe`（maximize：内容 0.0s、白闪 0.00%、0.20s 收敛
+  (38 采样)；restore：0.00% / 0.08s。⚠️ 该指标 run-to-run 有噪声：同代码前两次是
+  0.18s/38 与 0.28s/29 采样，引用时必须带上是哪一次运行的报告）/ `scroll_smoke`（像素哈希精确还原）
   / `title_probe`
-  （fresh + adopted）/ `tombstone_probe`（busy 后台 tab t+21s 墓碑、无自动恢复、
+  （fresh + adopted）/ `tombstone_probe`（busy 后台 tab t+16s 墓碑（该项在 16-21s 窗口内有抖动）、无自动恢复、
   点击可恢复）全部 **PASS**。
 - `tile_protocol_test` **PASS**（5 段）：参考模型补上**帧合成**语义（部分帧以
   `m_lastFrame` 为底、只重绘 damage 区、tile 是合成帧的裁剪；hash 表按
@@ -514,11 +518,29 @@ INCONCLUSIVE，都算失败**（INCONCLUSIVE 单独记：这是"这一项没测�
      `frameImage = m_lastFrame`、full-frame 判定必须比 `m_lastFrame.size()`、
      `dropFrameBase()` ≥3 处（链接点击在 `m_view->begin()` 之前）、`refreshed` 块内
      **不得**出现 `dropFrameBase()`。
-- **仍未完成的账（诚实记录）**：`m_lastFrame` 底图修复**没有行为级**回归覆盖
-  （`tests/resize_ghost.html` 的按钮所在 tile 未受损区域本来就是白底，把底图改回全白
-  探针仍然 PASS，现只有 Part 1 源码断言兜着）；`tests/regression_report.txt` 是
-  gitignore 的可再生产物、不随提交带走；回归脚本无单探针超时（一次约 46 分钟）；
-  5 代理核实有 2 个角度未返回结果（provider 超时）。
+- **第四轮（2026-10-23，5/5 代理全部返回；A=PASS，B/C/D/E=CONCERN，
+  must_fix 6 项全部收口，详见 GAP §0i 第 8 条）**：
+  1. **滚动 fast path 真 bug**：blit 平移画布却不清 tile 哈希缓存 →
+     position:fixed 大块在快速滚动后停在平移位置。修：`m_tileHashes.fill(0)`；
+     Part 5 滚动模型重写（哈希抑制 + 非均匀固定带 + 负对照，实测复现
+     `dy=120 pixel(0,0) got=(88,9,0) want=(0,9,0)`，修复后收敛）。
+  2. **底图修复补上行为级覆盖**：`resize_ghost.html` 背景改非白 `#f0f0f0` +
+     探针 5 个背景采样点。实测红/绿：白底回归时旧断言全 PASS（即原来真的
+     抓不到）、采样 0/5 全白 → FAIL exit 1；恢复 → 5/5 → PASS。
+  3. runner 新增「判定形 FAIL 令牌」检测（9 组样例实测分对，must-FAIL 散文
+     不误伤）。
+  4. bing after 截图新增活性门 `after_liveness_ok`（3% 绝对 + baseline 一半
+     相对），自检 5 个边界用例；按位置的移动型 ghost 检测仍做不到 → 已知限制。
+  5. 注释/文档真实性：`:734/:1550` 行号自引（f2ff052 里实际 :745/:1566）→ 改
+     按名引用；`dropFrameBase()` 定义处旧「承重」注释重写为防御口径；
+     `rg_diag2` trace 冻结入库 `tests/evidence/`；桥接注释补「编译代码里仅两处
+     drain」限定；运行窗口/墓碑时刻/回归时长三处数字对齐报告原文。
+- **仍未完成的账（2026-10-23 更新，诚实记录）**：滚动修复只有模型级负对照、
+  没有活探针（scroll_smoke 的页面是内容坐标索引的，复现不了固定带场景）；
+  bing 移动型 ghost 检测做不到（本机 bing 0 蓝块，该项本就 INCONCLUSIVE）；
+  `tests/regression_report.txt` 是 gitignore 的可再生产物、不随提交带走；
+  回归脚本无单探针超时（一次约 46 分钟）。（底图修复的行为级覆盖**已补**；
+  核实角度本轮 5/5 返回。）
 
 ## 6. 正在/马上要做的
 A. ~~拆那 1.1s~~ **已完成**（字体枚举缓存 + 图标懒加载，构造 1.1s→~0.35s，TTFF 2.0→1.1s）。
@@ -547,7 +569,7 @@ H. **低层单位与传播**（5i 记档）：dppx 单位（需动 bison parser�
 3. 修代码前重读 **`docs/ARCHITECTURE.md`**（别造成条文冲突）
 4. 改完必须跑 `python tests\tile_protocol_test.py`（非 MSYS2 下）+ 使用者确认构建；
    动到 damage/tile/resize/导航通路时再跑全量顺序回归
-   `pwsh -File tests\run_regression.ps1`（约 30 分钟；报告 `tests/regression_report.txt`；
+   `pwsh -File tests\run_regression.ps1`（约 46 分钟；报告 `tests/regression_report.txt`；
    bing 一项需联网，离线用 `-Skip bing_ghost_check.py`）
 5. 启动采集：`python tests\run_startup_capture.py https://cn.bing.com 25` → `python tests\startup_timing_report.py build\host`
 6. 已知 fail 模式：

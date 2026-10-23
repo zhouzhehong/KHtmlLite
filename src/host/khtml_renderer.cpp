@@ -765,8 +765,13 @@ public:
                     scrollChecked = true;
                     // No m_relayoutPending test here: a relayout frame was just
                     // given FULL damage above, so m_dirtyRegion.isEmpty() can
-                    // never hold for it, and the flag itself was cleared at
-                    // :734 (the only clearing site; it is set at :1550).
+                    // never hold for it, and the flag itself was cleared a
+                    // few lines above (its only clearing site; the only writer
+                    // is the resize-applied handler).  No line numbers here:
+                    // a comment citing its own file's mutable line numbers
+                    // goes stale the moment text is added above it — that is
+                    // exactly how the ":720" correction shipped wrong numbers
+                    // in f2ff052 (:745/:1566 were the real ones there).
                     if (m_haveScrollPos && m_dirtyRegion.isEmpty()
                             && fw == m_frameW && fh == m_frameH) {
                         sdx = cx - m_lastCX;
@@ -819,6 +824,18 @@ public:
                 m_lastFrame = shifted;
             }
 
+            // The blit displaced every slot's pixels on the browser canvas,
+            // but the suppression cache still holds the PRE-scroll hashes.
+            // A position:fixed tile re-renders pixel-identical content after
+            // the scroll, would match its stale hash and be skipped forever
+            // — leaving the blit-displaced pixels on screen (a >=256-px
+            // fixed header/sidebar stays painted at its shifted position
+            // after a fast wheel scroll; found by the 2026-10-23 five-agent
+            // audit).  Reset the cache: the deferred convergence frame below
+            // then re-uploads the full viewport once (tile IPC only) and
+            // repopulates correct hashes.
+            m_tileHashes.fill(0);
+
             // Tell the browser to shift its canvas first; the strip tiles in
             // this frame's "tiles" message land on the shifted canvas.  The
             // absolute scroll offset rides along so the browser can reconcile
@@ -830,9 +847,10 @@ public:
             // Deferred convergence: re-render everything a short moment
             // later, in case scrolling also repainted fixed-position or
             // script-driven content outside the strip.  The suppression
-            // cache makes this cheap whenever nothing else changed (tiles
-            // render back identical → no upload, no IPC).  Postponed while
-            // the user is still scrolling.
+            // cache was just reset above, so this one frame re-uploads the
+            // whole viewport (tile IPC only, no engine repaint) and
+            // rebuilds correct hashes.  Postponed while the user is still
+            // scrolling.
             const quint32 epoch = ++m_scrollEpoch;
             QTimer::singleShot(250, this, [this, epoch]() {
                 if (epoch != m_scrollEpoch || !m_view) return;
@@ -1362,13 +1380,19 @@ public:
     }
 
     // A NEW DOCUMENT must not composite onto the previous document's pixels.
-    // m_lastFrame is the base every PARTIAL frame is rendered on top of, and
-    // navigating away does not necessarily damage the whole viewport (the old
-    // document tears down incrementally), so a stale base would show the old
-    // page underneath the new one for every tile the new page does not
-    // repaint.  Dropping it forces the next frame to start from white; the
-    // size/format check in grabFrame() then keeps it white until a real frame
-    // is composed.
+    // Scope (honest, per the 2026-10-22/23 audits): this is a DEFENSIVE
+    // invariant, not a load-bearing fix.  A tile is uploaded only when engine
+    // damage intersects it, so the base cannot affect tiles a new page never
+    // repaints, and a document swap already forces a viewport-wide repaint
+    // (begin() -> clear() -> reset(): firstLayoutPending/needsFullRepaint ->
+    // full-layer repaint -> contentsUpdated).  We keep the drop anyway
+    // because that chain is ENGINE behaviour we do not own: if the flushed
+    // rect ever diverges from QRegion(logicalRect), a kept base would
+    // resurface old-document pixels in the un-damaged remainder of a
+    // damaged tile.  Dropping it makes the next frame start from white (the
+    // size/format check in grabFrame() keeps it white until a real frame is
+    // composed), so correctness no longer depends on the engine's damage
+    // completeness.
     void dropFrameBase()
     {
         m_lastFrame = QImage();

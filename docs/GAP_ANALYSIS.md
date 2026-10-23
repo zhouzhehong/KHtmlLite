@@ -291,8 +291,10 @@ tests/renderer_solo.py（无浏览器直驱渲染进程+帧颜色断言）。
    实测：`[css] styleSetProp left=600px` 之后、下一次事件/尺寸变化之前没有
    `[setStyle]`（推迟而非丢失：脏标志保留、下一次 drain 补上），修后有
    `diff=2` 且新旧两个矩形都产生 damage。⚠️ 当时的"修前干净 trace"已被修后运行
-   覆盖（同一输出文件名），该前后对比现无法从仓库重导；现存证据见
-   `tests/rg_diag2_err.txt`。
+   覆盖（同一输出文件名），该前后对比现无法从仓库重导；现存证据已**冻结入库**：
+   `tests/evidence/rg_diag2_trace_2026-10-21.txt`（原 `tests/rg_diag2_err.txt`
+   仍是 gitignore 的可再生工件，`rg_diag2.py` 每次运行都会重写它——2026-10-23
+   5 代理核实指出「把新克隆拿不到的文件当唯一证据」，此为收口）。
 2. **部分帧坐标 + 白底**：
    a) `QWidget::render(painter, targetOffset, sourceRegion)` 会
    `offset -= paintRegion.boundingRect().topLeft()`，旧代码传 `QPoint()` 等于把
@@ -303,10 +305,15 @@ tests/renderer_solo.py（无浏览器直驱渲染进程+帧颜色断言）。
    （new-rect 0、mid-rect 4536 卡住）。
    b) 部分帧以白为底，未受损像素随 tile 一起上传、擦掉正确内容。修：`m_lastFrame`
    作底图（滚动 fast path 同步平移；全幅/首帧/尺寸变化仍白底；导航时丢弃）。
-   ⚠️ **覆盖缺口**（2026-10-22 核实）：这一项目前**只有源码契约断言兜着**
-   （`tests/tile_protocol_test.py` Part 1），没有行为级回归——`tests/resize_ghost.html`
-   的按钮所在 tile 未受损区域本来就是白底，把底图改回全白两个探针依然 PASS。
-   要补的行为级方案：在共享 damage tile 里放非白内容，或让探针直接 diff 底图。
+   ✅ **覆盖缺口已关闭**（2026-10-23，两轮代理点名后收口）：页面背景改成非白
+   `#f0f0f0`，`resize_ghost_probe.py` 新增 5 个背景采样点——落在延迟移动恰好
+   损坏的两个 tile（(1,0)/(3,0)）**之内**、但**在两块 damage 矩形之外**的
+   未受损余区。实测行为级红/绿对照（真实浏览器、真实构建）：
+   - RED：把 `frameImage = m_lastFrame;` 改回白底 → 旧断言**全部仍然 PASS**
+     （old/mid 0、new 4536/4536、orange 1——即此前真的抓不到），新采样
+     **0/5、五个点全是纯白** → `RESIZE GHOST PROBE FAIL`，exit 1。
+   - GREEN：恢复重建 → 采样 5/5 灰 → PASS，exit 0。
+   源码契约断言（Part 1）另测过红/绿（删该行 → AssertionError，exit 1）。
 3. **顺带修死开关**：mingw CRT 的 `getenv()` 读不到进程环境（`KHTML_QJS_TRACE` /
    `KHTML_QJS_RUNTIME` 从不起作用），改用 Qt 读取；注意
    `qEnvironmentVariableIntValue` 对未设置变量返回 0，必须用 `ok` 出参区分，
@@ -351,10 +358,15 @@ tests/renderer_solo.py（无浏览器直驱渲染进程+帧颜色断言）。
      `run_regression.ps1` 把「退出码 0 但无 PASS/INCONCLUSIVE」判为失败、自检用独立
      名字登记、跑前先删旧报告；`bing_ghost_check.py` 退化 baseline → INCONCLUSIVE
      且真实截图改相对判据；`tile_protocol_test.py` Part 1 增加底图契约断言；
-     `khtml_renderer.cpp` 修正 `:720`→`:734`、删除引用不存在文件的 7236 数字、
-     链接点击块注释改为诚实范围（见本条上半）。
-   - **仍未完成**：底图修复缺行为级覆盖（见第 2 条 b）、回归报告不入库、
-     回归脚本无单探针超时、5 代理核实有 2 个角度未返回。
+     删除引用不存在文件的 7236 数字、链接点击块注释改为诚实范围（见本条上半）。
+     ⚠️ 更正（2026-10-23 三轮核实）：当时写的「修正 `:720`→`:734`」**自己就是
+     错的**——f2ff052 提交树里真正的清零/置位点其实是 `:745`/`:1566`（本轮
+     新加的注释行把被引代码挤下去了；修前树里清零点确实在代码行 720、置位
+     1539），且 `:720` 这个数字在 f2ff052^ 里从未以「引用文字」出现过。
+     f2ff052 的提交信息重复了这个错数，历史不改写，以本条为准。该注释现已
+     改为**按名引用**（cleared a few lines above），不再引用易变行号。
+   - **仍未完成**（2026-10-23 更新）：回归报告不入库、回归脚本无单探针超时；
+     底图修复的行为级覆盖**已补**（见第 2 条 b）；核实角度本轮 5/5 全部返回。
    - 三处残留的 `getenv()` 死开关改用 Qt（`src/khtml/src/ecma/qjs_dom_bridge.cpp`：
      `KHTML_QJS_TRACE`、模块级 kill switch（`flagOn`）、`KHTML_QJS_TIMERS`）。
    - 删死代码：scroll fast path 里恒真的 `!m_relayoutPending`（该标志在同一函数更早处
@@ -365,6 +377,34 @@ tests/renderer_solo.py（无浏览器直驱渲染进程+帧颜色断言）。
    `g_qjsShimmed` 地址复用、元素路径 shim 去重、Layout diff 的移动元素、
    `m_dirtyRegion` 在帧末被清空、`readTiles` 丢弃分支无 resync、
    scroll-fast 帧同时 dimsChanged 时底图与画布可能差一帧。
+ 8. **第四轮（2026-10-23，5/5 代理返回的最终核实 + 收口）**：判定
+    A(engine)=PASS，B(renderer)/C(test-gates)/D(evidence)/E(adversarial)
+    =CONCERN。采纳并修复：
+    a) **滚动 fast path 真 bug**（E 发现，Lead 读码复核确认）：blit 平移了
+      浏览器画布与 `m_lastFrame`，但**不清 tile 哈希抑制缓存**——
+      position:fixed 元素跨滚动渲染出**像素相同**的内容，会匹配**旧哈希**被
+      永久跳过重传；250ms 收敛帧的「tiles render back identical → no upload」
+      优化恰好把这个该修的场景优化掉了：≥256 物理像素见方的固定头/侧栏在
+      快速滚轮后停在**平移后的位置**。修：blit 同步 `m_tileHashes.fill(0)`
+      （每轮滚动突发多一次整视口重传，换正确性）。Part 5 滚动模型重写为带
+      哈希抑制 + 非均匀固定带：负对照实测复现
+      `dy=120 pixel(0,0) got=(88,9,0) want=(0,9,0)`，修复后收敛。
+    b) 底图修复补**行为级覆盖**（见第 2 条 b 的 ✅，含实测红/绿）。
+    c) runner 看不见 FAIL 令牌（E）：退出码 0 且同时打印 PASS 与 FAIL 判定词
+      的探针旧规则会记 PASS。新增「判定形 FAIL」检测（行首 FAIL 或大写词后
+      FAIL），9 组样例实测全部分对（tile 测试的 must-FAIL 散文不误伤）。
+    d) bing after 截图无活性门（C）：resize 清空内容区而 baseline 有蓝块时
+      `extra<0` 会 PASS。新增 `after_liveness_ok`（3% 绝对下限 + baseline
+      一半的相对下限），自检补 5 个边界用例；**按位置**判别移动型 ghost
+      （计数不变）仍做不到，记为已知限制（本机 bing 0 蓝块本就 INCONCLUSIVE）。
+    e) 注释/文档真实性（B/D）：`:734/:1550` 行号自引（f2ff052 里实际
+      :745/:1566）→ 改按名引用（见第 6 条更正）；`dropFrameBase()` 定义处旧
+      「承重」注释重写为防御口径，与调用点注释一致；`rg_diag2` trace 冻结
+      入库（见第 1 条）；桥接注释补「编译代码里仅两处 drain」限定（第三处
+      文字匹配在不参与编译的 vendored SMIL 代码里）。
+    f) 未采纳/记档：E 的「强转 fullFrame」回归形状行为上不可见（全幅帧本来就
+      正确，只是变慢）；源码字符串断言对「注释掉而非删掉」不敏感——由行为级
+      覆盖与 Part 2 模型兜底。
 
 ---
 

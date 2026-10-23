@@ -89,6 +89,17 @@ def test_static_consistency():
         "browser misses scroll reconciliation"
     print("  scroll-blit + predictive reconciliation present on both sides")
 
+    # The scroll fast path must reset the tile-hash suppression cache in the
+    # same step that blit-shifts the browser canvas: the blit displaces every
+    # slot's pixels, so a stale hash would suppress the re-upload of any
+    # scroll-invariant (position:fixed) tile forever — the fixed-header ghost
+    # found by the 2026-10-23 five-agent audit.  Part 5's negative control
+    # covers the same property behaviourally in the reference model.
+    assert re.search(
+        r"=== Scroll fast path[\s\S]{0,6000}?m_tileHashes\.fill\(0\);", rend), \
+        "scroll fast path does not reset the tile-hash cache after the blit"
+    print("  scroll blit resets the tile-hash suppression cache")
+
     # WebKit-style render-once: the renderer must paint the frame surface
     # exactly once per grabFrame (tiles are crops of it).  A per-tile
     # widget->render() loop was a 40x render cost bug; keep it from
@@ -637,105 +648,162 @@ def test_segment_layout():
 
 
 def test_scroll_blit():
-    """Deterministic scroll-blit scenario mirroring the fast path:
-    content is a tall page; the frame is a viewport over it.  The renderer
-    shifts the browser canvas by (0, dy) via a scroll message and uploads
-    only the newly exposed strip tiles.  Assert the composited canvas then
-    equals the scrolled true page everywhere."""
-    import itertools
-    fw, fh = 512, 300           # viewport (not tile-aligned on y on purpose)
+    """Deterministic scroll-blit scenario mirroring the fast path, WITH the
+    renderer's tile-hash suppression cache in the loop (2026-10-23 audit
+    item): a tall page plus a NON-UNIFORM position:fixed band covering the
+    whole first tile row, so tile row 0 is scroll-invariant — the geometry
+    of the fixed-header ghost the audit found.  The blit displaces the
+    fixed band on the browser canvas; the band re-renders pixel-identical
+    content; a STALE hash then suppresses its re-upload forever.  Run
+    twice: with the hash cache RESET on the blit (the fix) the canvas must
+    converge to the true page; WITHOUT the reset (negative control) the
+    stale hashes must keep the displaced pixels on screen."""
+    fw, fh = 512, 900           # viewport: 4 tile rows, not aligned on y
     content_h = 4000            # tall page
+    FIXED_ROWS = 256             # fixed band == exactly tile row 0
     # True content: rev-like pattern indexed by absolute content coords.
     def ccolor(cx, cy):
         return ((cx * 3 + cy) % 256, (cy * 7) % 256, ((cx ^ cy) * 5) % 256)
 
-    browser = BrowserModel()
-    rnd = random.Random(7)
+    # Non-uniform fixed content (a gradient header): identical in every
+    # frame regardless of scroll.  A UNIFORM band would make the blit
+    # displacement invisible, which is why the band varies by row.
+    def fcolor(vy, vx):
+        return ((vy * 5) % 256, 9, (vx % 32))
 
-    # Initial frame at scroll offset 0: full upload.
-    tx, ty = grid(fw, fh)
+    def run(reset_cache_on_blit):
 
-    def render_tile_at(t, scroll_y):
-        cxx, cyy = t % tx, t // tx
-        return [[ccolor(cxx * TILE + x, cyy * TILE + y + scroll_y)
-                 if (cyy * TILE + y) < fh and (cxx * TILE + x) < fw
-                 else (255, 255, 255)
-                 for x in range(TILE)] for y in range(TILE)]
+        browser = BrowserModel()
+        rnd = random.Random(7)
+        tx, ty = grid(fw, fh)
+        hashes = {}   # slot -> hash of last UPLOADED tile (m_tileHashes)
 
-    tiles0 = list(range(tx * ty))
-    imgs0 = [render_tile_at(t, 0) for t in tiles0]
-    browser.commit(fw, fh, tx, ty, tiles0, imgs0)
+        def render_tile_at(t, scroll_y):
+            cxx, cyy = t % tx, t // tx
+            img = []
+            for y in range(TILE):
+                row = []
+                for x in range(TILE):
+                    vx, vy = cxx * TILE + x, cyy * TILE + y
+                    if vy >= fh or vx >= fw:
+                        row.append((255, 255, 255))
+                    elif vy < FIXED_ROWS:
+                        row.append(fcolor(vy, vx))
+                    else:
+                        row.append(ccolor(vx, vy + scroll_y))
+                img.append(row)
+            return img
 
-    def shift(canvas, dy):
-        shifted = [[(255, 255, 255) for _ in range(fw)] for _ in range(fh)]
-        for y in range(fh):
-            sy = y + dy
-            if 0 <= sy < fh:
-                shifted[y] = list(canvas[sy])
-        return shifted
+        def commit_with_suppression(tiles, scroll):
+            up, imgs = [], []
+            for t in tiles:
+                img = render_tile_at(t, scroll)
+                h = hash(repr(img))
+                if h == hashes.get(t):
+                    continue      # suppressed: slot believed identical
+                hashes[t] = h
+                up.append(t)
+                imgs.append(img)
+            if up:
+                browser.commit(fw, fh, tx, ty, up, imgs)
+            return len(tiles) - len(up)
 
-    # Predictive-scroll state, mirroring the C++ design: the wheel
-    # prediction is a PRESENTATION-ONLY draw offset (never touches committed
-    # pixels — a wrong prediction can never evict rows from the canvas),
-    # and the renderer's authoritative absolute offset shifts the canvas by
-    # exactly (cx - base), then resets the preview.
-    base = 0              # content offset the canvas is committed at
-    preview = 0           # transient visual offset (PageSurface)
-    scroll_y = 0          # renderer's true absolute content offset
+        # Initial frame at scroll offset 0: full upload.
+        commit_with_suppression(list(range(tx * ty)), 0)
 
-    # A series of wheel steps.  The browser displays a (possibly wrong)
-    # prediction FIRST, then the authoritative (absolute) message re-anchors
-    # the canvas exactly and resets the preview.
-    for dy_chain in (120, 60, -90, 300, -45):
-        scroll_y += dy_chain
-        assert 0 <= scroll_y <= content_h - fh
+        def shift(canvas, dy):
+            shifted = [[(255, 255, 255) for _ in range(fw)] for _ in range(fh)]
+            for y in range(fh):
+                sy = y + dy
+                if 0 <= sy < fh:
+                    shifted[y] = list(canvas[sy])
+            return shifted
 
-        # 1) browser preview: presentation only, arbitrarily wrong.
-        noise = rnd.choice((-40, -15, 0, 12, 33, 90))
-        preview += dy_chain + noise
-        # Transient visual position = base + preview; no canvas mutation, so
-        # no pixel information can be lost.
+        # Predictive-scroll state, mirroring the C++ design: the wheel
+        # prediction is a PRESENTATION-ONLY draw offset (never touches
+        # committed pixels — a wrong prediction can never evict rows from
+        # the canvas), and the renderer's authoritative absolute offset
+        # shifts the canvas by exactly (cx - base), then resets the preview.
+        base = 0              # content offset the canvas is committed at
+        preview = 0           # transient visual offset (PageSurface)
+        scroll_y = 0          # renderer's true absolute content offset
+        suppressed_total = 0
+        mismatches = []
 
-        # 2) renderer authority "scroll sdx,sdy,cx,cy": exact canvas shift by
-        #    the true delta; preview resets to zero.
-        true_delta = scroll_y - base
-        browser.canvas = shift(browser.canvas, true_delta)
-        base = scroll_y
-        preview = 0
-        assert preview == 0 and base == scroll_y
+        # A series of wheel steps.  The browser displays a (possibly wrong)
+        # prediction FIRST, then the authoritative (absolute) message
+        # re-anchors the canvas exactly and resets the preview.
+        for dy_chain in (120, 60, -90, 300, -45):
+            scroll_y += dy_chain
+            assert 0 <= scroll_y <= content_h - fh
 
-        # 3) strip tiles for the newly exposed viewport area (C++ strip math,
-        #    expressed against the TRUE delta)
-        strip = []
-        d = dy_chain
-        if d > 0:
-            strip.append((0, fh - min(d, fh), fw, min(d, fh)))
-        elif d < 0:
-            strip.append((0, 0, fw, min(-d, fh)))
-        strip_tiles = []
-        for yy in range(ty):
-            for xx in range(tx):
-                tr = (xx * TILE, yy * TILE, TILE, TILE)
-                if any(tr[0] < r[0] + r[2] and r[0] < tr[0] + tr[2] and
-                       tr[1] < r[1] + r[3] and r[1] < tr[1] + tr[3]
-                       for r in strip):
-                    strip_tiles.append(yy * tx + xx)
-        imgs = [render_tile_at(t, scroll_y) for t in strip_tiles]
-        browser.commit(fw, fh, tx, ty, strip_tiles, imgs)
+            # 1) browser preview: presentation only, arbitrarily wrong.
+            noise = rnd.choice((-40, -15, 0, 12, 33, 90))
+            preview += dy_chain + noise
 
-        # After reconciliation + strip upload the canvas must equal the true
-        # page at the new offset, no matter how badly the prediction missed.
-        for y in range(fh):
-            for x in range(0, fw, 13):
-                want = ccolor(x, y + scroll_y)
-                got = browser.canvas[y][x]
-                if got != want:
-                    fail("predicted scroll mismatch at (%d,%d) after dy=%d "
-                         "noise=%d: got=%s want=%s"
-                         % (x, y, dy_chain, noise, got, want))
+            # 2) renderer authority "scroll sdx,sdy,cx,cy": exact canvas
+            #    shift by the true delta; preview resets to zero.
+            true_delta = scroll_y - base
+            browser.canvas = shift(browser.canvas, true_delta)
+            base = scroll_y
+            preview = 0
+            assert preview == 0 and base == scroll_y
+            # The fix under test: the blit invalidated every browser slot,
+            # so the suppression cache must be reset with it.
+            if reset_cache_on_blit:
+                hashes = {}
 
+            # 3) strip tiles for the newly exposed viewport area (C++ strip
+            #    math, expressed against the TRUE delta), uploaded through
+            #    the same hash-suppression rule as grabFrame().
+            strip = []
+            d = dy_chain
+            if d > 0:
+                strip.append((0, fh - min(d, fh), fw, min(d, fh)))
+            elif d < 0:
+                strip.append((0, 0, fw, min(-d, fh)))
+            strip_tiles = []
+            for yy in range(ty):
+                for xx in range(tx):
+                    tr = (xx * TILE, yy * TILE, TILE, TILE)
+                    if any(tr[0] < r[0] + r[2] and r[0] < tr[0] + tr[2] and
+                           tr[1] < r[1] + r[3] and r[1] < tr[1] + tr[3]
+                           for r in strip):
+                        strip_tiles.append(yy * tx + xx)
+            suppressed_total += commit_with_suppression(strip_tiles, scroll_y)
+
+            # 4) deferred convergence frame (250 ms in C++): full damage,
+            #    re-render everything, suppression still applies.
+            suppressed_total += commit_with_suppression(
+                list(range(tx * ty)), scroll_y)
+
+            # After convergence the canvas must equal the true page at the
+            # new offset, fixed band included, no matter how badly the
+            # prediction missed.
+            for y in range(fh):
+                for x in range(0, fw, 13):
+                    want = (fcolor(y, x) if y < FIXED_ROWS
+                            else ccolor(x, y + scroll_y))
+                    got = browser.canvas[y][x]
+                    if got != want and len(mismatches) < 4:
+                        mismatches.append((x, y, dy_chain, got, want))
+        return mismatches, suppressed_total
+
+    mism, supp = run(True)
+    assert not mism, ("scroll with hash-cache reset still mismatched: %s"
+                      % mism[:2])
     print("  predictive scroll + residual reconciliation (5 steps, noisy "
-          "predictions): canvas converges to true page")
+          "predictions, fixed band): canvas converges to true page "
+          "(suppressed re-uploads: %d)" % supp)
+
+    bad, _ = run(False)
+    assert bad, ("negative control failed to reproduce: without the "
+                 "hash-cache reset on the blit, stale hashes must keep the "
+                 "displaced fixed-band pixels on screen")
+    x, y, dy, got, want = bad[0]
+    print("  negative control: stale-hash suppression reproduced the "
+          "fixed-band ghost -> scroll dy=%d pixel(%d,%d) got=%s want=%s"
+          % (dy, x, y, got, want))
 
 
 if __name__ == "__main__":
