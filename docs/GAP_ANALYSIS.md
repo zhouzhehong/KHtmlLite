@@ -405,6 +405,17 @@ tests/renderer_solo.py（无浏览器直驱渲染进程+帧颜色断言）。
     f) 未采纳/记档：E 的「强转 fullFrame」回归形状行为上不可见（全幅帧本来就
       正确，只是变慢）；源码字符串断言对「注释掉而非删掉」不敏感——由行为级
       覆盖与 Part 2 模型兜底。
+ 9. **2026-10-24 去特调 + 点击导航本地地址修复**（详见 HANDOVER §5k）：
+    a) 锚点 href 被镜像改写为 file:// 的根因修复（`extractResources` 按标签识别、
+       `restoreNavigationTargets` 还原导航属性），行为级红/绿实测 3/3→0/3；
+    b) 删除 pageloader 每页无条件注入的 bing 专用 CSS（#sb_form 等）；
+    c) 第二轮补强：`rewriteAndSave` 补 `<base>`（installBase）、导航还原支持
+       #frag/?query/formaction/meta-refresh/无引号、`originalOf` 前缀兜底、
+       `hashName` 扩展名白名单、地址栏/历史/load 入口三重 scheme 守卫、
+       字符集透传（不再强制 UTF-8）；**删除内联 SVG→`<img>` 改写**（引擎已原生
+       支持内联 SVG：`htmlparser.cpp:287-304/924-926`，提交 70bb3a0/413e0ad）；
+    d) 残留：iframe 内相对链接仍指向本地副本；宿主通用 CSS 降级层属引擎能力
+       缺口，不在「站点特调」范畴，已按引擎路线图（P0-P3）分阶段处理。
 
 ---
 

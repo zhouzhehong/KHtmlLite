@@ -482,7 +482,9 @@ public:
             }
             // Notify the browser of the final URL (after redirects) so the
             // address bar and history reflect the actual document location.
-            if (finalUrl.isValid()) {
+            // A cache mirror path is an internal prefetch copy, never a
+            // document location — surface nothing rather than file://…/khtml_cache/…
+            if (finalUrl.isValid() && !PageLoader::isCacheMirrorFile(finalUrl)) {
                 m_pendingUrl = finalUrl;
                 sendMessage(QStringLiteral("url"), finalUrl.toString());
             }
@@ -526,6 +528,13 @@ public:
             // composite a new document onto a base from the old one" explicitly
             // for the case where the flushed rect does not exactly equal
             // QRegion(logicalRect) (the engine flushes viewport rects).
+            // Decode with the charset the server declared, falling back to
+            // UTF-8 (the historical behaviour).  The engine's own detector
+            // handles <meta charset> when we do not force a codec.
+            {
+                const QString cs = m_loader->mainCharset();
+                m_view->setEncoding(cs.isEmpty() ? QStringLiteral("utf-8") : cs, true);
+            }
             dropFrameBase();
             m_view->begin(localFile);
             m_view->write(html.constData(), html.size());
@@ -560,6 +569,10 @@ public:
             const QByteArray html = f.readAll();
             f.close();
             if (html.isEmpty()) return;
+            {
+                const QString cs = m_loader->mainCharset();
+                m_view->setEncoding(cs.isEmpty() ? QStringLiteral("utf-8") : cs, true);
+            }
             m_view->begin(localFile);
             m_view->write(html.constData(), html.size());
             m_view->end();

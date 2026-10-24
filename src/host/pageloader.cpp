@@ -503,6 +503,103 @@ static QString simplifyUnsupportedCss(const QString &text)
     return out;
 }
 
+QString PageLoader::restoreNavigationTargets(const QString &html) const
+{
+    // local cache copy -> original URL.  Small (<=150 entries); rebuilt per
+    // call is fine and keeps this function const/idempotent.
+    QHash<QString, QUrl> localToOriginal;
+    for (const Res &res : m_resources)
+        localToOriginal.insert(localAbs(res.localName), res.url);
+
+    // A navigation value must be a real URL.  Accept a whole-value match and
+    // a prefix match followed by "#frag"/"?query" (the global replacement can
+    // rewrite only the prefix of a value that carries a fragment/query).
+    auto fixValue = [&localToOriginal](const QString &v) -> QString {
+        if (!v.startsWith(QLatin1String("file://"), Qt::CaseInsensitive))
+            return v;
+        auto hit = localToOriginal.constFind(v);
+        if (hit != localToOriginal.constEnd())
+            return hit.value().toString();
+        for (auto i = localToOriginal.constBegin(); i != localToOriginal.constEnd(); ++i) {
+            if (v.startsWith(i.key(), Qt::CaseInsensitive)) {
+                const QString suffix = v.mid(i.key().size());
+                if (suffix.startsWith(QLatin1Char('#')) || suffix.startsWith(QLatin1Char('?')))
+                    return i.value().toString() + suffix;
+            }
+        }
+        return v;
+    };
+
+    QString out;
+    out.reserve(html.size());
+    // <a|area href=...>, <form action=...>, <button|input formaction=...>.
+    // The attribute name must be preceded by whitespace: a bare \b would
+    // match "data-href"/"data-action" and skip the real attribute.  Values
+    // may be double-quoted, single-quoted or unquoted; quote form is kept.
+    const QRegularExpression reNav(
+        QStringLiteral("(<(?:a|area|form|button|input)\\b[^>]*?)"
+                       "(\\s(?:href|action|formaction)\\s*=\\s*)"
+                       "(?:\"([^\"]*)\"|'([^']*)'|([^\\s>\"'=<>`]+))"),
+        QRegularExpression::CaseInsensitiveOption);
+    int last = 0;
+    auto it = reNav.globalMatch(html);
+    while (it.hasNext()) {
+        const QRegularExpressionMatch m = it.next();
+        out.append(html.midRef(last, m.capturedStart() - last));
+        QString v;
+        QChar quote;
+        if (!m.captured(3).isNull()) {
+            v = m.captured(3);
+            quote = QLatin1Char('"');
+        } else if (!m.captured(4).isNull()) {
+            v = m.captured(4);
+            quote = QLatin1Char('\'');
+        } else {
+            v = m.captured(5);
+        }
+        v = fixValue(v);
+        out.append(m.captured(1) + m.captured(2));
+        if (quote != QChar())
+            out.append(quote + v + quote);
+        else
+            out.append(v);
+        last = m.capturedEnd();
+    }
+    out.append(html.midRef(last));
+
+    // <meta http-equiv="refresh" content="0; url=..."> is a navigation too.
+    const QRegularExpression reRefresh(
+        QStringLiteral("(<meta\\b[^>]*?http-equiv\\s*=\\s*[\"']?refresh[\"']?[^>]*?content\\s*=\\s*[\"'])"
+                       "([^\"']*)([\"'])"),
+        QRegularExpression::CaseInsensitiveOption);
+    const QRegularExpression reUrlInContent(
+        QStringLiteral("(url\\s*=\\s*)([^;\"'\\s]+)"),
+        QRegularExpression::CaseInsensitiveOption);
+    QString out2;
+    out2.reserve(out.size());
+    last = 0;
+    auto rit = reRefresh.globalMatch(out);
+    while (rit.hasNext()) {
+        const QRegularExpressionMatch m = rit.next();
+        out2.append(out.midRef(last, m.capturedStart() - last));
+        const QString content = m.captured(2);
+        QString fixed;
+        int clast = 0;
+        auto uit = reUrlInContent.globalMatch(content);
+        while (uit.hasNext()) {
+            const QRegularExpressionMatch um = uit.next();
+            fixed.append(content.midRef(clast, um.capturedStart() - clast));
+            fixed.append(um.captured(1) + fixValue(um.captured(2)));
+            clast = um.capturedEnd();
+        }
+        fixed.append(content.midRef(clast));
+        out2.append(m.captured(1) + fixed + m.captured(3));
+        last = m.capturedEnd();
+    }
+    out2.append(out.midRef(last));
+    return out2;
+}
+
 PageLoader::PageLoader(QObject *parent)
     : QObject(parent)
 {
@@ -563,7 +660,16 @@ QString PageLoader::hashName(const QUrl &u) const
     const QString s = u.toString(QUrl::FullyEncoded);
     const QByteArray h = QCryptographicHash::hash(s.toUtf8(), QCryptographicHash::Sha1).toHex();
     QString ext = u.path().section('.', -1).toLower();
-    if (ext.isEmpty() || ext.length() > 5) ext = QStringLiteral("bin");
+    // Whitelist the extension: section('.',-1) returns the WHOLE path for
+    // extension-less URLs ("/maps", "/"), which produced local names like
+    // "<sha1>./maps" — QFile then wrote into a non-existent subdirectory
+    // and the mirror silently never existed (observed on bing: three .bin
+    // copies missing).  Also keeps any ".." path segment out of the name.
+    {
+        static const QRegularExpression reExt(QStringLiteral("^[a-z0-9]{1,5}$"));
+        if (ext.isEmpty() || !reExt.match(ext).hasMatch())
+            ext = QStringLiteral("bin");
+    }
     // Keep css/js extensions so KHTML's MIME sniffing works.
     if (ext == QLatin1String("css") || ext == QLatin1String("js"))
         return QString::fromLatin1(h) + QLatin1Char('.') + ext;
@@ -574,6 +680,17 @@ void PageLoader::load(const QUrl &url)
 {
     PERF_BEGIN(url.toString().toUtf8().constData());
     PERF_MARK("pageloader_load_start");
+    // Defensive: a cache mirror must never become the document URL.  Clicks
+    // are mapped back through originalOf() before this point; if a file://
+    // mirror still reaches load() (stale chrome state, a new renderer, a
+    // partially-rewritten URL), fail instead of letting file:// into the
+    // address bar/history and re-mirroring the mirror.
+    if (isCacheMirrorFile(url)) {
+        qWarning("PageLoader: refusing to load cache mirror as a document: %s",
+                 qPrintable(url.toString()));
+        fail(QStringLiteral("internal: cache mirror is not a document URL"));
+        return;
+    }
     // Bump generation so replies from a previous navigation are ignored.
     ++m_navGeneration;
     // Abort any in-flight replies from the previous navigation safely.
@@ -629,6 +746,20 @@ void PageLoader::onMainFinished()
     }
     m_mainHtml = r->readAll();
     PERF_MARK_D("main_html_downloaded", QString::number(m_mainHtml.size()));
+    // Remember the response charset so the renderer can decode legacy-encoded
+    // pages (GBK/GB2312/Shift-JIS…).  The engine's own detector also reads
+    // <meta charset>, but the renderer used to FORCE UTF-8, which corrupted
+    // every non-UTF-8 page; this value is the authoritative hint.
+    m_mainCharset.clear();
+    {
+        const QByteArray ct = r->header(QNetworkRequest::ContentTypeHeader).toByteArray();
+        static const QRegularExpression reCs(
+            QStringLiteral("charset\\s*=\\s*[\"']?([A-Za-z0-9_\\-]+)"),
+            QRegularExpression::CaseInsensitiveOption);
+        const QRegularExpressionMatch cm = reCs.match(QString::fromLatin1(ct));
+        if (cm.hasMatch())
+            m_mainCharset = cm.captured(1).toLower();
+    }
     // Capture the URL after any HTTP redirects. Qt follows them automatically
     // (NoLessSafeRedirectPolicy), so r->url() is the final document URL.
     m_finalUrl = r->url();
@@ -676,7 +807,62 @@ QUrl PageLoader::originalOf(const QUrl &anyUrl) const
         if (localAbs(res.localName) == want)
             return res.url;
     }
+    // Prefix fallback: anything under THIS page's cache directory is a
+    // reference RELATIVE to the real document URL — "…/index.html#frag",
+    // "…/search?q=1", "…/maps" (a mirror whose write failed), a URL the
+    // global replacement only partially rewrote, or a copy made by a
+    // previous loader.  Resolving it back against m_finalUrl keeps a
+    // file:// path out of the address bar/history and off the document
+    // path (a file:// document has no <base>, so its relative links would
+    // stay local forever).
+    if (!m_cacheDir.isEmpty() && m_finalUrl.isValid()) {
+        const QString prefix = QUrl::fromLocalFile(m_cacheDir + QLatin1Char('/')).toString();
+        if (!prefix.isEmpty() && want.startsWith(prefix)) {
+            const QUrl rel = QUrl::fromEncoded(want.mid(prefix.size()).toUtf8());
+            if (!rel.isEmpty())
+                return m_finalUrl.resolved(rel);
+        }
+    }
     return anyUrl;   // not one of our rewritten copies: pass through
+}
+
+bool PageLoader::isCacheMirrorFile(const QUrl &u)
+{
+    if (u.scheme().toLower() != QLatin1String("file"))
+        return false;
+    const QString root = cacheRoot();
+    if (root.isEmpty())
+        return false;
+    return u.toLocalFile().startsWith(root + QLatin1Char('/'));
+}
+
+QString PageLoader::installBase(const QString &html) const
+{
+    if (!m_finalUrl.isValid())
+        return html;
+    const QString baseTag =
+        QStringLiteral("<base href=\"%1\">").arg(m_finalUrl.toString());
+    static const QRegularExpression reBase(
+        QStringLiteral("<base[^>]*>"), QRegularExpression::CaseInsensitiveOption);
+    QString out = html;
+    if (reBase.match(out).hasMatch())
+        return out.replace(reBase, baseTag);   // normalize existing <base> tags
+    static const QRegularExpression reHead(
+        QStringLiteral("<head[^>]*>"), QRegularExpression::CaseInsensitiveOption);
+    const QRegularExpressionMatch hm = reHead.match(out);
+    if (hm.hasMatch()) {
+        out.insert(hm.capturedEnd(), baseTag);
+        return out;
+    }
+    static const QRegularExpression reHtml(
+        QStringLiteral("<html[^>]*>"), QRegularExpression::CaseInsensitiveOption);
+    const QRegularExpressionMatch htm = reHtml.match(out);
+    if (htm.hasMatch()) {
+        out.insert(htm.capturedEnd(),
+                   QStringLiteral("<head>") + baseTag + QStringLiteral("</head>"));
+        return out;
+    }
+    return baseTag + out;
 }
 
 void PageLoader::extractResources()
@@ -717,13 +903,23 @@ void PageLoader::extractResources()
             m_rawToLocal.insert(rt, localAbs(r.localName));
     };
 
-    // href="..." and src="..."
+    // href="..." and src="..." — RESOURCE attributes only.  A link/anchor href
+    // (<a>, <area>), a form action or the document <base> is a NAVIGATION
+    // target, not a sub-resource: mirroring it replaces the click target with a
+    // local file:// cache copy, so every click first "jumps to a local address"
+    // (the mirror) and only then the renderer maps it back to the real URL.
+    // Only asset-bearing tags are harvested.
     const QRegularExpression reAttr(
-        QStringLiteral("(?:href|src)\\s*=\\s*[\"']([^\"']+)[\"']"),
+        QStringLiteral("<([a-zA-Z][a-zA-Z0-9]*)\\b[^>]*?\\b(?:href|src)\\s*=\\s*[\"']([^\"']+)[\"']"),
         QRegularExpression::CaseInsensitiveOption);
     auto it = reAttr.globalMatch(html);
     while (it.hasNext()) {
-        const QString raw = it.next().captured(1).trimmed();
+        const QRegularExpressionMatch m = it.next();
+        const QString tag = m.captured(1).toLower();
+        if (tag == QLatin1String("a") || tag == QLatin1String("area")
+            || tag == QLatin1String("form") || tag == QLatin1String("base"))
+            continue;   // navigation target, not an asset
+        const QString raw = m.captured(2).trimmed();
         if (raw.startsWith(QLatin1String("data:")) ||
             raw.startsWith(QLatin1String("javascript:")) ||
             raw.startsWith(QLatin1String("#")) ||
@@ -932,6 +1128,21 @@ void PageLoader::rewriteAndSave()
         QStringLiteral("<base[^>]*>"), QRegularExpression::CaseInsensitiveOption);
     html.replace(reBase, QStringLiteral("<base href=\"%1\">").arg(m_finalUrl.toString()));
 
+    // Ensure the document always carries a <base> — this is the FINAL write
+    // of index.html and it must not lose the base deliverInitialDocument
+    // injected: without it the document URL is the file:// mirror and every
+    // relative URL (form action, JS relative navigation) resolves to
+    // file://…/khtml_cache/… .  See installBase().
+    html = installBase(html);
+
+    // Navigation attributes (<a href>, <area href>, <form action>,
+    // formaction, meta refresh) must keep real URLs.  The global replacement
+    // rewrites every literal known to be an asset URL — if the same literal
+    // is also a click target it would become a file:// mirror and the click
+    // would detour through the local cache before the renderer maps it back.
+    // See restoreNavigationTargets().
+    html = restoreNavigationTargets(html);
+
     // Pre-collect custom property definitions from inline <style> blocks so
     // that external stylesheets (processed next) can resolve their var()
     // references against them. Many modern sites define --vars in inline
@@ -1066,55 +1277,16 @@ void PageLoader::rewriteAndSave()
 
 
     htmlOut.append(html.midRef(lastPos));
-    // --- Inline SVG -> external .svg file + <img> ---
-    // KHTML's HTML parser does not implement HTML5 inline SVG integration.
-    // External SVG files load fine via <img>, so serialize each inline <svg>
-    // to a cached .svg file and replace it with an <img> reference.
-    {
-        const QRegularExpression reSvg(
-            QStringLiteral("<svg\b([^>]*)>(.*?)</svg>"),
-            QRegularExpression::CaseInsensitiveOption | QRegularExpression::DotMatchesEverythingOption);
-        QString svgOut;
-        svgOut.reserve(htmlOut.size());
-        int svgLast = 0;
-        int svgIdx = 0;
-        auto svgIt = reSvg.globalMatch(htmlOut);
-        while (svgIt.hasNext()) {
-            const QRegularExpressionMatch sm = svgIt.next();
-            svgOut.append(htmlOut.midRef(svgLast, sm.capturedStart() - svgLast));
-            const QString attrs = sm.captured(1);
-            const QString inner = sm.captured(2);
-            const QString fullSvg = QStringLiteral("<svg xmlns=\"http://www.w3.org/2000/svg\"") + attrs + QStringLiteral(">") + inner + QStringLiteral("</svg>");
-            const QString svgName = QStringLiteral("inline_svg_%1.svg").arg(svgIdx++);
-            const QString svgPath = m_cacheDir + QLatin1Char('/') + svgName;
-            {
-                QFile sf(svgPath);
-                if (sf.open(QIODevice::WriteOnly))
-                    sf.write(fullSvg.toUtf8());
-            }
-            // Preserve width/height/class/id from the original <svg>
-            QString w, h, cls, id;
-            const QRegularExpression reW(QStringLiteral("width\\s*=\\s*[\x22\x27]([^\x22\x27]+)"), QRegularExpression::CaseInsensitiveOption);
-            const QRegularExpression reH(QStringLiteral("height\\s*=\\s*[\x22\x27]([^\x22\x27]+)"), QRegularExpression::CaseInsensitiveOption);
-            const QRegularExpression reC(QStringLiteral("class\\s*=\\s*[\x22\x27]([^\x22\x27]+)"), QRegularExpression::CaseInsensitiveOption);
-            const QRegularExpression reI(QStringLiteral("id\\s*=\\s*[\x22\x27]([^\x22\x27]+)"), QRegularExpression::CaseInsensitiveOption);
-            QRegularExpressionMatch mw = reW.match(attrs); if (mw.hasMatch()) w = mw.captured(1);
-            QRegularExpressionMatch mh = reH.match(attrs); if (mh.hasMatch()) h = mh.captured(1);
-            QRegularExpressionMatch mc = reC.match(attrs); if (mc.hasMatch()) cls = mc.captured(1);
-            QRegularExpressionMatch mi = reI.match(attrs); if (mi.hasMatch()) id = mi.captured(1);
-            QString img = QStringLiteral("<img src=\"") + QUrl::fromLocalFile(svgPath).toString() + QStringLiteral("\"");
-            if (!w.isEmpty()) img += QStringLiteral(" width=\"") + w + QStringLiteral("\"");
-            if (!h.isEmpty()) img += QStringLiteral(" height=\"") + h + QStringLiteral("\"");
-            if (!cls.isEmpty()) img += QStringLiteral(" class=\"") + cls + QStringLiteral("\"");
-            if (!id.isEmpty()) img += QStringLiteral(" id=\"") + id + QStringLiteral("\"");
-            img += QStringLiteral(" alt=\"\">");
-            svgOut.append(img);
-            svgLast = sm.capturedEnd();
-        }
-        svgOut.append(htmlOut.midRef(svgLast));
-        htmlOut = svgOut;
-    }
     html = htmlOut;
+    // (Removed 2026-10-24: this block serialized every inline <svg> to a
+    // cached .svg file and replaced it with <img src="file://…">.  That was
+    // obsolete: KHTML's HTML parser DOES implement HTML5 inline SVG (SVG
+    // namespace elements are created by createElementNS in getElement(),
+    // see htmlparser.cpp "svg depth"/foreignObject handling, plus the
+    // "Complete WebKit-style inline SVG rendering" work).  Rewriting <svg>
+    // to <img> threw away CSS-driven fills (currentColor / class rules),
+    // SMIL and filters — the "Bing logo turns gray" class of bug.  Inline
+    // SVG now reaches the engine untouched and is rendered natively.)
 
     // Rewrite url(...) elsewhere in the page (style="..." attributes, anything
     // outside <style> blocks) using the same table.
@@ -1203,24 +1375,12 @@ void PageLoader::rewriteAndSave()
         }
     }
 
-    // Minimal compatibility CSS: modern sites often hide core UI behind
-    // JS-controlled classes. Keep form inputs visible and usable.
-    {
-        QString kCompat = QStringLiteral(
-            "<style>"
-            ".sbox{display:block;text-align:center;margin:40px 0}"
-            "#sb_form{display:inline-block}"
-            "#sb_form_q{display:inline-block;width:420px;height:38px;font-size:16px;"
-            "padding:4px 10px;border:1px solid #999;border-radius:4px;background:#fff;color:#000}"
-            "#sb_form_go{display:inline-block;width:54px;height:38px;background:#0078d4;"
-            "color:#fff;border:0;cursor:pointer;margin-left:4px}"
-            "input[type=search]{display:inline-block}"
-            "</style>");
-        int he = html.indexOf(QRegularExpression(QStringLiteral("</head>"),
-            QRegularExpression::CaseInsensitiveOption));
-        if (he >= 0) html.insert(he, kCompat);
-        else html.prepend(kCompat);
-    }
+    // (Removed 2026-10-24: this block used to inject a stylesheet hardcoding
+    // cn.bing.com's DOM ids — .sbox / #sb_form / #sb_form_q / #sb_form_go plus
+    // Bing blue #0078d4 — into EVERY page.  It was site-specific tuning: it
+    // only ever matched one site's markup.  Pages must render with the
+    // engine's own CSS and their own stylesheets; no page gets injected
+    // styling.  See docs/HANDOVER.md "去特调" for the removal record.)
 
     // Collect @keyframes from cached stylesheets + inline <style> blocks,
     // then inject the CSS animation polyfill (driven by requestAnimationFrame).
@@ -1467,26 +1627,13 @@ void PageLoader::deliverInitialDocument()
         html.replace(n, repl.value(n));
 
     // Set <base href> to the final (post-redirect) URL for correct navigation.
-    const QRegularExpression reBase(
-        QStringLiteral("<base[^>]*>"), QRegularExpression::CaseInsensitiveOption);
-    if (reBase.match(html).hasMatch()) {
-        html.replace(reBase, QStringLiteral("<base href=\"%1\">").arg(m_finalUrl.toString()));
-    } else {
-        // Insert <base> right after <head> (or <html> if no head).
-        const QRegularExpression reHead(
-            QStringLiteral("<head[^>]*>"), QRegularExpression::CaseInsensitiveOption);
-        const QRegularExpressionMatch hm = reHead.match(html);
-        const QString baseTag = QStringLiteral("<base href=\"%1\">").arg(m_finalUrl.toString());
-        if (hm.hasMatch()) {
-            html.insert(hm.capturedEnd(), baseTag);
-        } else {
-            const QRegularExpression reHtml(
-                QStringLiteral("<html[^>]*>"), QRegularExpression::CaseInsensitiveOption);
-            const QRegularExpressionMatch htm = reHtml.match(html);
-            if (htm.hasMatch())
-                html.insert(htm.capturedEnd(), QStringLiteral("<head>") + baseTag + QStringLiteral("</head>"));
-        }
-    }
+    // installBase() also inserts a base when the source HTML has none — this
+    // is the only delivery for fast pages where refreshed() never fires.
+    html = installBase(html);
+
+    // Navigation attributes must keep real URLs (see restoreNavigationTargets):
+    // the same literal can be both an asset and a click target.
+    html = restoreNavigationTargets(html);
 
     // Write the initial document.
     QDir().mkpath(m_cacheDir);

@@ -1389,6 +1389,11 @@ public:
             // The renderer reports the final URL after HTTP redirects. Update
             // the tab's current URL and the address bar so the user sees the
             // real document location (e.g. bing.com → cn.bing.com).
+            // Defence in depth: a PageLoader mirror path (file://…/khtml_cache/…)
+            // is an internal prefetch copy, never a document location.  The
+            // renderer already maps clicks back; never surface it here.
+            if (u.isLocalFile() && u.toLocalFile().contains(QLatin1String("/khtml_cache/")))
+                return;
             pg->current = u;
             if (pg == currentPage()) {
                 m_addr->setText(u.toString());

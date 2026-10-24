@@ -28,6 +28,11 @@ public:
     // and errorString is non-empty.
     void load(const QUrl &url);
 
+    // Charset declared by the main response's Content-Type (empty when the
+    // server sent none).  The renderer uses it to decode legacy-encoded pages
+    // (GBK/GB2312/Shift-JIS…); a hardcoded UTF-8 corrupted every such page.
+    QString mainCharset() const { return m_mainCharset; }
+
     // Where downloaded pages/resources are cached.
     static QString cacheRoot();
 
@@ -39,8 +44,21 @@ public:
     // is purgeable and hashed per-URL, the chrome/address bar/history must
     // show the real URL, and a fresh renderer's file:// KIO load of the
     // copy stalls (documented kio_file issue).  URLs that are not cache
-    // copies pass through unchanged.
+    // copies pass through unchanged.  Anything under this page's cache dir
+    // (including "#frag"/"?query" suffixes) is resolved back against the
+    // document URL, so a file:// mirror can never become a document URL.
     QUrl originalOf(const QUrl &anyUrl) const;
+
+    // True when |u| is a file:// path inside the PageLoader mirror cache
+    // (i.e. a prefetched copy, never a user-opened local document).  Used by
+    // the renderer to keep mirror paths out of the chrome/address bar.
+    static bool isCacheMirrorFile(const QUrl &u);
+
+    // Ensure the served document carries a <base href="<finalUrl>"> so every
+    // relative URL resolves against the REAL site.  Without it the document
+    // URL is the file:// mirror and relative links/forms/JS navigate to
+    // file://.  Idempotent; normalizes multiple/absent <base> tags.
+    QString installBase(const QString &html) const;
 
 Q_SIGNALS:
     void finished(const QUrl &localFileUrl, const QUrl &finalUrl, const QString &error);
@@ -61,6 +79,7 @@ private:
     QNetworkReply *m_mainReply = nullptr;
     QUrl m_original;   // URL the user requested (before redirects)
     QUrl m_finalUrl;   // URL after HTTP redirects (== m_original when none)
+    QString m_mainCharset;   // charset from the main response Content-Type
     QByteArray m_mainHtml;
     QString m_cacheDir;
     int m_pending = 0;
@@ -105,6 +124,12 @@ private:
     void finalizeSubresources();
     void maybeFinish();
     void fail(const QString &msg);
+    // Map <a|area|form> href/action values that the global URL replacement
+    // turned into local cache copies back to their original absolute URLs.
+    // Navigation must never target a file:// mirror: otherwise every click
+    // first "jumps to a local address" (the mirror) and the renderer has to
+    // map it back and refetch (visible address-bar detour + double load).
+    QString restoreNavigationTargets(const QString &html) const;
 };
 
 #endif // PAGELOADER_H

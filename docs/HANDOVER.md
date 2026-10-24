@@ -542,6 +542,48 @@ INCONCLUSIVE、或退出码 0 但输出里出现判定形 FAIL 令牌，都算�
   回归脚本无单探针超时（一次约 46 分钟）。（底图修复的行为级覆盖**已补**；
   核实角度本轮 5/5 返回。）
 
+## 5k. 去特调 + 「点击先跳本地地址」根因修复（2026-10-24，行为级红/绿实测）
+
+用户指令：删掉针对网站（尤其 bing.com）的特调，按渲染引擎本来的效果渲染；查清「点任何必应按钮都先跳到一个本地地址、再跳真实网址」的原因。
+
+### 根因（源码 + 活的缓存双证据）
+- 「本地地址」不是地址栏错觉，而是**锚点 href 真的被改写成 file://**：`PageLoader::extractResources()` 把页面里**每一个 href/src 属性**都当子资源镜像（src/host/pageloader.cpp 原 :721-733），包括 `<a href>`；`rewriteAndSave()`/`deliverInitialDocument()` 再把页面里出现过的引用字面量全量替换成本地缓存路径（原 :891-928/:1441-1467）。点击时 KHTML 解析出的就是 file:// 缓存副本，渲染进程 `RendererView::navigateRequested`（khtml_renderer.cpp:452-461）再用 `originalOf()` 换回真实 URL 重取——于是「先本地、后真实」，多一次导航与一次下载。
+- 实证：用户便携版 2026-10-24 09:25 的缓存 `release/KHtmlLite-portable/khtml_cache/<id>/index.html`（195,668 字节）里 **52 个 href 有 42 个是 file:///khtml_cache/...**；build/host 缓存同样 42/52。
+- 同时确认：`pageloader.cpp` 原 :1206-1223 **给每个页面无条件注入一段只对 cn.bing.com DOM 有效的 CSS**（.sbox/#sb_form/#sb_form_q/#sb_form_go/#0078d4）——全仓库唯一的站点级渲染特调。
+
+### 修复
+1. `extractResources()` 改为**按标签识别**：跳过 `<a>/<area>/<form>/<base>` 的导航属性，只镜像资源型标签（link/script/img/source/iframe/embed/object/video/audio/input 的 href/src 与 CSS url()/@import）。
+2. 新增 `PageLoader::restoreNavigationTargets()`：全局替换之后，把 `<a|area href>` 与 `<form action>` 中落在缓存目录的 file:// 值用 `m_resources/localAbs` 映射回原始绝对 http(s) URL；两处改写点都调用。
+3. 删除 bing 专用 CSS 注入块，替换为「已移除」说明注释。
+4. ~~内联 SVG→`<img>` 兜底正则的退格转义 bug~~ → 另行修正方向（见下方「第二轮补强」第 6 条）：该改写块**整块删除**，因为引擎已原生支持内联 SVG；不再维护这条正则。
+
+### 行为级红/绿对照（真实浏览器、真实缓存文件，非源码断言）
+本地 localhost 页面（3 个锚点：绝对路径/相对路径/绝对 URL；1 张图；1 个 form action），同一 URL 前缀 + 各自 `?tag=` 隔离缓存，等最终改写稳定后读缓存 index.html：
+
+| 指标 | 旧版（release 便携 2026-10-23 16:43） | 新版（build/host 本轮构建） |
+|---|---|---|
+| `<a href>` 被改写为 file:// | **3/3** | **0/3**（全部保留真实 URL） |
+| 额外把锚点目标当资源抓取 | **是**（/target.html、/rel.html 被下载） | **否**（只抓 /pic.png） |
+| 图片镜像为本地 file:// | 1/1 | 1/1（保持） |
+| `<form action>` 被改写 | 无 | 无 |
+| 注入 bing `#sb_form` CSS | **是** | **否** |
+| 最终改写产物大小 | 12,465 B | 11,630 B（少了注入块） |
+
+结论：点击导航不再经过本地副本；站点特调已删除；图片本地镜像等通用机制不受影响。
+
+### 第二轮补强（同日，点击链路与引擎路线图专项代理的缺口清单逐条落地）
+1. **最终改写补 `<base>`**：`rewriteAndSave()`（`refreshed` 后覆盖 index.html 的那次）原来只替换已存在的 `<base>`，源 HTML 无 base 时最终文档丢失 base → `DocumentImpl::baseURL()` 回退到 `m_url`=file://…/index.html，相对 URL（`<form action="/search">`、JS 相对跳转）仍解析成 file://。新增 `PageLoader::installBase()`，两处交付都调用。
+2. **导航属性还原加固**：支持 `#frag`/`?query` 后缀（前缀匹配+保留后缀）、无引号属性、`<button|input formaction>`、`<meta http-equiv=refresh content="url=…">`；属性名要求前置空白，修复 `\bhref` 误配 `data-href` 的漏洞。
+3. **`originalOf()` 前缀兜底**：缓存目录下的 file://（含写失败的镜像、带后缀的 URL、上一个 loader 的副本）一律按"相对本页 URL"解析回真实 http(s)，不再原样放行。
+4. **地址栏/历史 scheme 守卫**：渲染进程不再把 cache 镜像 file:// 作为 `url` IPC 上报；浏览器 `urlChanged` 也拒绝含 `/khtml_cache/` 的本地路径（双保险）；`load()` 入口拒绝 cache 镜像作为文档 URL。
+5. **`hashName()` 扩展名白名单**：`section('.',-1)` 对无扩展名路径会返回整条路径（`<sha1>./maps`），QFile 写入不存在的子目录 → 镜像静默缺失（必应 3 个 `.bin` 缺失即此类）。改为 `^[a-z0-9]{1,5}$` 白名单。
+6. **删除内联 SVG→`<img>` 改写（方向修正）**：引擎路线图代理发现并 Lead 复核——KHTML 的 HTML 解析器**已实现** HTML5 内联 SVG（`htmlparser.cpp:287-304` 的 svgDepth/foreignObject + `getElement()` 的 `createElementNS(SVG_NAMESPACE,…)` :924-926，另有提交 `70bb3a0`/`413e0ad`）。宿主的序列化改写是过期补丁，还会丢掉 CSS 着色（currentColor/class 规则）、SMIL、滤镜——"Bing logo 变灰"正是这条路。已删除该块（约 50 行），内联 SVG 原样交给引擎。
+7. **字符集透传**：渲染进程原来对每个文档强制 `setEncoding("utf-8")`（khtml_renderer.cpp:289），而 PageLoader 存的是原始网络字节 → GBK/GB2312/Shift-JIS 页面必乱码。现在 PageLoader 从主响应 `Content-Type` 提取 charset（`mainCharset()`），渲染进程按它解码（缺失才回退 UTF-8）。
+
+### 已知残留（如实记录）
+- `<iframe>` 内部页面的相对链接仍以 iframe 本地副本为基准（iframe HTML 本体不被改写），该路径点击可能落到 file://（iframe 在此引擎本就依赖本地镜像）；未在本轮处理。
+- 宿主仍对每个页面做正则级 CSS 降级改写（grid→flex、transform→translate、删除约 103 个现代属性、假 polyfill 等）——这些是**通用兼容层**不是站点特调，删除需先补引擎能力，已列入引擎级路线图（本轮 WebKit 对照报告）。
+
 ## 6. 正在/马上要做的
 A. ~~拆那 1.1s~~ **已完成**（字体枚举缓存 + 图标懒加载，构造 1.1s→~0.35s，TTFF 2.0→1.1s）。
    下一步同部位残账：渲染进程镜像加载+socket 连接 ~500ms（每次新标签都付），
