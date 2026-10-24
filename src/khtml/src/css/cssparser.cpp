@@ -717,6 +717,9 @@ bool CSSParser::parseValue(int propId, bool important)
         // shorthand in parseFlexShorthand(); parseValue() only ever validates
         // a single token, so multi-token values must not fall through here.
         return parseFlexShorthand(important);
+    case CSS_PROP_ASPECT_RATIO:
+        // aspect-ratio: auto | <number> [ / <number> ]?
+        return parseAspectRatio(important);
     case CSS_PROP_FLEX_DIRECTION:
         if ((id >= CSS_VAL_ROW && id <= CSS_VAL_COLUMN_REVERSE) || id == CSS_VAL_INHERIT) {
             valid_primitive = true;
@@ -2373,6 +2376,40 @@ bool CSSParser::parseFlexShorthand(bool important)
         any = true;
     }
     return any;
+}
+
+bool CSSParser::parseAspectRatio(bool important)
+{
+    // aspect-ratio: auto | <number> [ / <number> ]?
+    if (!valueList || !valueList->current())
+        return false;
+    double w = 0.0, h = 1.0;
+    int numbers = 0;
+    for (Value *v = valueList->current(); v; v = valueList->next()) {
+        if (v->unit == Value::Operator)
+            continue;
+        if (v->unit == CSSPrimitiveValue::CSS_IDENT
+            && qString(v->string).toLower() == QLatin1String("auto")) {
+            addProperty(CSS_PROP_ASPECT_RATIO,
+                        new CSSPrimitiveValueImpl(DOMString(QStringLiteral("0")),
+                                                  CSSPrimitiveValue::CSS_STRING), important);
+            return true;
+        }
+        if (v->unit == CSSPrimitiveValue::CSS_NUMBER && numbers < 2) {
+            if (numbers == 0) w = v->fValue;
+            else h = v->fValue;
+            ++numbers;
+            continue;
+        }
+        return false;
+    }
+    if (numbers < 1 || w <= 0.0 || h <= 0.0)
+        return false;
+    const QString spec = QString::number(w) + QLatin1Char('/') + QString::number(h);
+    addProperty(CSS_PROP_ASPECT_RATIO,
+                new CSSPrimitiveValueImpl(DOMString(spec), CSSPrimitiveValue::CSS_STRING),
+                important);
+    return true;
 }
 
 bool CSSParser::parseFontShorthand(bool important)

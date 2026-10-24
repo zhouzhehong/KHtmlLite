@@ -55,7 +55,7 @@ bool StyleSurroundData::operator==(const StyleSurroundData &o) const
 }
 
 StyleBoxData::StyleBoxData()
-    : z_index(0), z_auto(true)
+    : z_index(0), z_auto(true), aspect_ratio(0.0f)
 {
     min_width = min_height = RenderStyle::initialMinSize();
     max_width = max_height = RenderStyle::initialMaxSize();
@@ -68,7 +68,7 @@ StyleBoxData::StyleBoxData(const StyleBoxData &o)
       min_width(o.min_width), max_width(o.max_width),
       min_height(o.min_height), max_height(o.max_height),
       box_sizing(o.box_sizing),
-      z_index(o.z_index), z_auto(o.z_auto)
+      z_index(o.z_index), z_auto(o.z_auto), aspect_ratio(o.aspect_ratio)
 {
 }
 
@@ -83,6 +83,7 @@ bool StyleBoxData::operator==(const StyleBoxData &o) const
         max_height == o.max_height &&
         box_sizing == o.box_sizing &&
         vertical_align == o.vertical_align &&
+        aspect_ratio == o.aspect_ratio &&
         z_index == o.z_index &&
         z_auto == o.z_auto;
 }

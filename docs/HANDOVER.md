@@ -720,6 +720,24 @@ INCONCLUSIVE、或退出码 0 但输出里出现判定形 FAIL 令牌，都算�
 - `tile_protocol_test` PASS；**全量回归 2026-10-24 22:45→23:35 `failed: none`**：14 项中 13 项 PASS（engine_semantics_probe 76.9s、bg_smoke 602.9s、scroll_smoke 603.4s、resize_probe 602s、tombstone_probe 624.7s、tile_protocol_test 194s）+ bing_ghost_check INCONCLUSIVE（本机 bing 无 #0078D4 蓝块，诚实结论）。
 - 调试记录（如实）：渐变首次实现后不绘制，根因是 `RenderStyle::hasBackground()` 只认背景色/背景图，导致 `paintBoxDecorations` 被跳过；在 `RenderBox::setStyle` 里把"有渐变"也视为需要绘制背景（纯 .cpp 修复）后正常。另修复了诊断代码插入位置导致 `parseGradientSpec` 恒返回空的 bug。
 
+## 5r. 引擎渲染能力第七批（2026-10-24，`aspect-ratio`）
+
+### 1) 属性与样式层
+- 新属性 id：`aspect-ratio`=192（CSS_PROP_TOTAL 193）；parser.cpp 的 `added[]` 登记；`StyleBoxData` 增加 `float aspect_ratio`（0=无），ctor/copy/`operator==` 同步；`RenderStyle::aspectRatio()/setAspectRatio()`（DataRef COW）。
+- 解析：`CSSParser::parseAspectRatio()` 支持 `auto | <number> [/ <number>]?`（`3 / 2`、`16/9`、单个数字=数字/1），以 CSS_STRING `"w/h"` 形式随属性传递；`parseValue` 的 `CSS_PROP_ASPECT_RATIO` 分支直接调用它（多 token 值不再被单 token 校验拒绝）。
+- 应用：`applyProperty(CSS_PROP_ASPECT_RATIO)` 解析 `"w/h"` → `setAspectRatio(w/h)`；`initial/inherit` → 0。
+- `RenderStyle::diff()`：StyleBoxData 参与比较，比例变化自动触发 Layout。
+
+### 2) 布局
+- `RenderBox::calcHeight()`：当 `aspect-ratio > 0`、`height` 为 `auto` 且宽度已知时，`m_height = max(内容高度, width / ratio)`（比内容矮时取内容高度，避免裁切子内容）。
+
+### 3) 行为级验证
+- 夹具 page2 新增 `#ratio { width:300px; aspect-ratio:3/2; background:#cc8800 }`，期望 450×300 物理像素（dpr1.5）；探针新增 1 项断言（page2 5 项、两页合计 **20 项**；page3 渐变 5 项不变）。
+
+### 实测
+- 引擎探针 **20/20 PASS**（新增 aspect-ratio：bbox 449×299 物理像素 = 300×200 CSS×1.5）；`tile_protocol_test` PASS；**全量回归 2026-10-25 00:36→01:22 `failed: none`**：14 项中 13 项 PASS（engine_semantics_probe 51.3s、bg_smoke 602.2s、scroll_smoke 602.7s、resize_probe 601.6s、tombstone_probe 623.3s、tile_protocol_test 123.1s）+ bing_ghost_check INCONCLUSIVE（本机 bing 无 #0078D4 蓝块，诚实结论）。
+- 调试记录（如实）：第一版把 aspect-ratio 规则插进了 `RenderBox::setHeight()`（而非 `calcHeight()`），导致高度不生效；移到正确函数后 450×300 物理像素符合预期。
+
 ## 6. 正在/马上要做的
 A. ~~拆那 1.1s~~ **已完成**（字体枚举缓存 + 图标懒加载，构造 1.1s→~0.35s，TTFF 2.0→1.1s）。
    下一步同部位残账：渲染进程镜像加载+socket 连接 ~500ms（每次新标签都付），

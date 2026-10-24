@@ -219,6 +219,15 @@ def page2_checks(pixels, w, h):
     else:
         add("flex-basis box renders", False)
 
+    ratio = main_cluster_bbox(pixels, w, h, (204, 136, 0), tol=40)
+    if ratio:
+        x0, y0, x1, y1 = ratio
+        add("aspect-ratio derives height from width",
+            430 < (x1 - x0) < 470 and 290 < (y1 - y0) < 310,
+            "(ratio bbox w=%d h=%d)" % (x1 - x0, y1 - y0))
+    else:
+        add("aspect-ratio box renders", False)
+
     shrink = main_cluster_bbox(pixels, w, h, (51, 102, 255), tol=40)
     if shrink:
         x0, y0, x1, y1 = shrink

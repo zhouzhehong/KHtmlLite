@@ -477,6 +477,14 @@ tests/renderer_solo.py（无浏览器直驱渲染进程+帧颜色断言）。
     d) 宿主删除两处 simplifyGradients 压平，渐变交给引擎；探针新增 page3
        5 项断言（三页共 19 项）；已知限制：渐变不做 border-radius 裁剪、
        旧式 -webkit-gradient 不支持。
+ 16. **2026-10-24 引擎渲染能力第七批**（详见 HANDOVER §5r）：
+    a) `aspect-ratio` 属性引擎化：id=192，StyleBoxData.aspect_ratio（0=无），
+       RenderStyle 访问器（COW）；parseAspectRatio 支持 auto / <number>
+       [/ <number>]（以 "w/h" 字符串传递），applyProperty 落盘为 float 比例；
+    b) 布局：RenderBox::calcHeight 在 height:auto 且宽度已知时按比例推导高度
+       （max(内容高, width/ratio)）；
+    c) 探针新增 page2 断言（450×300 物理像素），两页合计 20 项；剩余：
+       grid、sticky、calc()、inline-flex、transform/transition/animation。
 
 ---
 

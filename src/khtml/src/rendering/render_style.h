@@ -345,6 +345,9 @@ public:
 
     int z_index;
     bool z_auto;
+
+    // CSS aspect-ratio (width / height); 0 means "none".
+    float aspect_ratio;
 };
 
 //------------------------------------------------
@@ -1407,6 +1410,18 @@ public:
     Length      maxHeight() const
     {
         return box->max_height;
+    }
+
+    // CSS aspect-ratio: preferred width/height ratio, 0 means "none".
+    float aspectRatio() const
+    {
+        return box->aspect_ratio;
+    }
+    void setAspectRatio(float r)
+    {
+        if (box->aspect_ratio != r) {
+            box.access()->aspect_ratio = r;
+        }
     }
 
     const BorderData &border() const

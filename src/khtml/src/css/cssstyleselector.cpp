@@ -4678,6 +4678,17 @@ void CSSStyleSelector::applyRule(int id, DOM::CSSValueImpl *value)
         style->setFlexShrink(qMax(0.0f, (float)primitiveValue->floatValue(CSSPrimitiveValue::CSS_NUMBER)));
         break;
     }
+    case CSS_PROP_ASPECT_RATIO: {
+        if (isInitial || isInherit) { style->setAspectRatio(0.0f); return; }
+        if (!primitiveValue || primitiveValue->primitiveType() != CSSPrimitiveValue::CSS_STRING) return;
+        const QString s = DOMString(primitiveValue->getStringValue()).string();
+        const int slash = s.indexOf(QLatin1String("/"));
+        if (slash <= 0) return;
+        const double w = s.left(slash).toDouble();
+        const double h = s.mid(slash + 1).toDouble();
+        style->setAspectRatio(h > 0.0 ? float(w / h) : 0.0f);
+        break;
+    }
     case CSS_PROP_FLEX_WRAP: {
         if (isInitial || isInherit) { style->setFlexWrap(false); return; }
         if (!primitiveValue) return;

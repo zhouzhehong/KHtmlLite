@@ -347,6 +347,8 @@ void RenderBox::setWidth(int width)
 void RenderBox::setHeight(int height)
 {
     m_height = height;
+
+
 }
 
 int RenderBox::calcBoxHeight(int h) const
@@ -1545,6 +1547,14 @@ void RenderBox::calcHeight()
         }
 
         m_height = height;
+
+        // CSS aspect-ratio: with a definite width and an auto height the
+        // height follows the preferred ratio (taller content still wins).
+        if (style()->aspectRatio() > 0.0f && style()->height().isAuto()
+            && width() > 0) {
+            const int ratioHeight = qRound(double(width()) / double(style()->aspectRatio()));
+            m_height = qMax(m_height, ratioHeight);
+        }
     }
 
     // Unfurling marquees override with the furled height.
