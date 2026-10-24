@@ -1,3 +1,4 @@
+#undef DEBUG_LAYOUT
 /**
  * This file is part of the DOM implementation for KDE.
  *
@@ -34,6 +35,7 @@
 #include <QLinearGradient>
 #include <QRadialGradient>
 #include <QtMath>
+#include <QTransform>
 
 #include "misc/loader.h"
 #include "rendering/render_form.h"
@@ -56,6 +58,8 @@
 
 using namespace DOM;
 using namespace khtml;
+
+QTransform khtmlCssTransformMatrix(const QString &spec, int x, int y, int w, int h);
 
 #define TABLECELLMARGIN -0x4000
 
@@ -521,7 +525,20 @@ void RenderBox::paintBoxDecorations(PaintInfo &paintInfo, int _tx, int _ty)
     int w = width();
     int h = height() + borderTopExtra() + borderBottomExtra();
     _ty -= borderTopExtra();
-    QRect cr = QRect(_tx, _ty, w, h).intersected(paintInfo.r);
+    QRect cr;
+    {
+        const QString tf = style() ? style()->transform() : QString();
+        if (!tf.isEmpty()) {
+            // The element paints in its untransformed coordinate space (the
+            // painter carries the transform), so map the visible clip region
+            // back through the inverse transform instead of clipping to the
+            // untransformed box.
+            const QTransform inv = khtmlCssTransformMatrix(tf, _tx, _ty, w, h).inverted();
+            cr = QRect(_tx, _ty, w, h).intersected(inv.mapRect(paintInfo.r));
+        } else {
+            cr = QRect(_tx, _ty, w, h).intersected(paintInfo.r);
+        }
+    }
 
     // Paint (outer) box-shadow behind the background and border. Minimum support:
     // a single non-inset shadow with optional spread and offset. Blur is not
@@ -621,6 +638,61 @@ static QGradient buildBackgroundGradient(const QString &spec, const QRect &rect)
                       qMax(rect.width(), rect.height()) * 0.75);
     g.setStops(stops);
     return g;
+}
+
+QTransform khtmlCssTransformMatrix(const QString &spec, int x, int y, int w, int h)
+{
+    const double cx = x + w / 2.0;
+    const double cy = y + h / 2.0;
+    QTransform t;
+    t.translate(cx, cy);
+    const QStringList ops = spec.split(QLatin1Char(';'), Qt::SkipEmptyParts);
+    for (const QString &op : ops) {
+        const int b = op.indexOf(QLatin1Char('('));
+        const int e = op.lastIndexOf(QLatin1Char(')'));
+        if (b < 0 || e <= b)
+            continue;
+        const QString name = op.left(b).trimmed().toLower();
+        const QStringList args = op.mid(b + 1, e - b - 1).split(QLatin1Char(','));
+        auto toPx = [](QString v, int basis) -> double {
+            v = v.trimmed();
+            if (v.endsWith(QLatin1Char('%')))
+                return v.left(v.size() - 1).toDouble() * basis / 100.0;
+            if (v.endsWith(QLatin1String("px")))
+                return v.left(v.size() - 2).toDouble();
+            return v.toDouble();
+        };
+        if (name == QLatin1String("translate")) {
+            t.translate(args.size() > 0 ? toPx(args[0], w) : 0.0,
+                        args.size() > 1 ? toPx(args[1], h) : 0.0);
+        } else if (name == QLatin1String("translatex")) {
+            t.translate(args.size() > 0 ? toPx(args[0], w) : 0.0, 0.0);
+        } else if (name == QLatin1String("translatey")) {
+            t.translate(0.0, args.size() > 0 ? toPx(args[0], h) : 0.0);
+        } else if (name == QLatin1String("scale")) {
+            const double sx = args.size() > 0 ? args[0].trimmed().toDouble() : 1.0;
+            const double sy = args.size() > 1 ? args[1].trimmed().toDouble() : sx;
+            t.scale(sx, sy);
+        } else if (name == QLatin1String("scalex")) {
+            t.scale(args.size() > 0 ? args[0].trimmed().toDouble() : 1.0, 1.0);
+        } else if (name == QLatin1String("scaley")) {
+            t.scale(1.0, args.size() > 0 ? args[0].trimmed().toDouble() : 1.0);
+        } else if (name == QLatin1String("rotate")) {
+            double deg = 0.0;
+            if (!args.isEmpty()) {
+                QString v = args[0].trimmed();
+                if (v.endsWith(QLatin1String("deg")))
+                    deg = v.left(v.size() - 3).toDouble();
+                else if (v.endsWith(QLatin1String("rad")))
+                    deg = qRadiansToDegrees(v.left(v.size() - 3).toDouble());
+                else if (v.endsWith(QLatin1String("grad")))
+                    deg = v.left(v.size() - 4).toDouble() * 0.9;
+            }
+            t.rotate(deg);
+        }
+    }
+    t.translate(-cx, -cy);
+    return t;
 }
 
 void RenderBox::paintOneBackground(QPainter *p, const QColor &c, const BackgroundLayer *bgLayer, QRect clipr, int _tx, int _ty, int w, int height)

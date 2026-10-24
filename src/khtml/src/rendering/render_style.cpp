@@ -467,6 +467,7 @@ StyleCSS3NonInheritedData::StyleCSS3NonInheritedData()
 StyleCSS3NonInheritedData::StyleCSS3NonInheritedData(const StyleCSS3NonInheritedData &o)
     : Shared<StyleCSS3NonInheritedData>(),
       opacity(o.opacity),
+      transform(o.transform),
       flexibleBox(o.flexibleBox),
       marquee(o.marquee),
       borderRadius(o.borderRadius)
@@ -479,6 +480,7 @@ bool StyleCSS3NonInheritedData::operator==(const StyleCSS3NonInheritedData &o) c
     bool shadowsEqual = (!boxShadow && !o.boxShadow)
         || (boxShadow && o.boxShadow && *boxShadow == *o.boxShadow);
     return
+        transform == o.transform &&
         opacity == o.opacity &&
         flexibleBox == o.flexibleBox &&
         marquee == o.marquee &&

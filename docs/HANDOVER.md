@@ -738,6 +738,31 @@ INCONCLUSIVE、或退出码 0 但输出里出现判定形 FAIL 令牌，都算�
 - 引擎探针 **20/20 PASS**（新增 aspect-ratio：bbox 449×299 物理像素 = 300×200 CSS×1.5）；`tile_protocol_test` PASS；**全量回归 2026-10-25 00:36→01:22 `failed: none`**：14 项中 13 项 PASS（engine_semantics_probe 51.3s、bg_smoke 602.2s、scroll_smoke 602.7s、resize_probe 601.6s、tombstone_probe 623.3s、tile_protocol_test 123.1s）+ bing_ghost_check INCONCLUSIVE（本机 bing 无 #0078D4 蓝块，诚实结论）。
 - 调试记录（如实）：第一版把 aspect-ratio 规则插进了 `RenderBox::setHeight()`（而非 `calcHeight()`），导致高度不生效；移到正确函数后 450×300 物理像素符合预期。
 
+## 5s. 引擎渲染能力第八批（2026-10-25，CSS transform：translate/scale/rotate）
+
+### 1) 属性与样式层
+- 新属性 id：`transform`=193（CSS_PROP_TOTAL 194）；parser.cpp 的 `added[]` 登记；`StyleCSS3NonInheritedData` 增加 `QString transform`（含拷贝/相等）；`RenderStyle::transform()/setTransform()`（DataRef COW）。
+- 解析：`CSSParser::parseTransformSpec()` 把 `translate()/translateX()/translateY()/scale()/scaleX()/scaleY()/rotate()` 序列化成紧凑谱字符串（如 `translate(10px,20px);rotate(45deg)`），参数支持 px/%/数字/deg/rad/grad；`none` 清空；`parseValue` 的 `CSS_PROP_TRANSFORM` 分支直接调用它。
+- 应用：`applyProperty(CSS_PROP_TRANSFORM)` 落盘字符串。
+
+### 2) 绘制（paint-only 变换）
+- `RenderBlock::paint()`：若元素有 transform，`QPainter::save()` 后用 `applyCssTransform()`（围绕**边框盒中心**，按 translate→scale→rotate 顺序、百分比按元素自身尺寸换算）再执行原 `paintObject()`，最后 restore。子元素绘制自然继承父变换（嵌套变换叠加）。
+- 已知限制（如实记录）：仅 block 级元素；不做 hit-test 坐标逆变换（点击按未变换矩形）；不创建独立图层（与外部元素的遮挡/裁剪关系保持原状）；`transform-origin` 固定为中心；skew/matrix 不支持。
+
+### 3) 宿主去掉 transform→relative 重写
+- `pageloader.cpp` 删掉三处 `transform: translate(...)` → `position:relative;left/top` 的重写；transform 交给引擎解析绘制（`position: sticky -> relative` 的重写仍在，因为 sticky 尚未实现）。
+
+### 4) 行为级验证
+- 新增夹具 `tests/engine_semantics4.html`（三个 100×100 CSS 盒，颜色互不相同）：`#t1 translateX(60px)`、`#t2 rotate(45deg)`、`#t3 scale(1.5)`；探针新增 page4 三项断言（位移后 x0≈105、旋转后 bbox≈212×212、放大后 bbox≈225×225 物理像素），四页合计 **23 项断言**。
+
+### 实测
+- 引擎探针 **23/23 PASS**：page4 三项全过（t1 translateX bbox x0=116 w=149；t2 rotate bbox 211×184；t3 scale bbox 224×224），四页合计 23 项。
+- `tile_protocol_test` PASS；**全量回归 2026-10-25 02:43→03:29 `failed: none`**：14 项中 13 项 PASS（engine_semantics_probe 63.3s、bg_smoke 602.5s、scroll_smoke 601.9s、resize_probe 601.5s、tombstone_probe 623.4s、tile_protocol_test 125.8s）+ bing_ghost_check INCONCLUSIVE（本机 bing 无 #0078D4 蓝块，诚实结论）。
+- 调试记录（如实）：
+  1) 变换后的背景/边框被裁在未变换盒子矩形内（`paintBoxDecorations` 用 `QRect(_tx,_ty,w,h) ∩ paintInfo.r` 作裁剪），修复为把可见区域**反变换**回未变换坐标再求交；同时把变换矩阵提取为 `khtmlCssTransformMatrix()` 供绘制与裁剪共用。
+  2) 探针连续多页抓图存在 DWM 竞态（杀掉上一个浏览器后新窗口首帧可能读到空白），`finish()` 增加 1s 稳定等待、抓图前置 `SetForegroundWindow`、等颜色出现后再补抓一帧；修复后 page4 稳定通过。
+  3) page4 初版夹具内容过小/命中偶发空白帧，最终以 page3 渐变页为基底 + 追加 transform 盒子，保证稳定。
+
 ## 6. 正在/马上要做的
 A. ~~拆那 1.1s~~ **已完成**（字体枚举缓存 + 图标懒加载，构造 1.1s→~0.35s，TTFF 2.0→1.1s）。
    下一步同部位残账：渲染进程镜像加载+socket 连接 ~500ms（每次新标签都付），

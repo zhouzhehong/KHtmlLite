@@ -368,21 +368,7 @@ static QString simplifyUnsupportedCss(const QString &text)
         QRegularExpression::CaseInsensitiveOption),
         QStringLiteral("position:relative"));
 
-    // transform: translate(X, Y) -> position:relative; left:X; top:Y
-    // scale/rotate/skew have no CSS2 equivalent and are stripped below.
-    out.replace(QRegularExpression(
-        QStringLiteral("transform\\s*:\\s*translate\\(([^,)]+)(?:,\\s*([^)]+))?\\)"),
-        QRegularExpression::CaseInsensitiveOption),
-        QStringLiteral("position:relative;left:\\1;top:\\2"));
-    out.replace(QRegularExpression(
-        QStringLiteral("transform\\s*:\\s*translateX\\(([^)]+)\\)"),
-        QRegularExpression::CaseInsensitiveOption),
-        QStringLiteral("position:relative;left:\\1"));
-    out.replace(QRegularExpression(
-        QStringLiteral("transform\\s*:\\s*translateY\\(([^)]+)\\)"),
-        QRegularExpression::CaseInsensitiveOption),
-        QStringLiteral("position:relative;top:\\1"));
-
+    // transform is parsed and painted by the ENGINE now (parseTransformSpec).
     // Properties KHTML has no pipeline for 鈥?remove the whole declaration.
     // Only properties that are genuinely absent or known-crashy are listed;
     // border-radius / box-shadow / opacity / box-sizing / text-shadow are

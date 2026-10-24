@@ -4689,6 +4689,12 @@ void CSSStyleSelector::applyRule(int id, DOM::CSSValueImpl *value)
         style->setAspectRatio(h > 0.0 ? float(w / h) : 0.0f);
         break;
     }
+    case CSS_PROP_TRANSFORM: {
+        if (isInitial || isInherit) { style->setTransform(QString()); return; }
+        if (!primitiveValue || primitiveValue->primitiveType() != CSSPrimitiveValue::CSS_STRING) return;
+        style->setTransform(DOMString(primitiveValue->getStringValue()).string());
+        break;
+    }
     case CSS_PROP_FLEX_WRAP: {
         if (isInitial || isInherit) { style->setFlexWrap(false); return; }
         if (!primitiveValue) return;

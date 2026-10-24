@@ -485,6 +485,15 @@ tests/renderer_solo.py（无浏览器直驱渲染进程+帧颜色断言）。
        （max(内容高, width/ratio)）；
     c) 探针新增 page2 断言（450×300 物理像素），两页合计 20 项；剩余：
        grid、sticky、calc()、inline-flex、transform/transition/animation。
+ 17. **2026-10-25 引擎渲染能力第八批**（详见 HANDOVER §5s）：
+    a) `transform` 属性引擎化：id=193，StyleCSS3NonInheritedData.transform
+       （含拷贝/相等），parseTransformSpec 支持 translate/translateX/
+       translateY/scale/scaleX/scaleY/rotate（px/%/数字/deg/rad/grad）；
+    b) 绘制：RenderBlock::paint 用 QPainter 围绕边框盒中心应用变换后绘制
+       （paint-only，嵌套叠加）；宿主删除 transform→relative 重写；
+    c) 探针新增 page4 三项断言（translate/rotate/scale），四页合计 23 项；
+       已知限制：仅 block、无 hit-test 逆变换、无独立图层、origin 固定中心；
+       剩余：grid、sticky、calc()、inline-flex、transition/animation。
 
 ---
 

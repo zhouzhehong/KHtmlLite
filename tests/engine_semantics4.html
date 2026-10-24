@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>engine semantics 4 - transforms</title>
+<style>
+  html, body { margin: 0; padding: 0; }
+  /* vertical gradient: #aa00aa (top) -> #00aa88 (bottom) */
+  #g1 { width: 300px; height: 60px;
+        background-image: linear-gradient(#aa00aa, #00aa88); }
+  /* horizontal gradient (90deg): #ff00aa (left) -> #00aaff (right) */
+  #g2 { width: 300px; height: 60px; margin-top: 8px;
+        background-image: linear-gradient(90deg, #ff00aa, #00aaff); }
+  /* transform boxes: 100x100 CSS each, distinct colours */
+  .box { width: 100px; height: 100px; margin: 10px 10px 30px 10px; }
+  #t1 { background-color: #8844cc; transform: translateX(60px); }
+  #t2 { background-color: #4488cc; margin-left: 80px; transform: rotate(45deg); }
+  #t3 { background-color: #cc4488; margin-left: 80px; transform: scale(1.5); }
+</style></head>
+<body>
+  <div id="g1"></div>
+  <div id="g2"></div>
+  <div id="t1" class="box"></div>
+  <div id="t2" class="box"></div>
+  <div id="t3" class="box"></div>
+</body></html>

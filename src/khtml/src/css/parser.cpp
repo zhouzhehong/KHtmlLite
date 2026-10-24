@@ -141,6 +141,7 @@ int DOM::getPropertyID(const char *tagStr, int len)
         {"box-shadow", 187},
         {"align-self", 188}, {"order", 189}, {"flex-basis", 190}, {"flex-shrink", 191},
     {"aspect-ratio", 192},
+    {"transform", 193},
     };
     auto lookup = [&](const char *s, int n) -> int {
         for (const auto &a : added) {

@@ -932,6 +932,7 @@ public:
     }
 
     float opacity;         // Whether or not we're transparent.
+    QString transform;     // CSS transform spec (engine-painted).
     DataRef<StyleFlexibleBoxData> flexibleBox; // Flexible box properties
     DataRef<StyleMarqueeData> marquee; // Marquee properties
     DataRef<BorderRadiusData> borderRadius;
@@ -1848,6 +1849,18 @@ public:
     float opacity() const
     {
         return css3NonInheritedData->opacity;
+    }
+
+    // CSS transform spec, built by CSSParser::parseTransformSpec().
+    QString transform() const
+    {
+        return css3NonInheritedData->transform;
+    }
+    void setTransform(const QString &t)
+    {
+        if (css3NonInheritedData->transform != t) {
+            css3NonInheritedData.access()->transform = t;
+        }
     }
 
     // --- minimal flexbox (RenderFlexBox) ---

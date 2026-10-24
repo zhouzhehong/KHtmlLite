@@ -21,6 +21,7 @@ EXE = os.path.join(ROOT, "build", "host", "khtml_browser.exe")
 PAGE1 = "file:///" + ROOT.replace("\\", "/") + "/tests/engine_semantics.html"
 PAGE2 = "file:///" + ROOT.replace("\\", "/") + "/tests/engine_semantics2.html"
 PAGE3 = "file:///" + ROOT.replace("\\", "/") + "/tests/engine_semantics3.html"
+PAGE4 = "file:///" + ROOT.replace("\\", "/") + "/tests/engine_semantics4.html"
 OUT = os.path.join(ROOT, "tests", "engine_semantics.png")
 ERR = os.path.join(ROOT, "tests", "engine_semantics_err.txt")
 
@@ -100,6 +101,10 @@ def launch(page, wait_color, timeout=40):
         return None
     size = None
     pixels = None
+    try:
+        ctypes.windll.user32.SetForegroundWindow(hwnd)
+    except Exception:
+        pass
     for _ in range(40):
         grab(hwnd, OUT)
         size, pixels = load_pixels(OUT)
@@ -107,6 +112,11 @@ def launch(page, wait_color, timeout=40):
         if bbox(pixels, w, h, wait_color, tol=45) is not None:
             break
         time.sleep(0.5)
+    # Settle one more frame so the checks read the finished paint, not a
+    # partially uploaded tile frame.
+    time.sleep(0.3)
+    grab(hwnd, OUT)
+    size, pixels = load_pixels(OUT)
     return proc, errf, hwnd, size, pixels
 
 
@@ -114,6 +124,9 @@ def finish(proc, errf):
     subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
                    capture_output=True)
     errf.close()
+    # Let the window manager settle: grabbing the next window immediately after
+    # killing the previous browser can return a stale white frame (DWM race).
+    time.sleep(1.0)
 
 
 def page1_checks(pixels, w, h):
@@ -292,6 +305,41 @@ def page3_checks(pixels, w, h):
     return out
 
 
+def page4_checks(pixels, w, h):
+    """Engine-painted CSS transforms: translate / rotate / scale."""
+    out = []
+    def add(name, good, detail=""):
+        out.append((name, good, detail))
+
+    t1 = main_cluster_bbox(pixels, w, h, (136, 68, 204), tol=40)
+    if t1:
+        x0, y0, x1, y1 = t1
+        add("transform translateX shifts the box",
+            90 < x0 < 130 and 140 < (x1 - x0) < 170,
+            "(t1 bbox x0=%d w=%d)" % (x0, x1 - x0))
+    else:
+        add("translateX box renders", False)
+
+    t2 = main_cluster_bbox(pixels, w, h, (68, 136, 204), tol=40)
+    if t2:
+        x0, y0, x1, y1 = t2
+        add("transform rotate grows the bbox to the diagonal",
+            195 < (x1 - x0) < 235 and 150 < (y1 - y0) < 235,
+            "(t2 bbox %dx%d)" % (x1 - x0, y1 - y0))
+    else:
+        add("rotate box renders", False)
+
+    t3 = main_cluster_bbox(pixels, w, h, (204, 68, 136), tol=40)
+    if t3:
+        x0, y0, x1, y1 = t3
+        add("transform scale enlarges the box",
+            205 < (x1 - x0) < 245 and 205 < (y1 - y0) < 245,
+            "(t3 bbox %dx%d)" % (x1 - x0, y1 - y0))
+    else:
+        add("scale box renders", False)
+    return out
+
+
 def main():
     if not os.path.exists(EXE):
         print("FAIL: browser exe missing:", EXE)
@@ -299,7 +347,8 @@ def main():
     ok = True
     for page, name, fn, wait in ((PAGE1, "page1 (batch1)", page1_checks, (0, 0, 255)),
                                  (PAGE2, "page2 (flex)", page2_checks, (255, 0, 0)),
-                                 (PAGE3, "page3 (gradients)", page3_checks, (170, 0, 170))):
+                                 (PAGE3, "page3 (gradients)", page3_checks, (170, 0, 170)),
+            (PAGE4, "page4 (transforms)", page4_checks, (136, 68, 204))):
         print("\n=== %s ===" % name)
         started = launch(page, wait)
         if not started:

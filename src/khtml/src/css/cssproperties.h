@@ -201,7 +201,8 @@ DOM::DOMString getPropertyName(unsigned short id) KHTML_NO_EXPORT;
 #define CSS_PROP_FLEX_BASIS 190
 #define CSS_PROP_FLEX_SHRINK 191
 #define CSS_PROP_ASPECT_RATIO 192
-#define CSS_PROP_TOTAL 193
+#define CSS_PROP_TRANSFORM 193
+#define CSS_PROP_TOTAL 194
 const size_t maxCSSPropertyNameLength = 32;
 #endif
 

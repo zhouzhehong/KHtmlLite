@@ -720,6 +720,9 @@ bool CSSParser::parseValue(int propId, bool important)
     case CSS_PROP_ASPECT_RATIO:
         // aspect-ratio: auto | <number> [ / <number> ]?
         return parseAspectRatio(important);
+    case CSS_PROP_TRANSFORM:
+        // transform: none | translate()/scale()/rotate() ... (engine-painted)
+        return parseTransformSpec(important);
     case CSS_PROP_FLEX_DIRECTION:
         if ((id >= CSS_VAL_ROW && id <= CSS_VAL_COLUMN_REVERSE) || id == CSS_VAL_INHERIT) {
             valid_primitive = true;
@@ -2408,6 +2411,67 @@ bool CSSParser::parseAspectRatio(bool important)
     const QString spec = QString::number(w) + QLatin1Char('/') + QString::number(h);
     addProperty(CSS_PROP_ASPECT_RATIO,
                 new CSSPrimitiveValueImpl(DOMString(spec), CSSPrimitiveValue::CSS_STRING),
+                important);
+    return true;
+}
+
+bool CSSParser::parseTransformSpec(bool important)
+{
+    // transform: none | <translate|scale|rotate>(...) ...
+    if (!valueList || !valueList->current())
+        return false;
+    QStringList parts;
+    for (Value *v = valueList->current(); v; v = valueList->next()) {
+        if (v->unit == Value::Operator)
+            continue;
+        if (v->unit == CSSPrimitiveValue::CSS_IDENT) {
+            const QString id = qString(v->string).toLower();
+            if (id == QLatin1String("none")) {
+                addProperty(CSS_PROP_TRANSFORM,
+                            new CSSPrimitiveValueImpl(DOMString(QString()),
+                                                      CSSPrimitiveValue::CSS_STRING), important);
+                return true;
+            }
+            return false;
+        }
+        if (v->unit != Value::Function || !v->function || !v->function->args)
+            return false;
+        QString fname = qString(v->function->name).toLower();
+        if (fname.endsWith(QLatin1Char('(')))
+            fname.chop(1);
+        if (fname != QLatin1String("translate") && fname != QLatin1String("translatex")
+            && fname != QLatin1String("translatey") && fname != QLatin1String("scale")
+            && fname != QLatin1String("scalex") && fname != QLatin1String("scaley")
+            && fname != QLatin1String("rotate"))
+            return false;
+        QStringList args;
+        for (Value *a = v->function->args->current(); a; a = v->function->args->next()) {
+            if (a->unit == Value::Operator)
+                continue;
+            QString arg;
+            const int unit = a->unit;
+            if (unit == CSSPrimitiveValue::CSS_NUMBER) {
+                arg = QString::number(a->fValue);
+            } else if (unit == CSSPrimitiveValue::CSS_PX) {
+                arg = QString::number(a->fValue) + QLatin1String("px");
+            } else if (unit == CSSPrimitiveValue::CSS_PERCENTAGE) {
+                arg = QString::number(a->fValue) + QLatin1String("%");
+            } else if (unit == CSSPrimitiveValue::CSS_DEG) {
+                arg = QString::number(a->fValue) + QLatin1String("deg");
+            } else if (unit == CSSPrimitiveValue::CSS_RAD) {
+                arg = QString::number(qRadiansToDegrees(a->fValue)) + QLatin1String("deg");
+            } else if (unit == CSSPrimitiveValue::CSS_GRAD) {
+                arg = QString::number(a->fValue * 0.9) + QLatin1String("deg");
+            } else {
+                return false;
+            }
+            args.append(arg);
+        }
+        parts.append(fname + QLatin1Char('(') + args.join(QLatin1Char(',')) + QLatin1Char(')'));
+    }
+    addProperty(CSS_PROP_TRANSFORM,
+                new CSSPrimitiveValueImpl(DOMString(parts.join(QLatin1Char(';'))),
+                                          CSSPrimitiveValue::CSS_STRING),
                 important);
     return true;
 }

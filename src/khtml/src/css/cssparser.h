@@ -214,6 +214,7 @@ public:
     QString parseGradientSpec();
     // aspect-ratio: auto | <number> [/ <number>]
     bool parseAspectRatio(bool important);
+    bool parseTransformSpec(bool important);
     CSSValueImpl *parseCounterContent(ValueList *args, bool counters);
 
     // CSS3 Parsing Routines (for properties specific to CSS3)

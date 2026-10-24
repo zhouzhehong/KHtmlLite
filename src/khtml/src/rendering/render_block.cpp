@@ -33,6 +33,8 @@
 //#define PAGE_DEBUG
 
 #include "render_block.h"
+#include <QPainter>
+#include <QtMath>
 
 #include "khtml_debug.h"
 #include <limits.h>
@@ -52,6 +54,8 @@
 
 using namespace DOM;
 
+
+QTransform khtmlCssTransformMatrix(const QString &spec, int x, int y, int w, int h);
 namespace khtml
 {
 
@@ -1850,6 +1854,7 @@ void RenderBlock::layoutPositionedObjects(bool relayoutChildren)
     }
 }
 
+
 void RenderBlock::paint(PaintInfo &pI, int _tx, int _ty)
 {
     _tx += m_x;
@@ -1871,6 +1876,14 @@ void RenderBlock::paint(PaintInfo &pI, int _tx, int _ty)
         }
     }
 
+    const QString tf = style() ? style()->transform() : QString();
+    if (!tf.isEmpty()) {
+        pI.p->save();
+        pI.p->setWorldTransform(pI.p->worldTransform() * khtmlCssTransformMatrix(tf, _tx, _ty, width(), height()));
+        paintObject(pI, _tx, _ty);
+        pI.p->restore();
+        return;
+    }
     paintObject(pI, _tx, _ty);
 }
 
