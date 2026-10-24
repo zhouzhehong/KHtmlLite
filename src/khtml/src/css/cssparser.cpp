@@ -1,4 +1,4 @@
-﻿/*
+/*
  * This file is part of the DOM implementation for KDE.
  *
  * Copyright 2003 Lars Knoll (knoll@kde.org)
@@ -744,6 +744,24 @@ bool CSSParser::parseValue(int propId, bool important)
     case CSS_PROP_GAP:
         if (value && (value->unit == CSSPrimitiveValue::CSS_PX
             || value->unit == CSSPrimitiveValue::CSS_NUMBER)) {
+            valid_primitive = true;
+        }
+        break;
+    case CSS_PROP_ALIGN_SELF:
+        if (id == CSS_VAL_AUTO || id == CSS_VAL_STRETCH || id == CSS_VAL_FLEX_START
+            || id == CSS_VAL_CENTER || id == CSS_VAL_FLEX_END) {
+            valid_primitive = true;
+        }
+        break;
+    case CSS_PROP_ORDER:
+        if (value && value->unit == CSSPrimitiveValue::CSS_NUMBER) {
+            valid_primitive = true;
+        }
+        break;
+    case CSS_PROP_FLEX_BASIS:
+        if (id == CSS_VAL_AUTO || id == CSS_VAL_INHERIT
+            || (value && (value->unit == CSSPrimitiveValue::CSS_PX
+                          || value->unit == CSSPrimitiveValue::CSS_PERCENTAGE))) {
             valid_primitive = true;
         }
         break;

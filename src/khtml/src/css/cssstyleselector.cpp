@@ -4669,6 +4669,35 @@ void CSSStyleSelector::applyRule(int id, DOM::CSSValueImpl *value)
         }
         break;
     }
+    case CSS_PROP_ALIGN_SELF: {
+        if (isInitial || isInherit) { style->setAlignSelf(0); return; }
+        if (!primitiveValue) return;
+        const int asid = primitiveValue->getIdent();
+        if (asid == CSS_VAL_AUTO) style->setAlignSelf(0);
+        else if (asid == CSS_VAL_STRETCH) style->setAlignSelf(1);
+        else if (asid == CSS_VAL_FLEX_START) style->setAlignSelf(2);
+        else if (asid == CSS_VAL_CENTER) style->setAlignSelf(3);
+        else if (asid == CSS_VAL_FLEX_END) style->setAlignSelf(4);
+        break;
+    }
+    case CSS_PROP_ORDER: {
+        if (isInitial || isInherit) { style->setOrder(0); return; }
+        if (!primitiveValue || primitiveValue->primitiveType() != CSSPrimitiveValue::CSS_NUMBER) return;
+        style->setOrder(qRound(primitiveValue->floatValue(CSSPrimitiveValue::CSS_NUMBER)));
+        break;
+    }
+    case CSS_PROP_FLEX_BASIS: {
+        if (isInitial || isInherit) { style->setFlexBasis(0, 0); return; }
+        if (!primitiveValue) return;
+        if (primitiveValue->primitiveType() == CSSPrimitiveValue::CSS_PERCENTAGE) {
+            style->setFlexBasis(2, qRound(primitiveValue->floatValue(CSSPrimitiveValue::CSS_PERCENTAGE)));
+        } else if (primitiveValue->primitiveType() == CSSPrimitiveValue::CSS_PX) {
+            style->setFlexBasis(1, qRound(primitiveValue->floatValue(CSSPrimitiveValue::CSS_PX)));
+        } else if (primitiveValue->getIdent() == CSS_VAL_AUTO) {
+            style->setFlexBasis(0, 0);
+        }
+        break;
+    }
     case CSS_PROP__KHTML_MARQUEE:
         if (value->cssValueType() != CSSValue::CSS_INHERIT || !parentNode) {
             return;

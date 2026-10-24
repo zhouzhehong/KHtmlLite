@@ -1,0 +1,26 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>flex-batch2</title>
+<style>
+  /* flex order: document order is red(o1), olive(o2), navy(o3);
+     order 3 / 1 / 2 => visual left->right: olive, navy, red. */
+  #orderbox { display: flex; }
+  #orderbox div { width: 60px; height: 30px; }
+  #o1 { order: 3; background-color: #ff0000; }
+  #o2 { order: 1; background-color: #808000; }
+  #o3 { order: 2; background-color: #000080; }
+
+  /* align-self overrides align-items for one item only. */
+  #selfbox { display: flex; align-items: flex-start; height: 80px; }
+  #selfbox div { width: 40px; height: 20px; }
+  #s1 { background-color: #008080; }                     /* top */
+  #s2 { align-self: flex-end; background-color: #800000; } /* bottom */
+
+  /* flex-basis: 200px inside a 300px row. */
+  #basisbox { display: flex; width: 300px; }
+  #basisbox div { flex-basis: 200px; height: 24px; background-color: #00aa00; }
+</style></head>
+<body>
+  <div id="orderbox"><div id="o1"></div><div id="o2"></div><div id="o3"></div></div>
+  <div id="selfbox"><div id="s1"></div><div id="s2"></div></div>
+  <div id="basisbox"><div></div></div>
+</body></html>

@@ -612,8 +612,8 @@ INCONCLUSIVE、或退出码 0 但输出里出现判定形 FAIL 令牌，都算�
 - 实测：探针 **PASS**；`tile_protocol_test` PASS；**全量回归 2026-10-24 13:24→14:11 `failed: none`**：14 项中 13 项 PASS（含新增 engine_semantics_probe 24.2s、bg_smoke、scroll_smoke、resize_probe、tombstone_probe、tile_protocol_test 178.5s）+ bing_ghost_check INCONCLUSIVE（本机 bing 无 #0078D4 蓝块，诚实结论）。
 
 ### 下一批（路线图，按收益排序）
-`var()` 自定义属性 → `calc()/min()/max()/clamp()` → flex 剩余项（flex-basis/order/align-self/inline-flex）→ grid → sticky/aspect-ratio → 渐变/transform/transition/animation。每条都要求：本地 fixture + 像素断言 + 全量回归绿。
-（flex-wrap 与逻辑属性已在 §5m 完成，从本列表移除。）
+`var()` 自定义属性 → `calc()/min()/max()/clamp()` → flex 收尾（flex-shrink / inline-flex 行内化 / flex 简写三分量）→ grid → sticky/aspect-ratio → 渐变/transform/transition/animation。每条都要求：本地 fixture + 像素断言 + 全量回归绿。
+（flex-wrap/逻辑属性已在 §5m、order/align-self/flex-basis 已在 §5n 完成，从本列表移除。）
 
 ## 5m. 引擎渲染能力第二批（2026-10-24，flex-wrap + 逻辑属性）
 
@@ -630,6 +630,27 @@ INCONCLUSIVE、或退出码 0 但输出里出现判定形 FAIL 令牌，都算�
 ### 行为级验证（探针扩展）
 - `tests/engine_semantics_probe.py` 增加两项像素断言（并改为"主聚类"检测以排除其他元素的抗锯齿干扰）：flex-wrap 换行（cyan bbox 宽>300 且高>90）；逻辑属性偏移（orange 主聚类 x0>150 且宽 60..140）。
 - 实测：**8/8 检查 PASS**；**全量回归 2026-10-24 14:27→15:17 `failed: none`**：14 项中 13 项 PASS（engine_semantics_probe 31.8s 含 8 项断言、bg_smoke、scroll_smoke、resize_probe、tombstone_probe、tile_protocol_test 182.7s）+ bing_ghost_check INCONCLUSIVE（本机 bing 无 #0078D4 蓝块，诚实结论）。
+
+## 5n. 引擎渲染能力第三批（2026-10-24，flex 完整化：order / align-self / flex-basis）
+
+### 1) 新 CSS 属性（引擎解析 + 样式数据）
+- 属性 id 扩展：`align-self`=188、`order`=189、`flex-basis`=190（`cssproperties.h` 的 CSS_PROP_TOTAL 188→191；`parser.cpp` 的 added[] 表登记；`cssparser.cpp` 值校验；`cssstyleselector.cpp` applyProperty 落盘）。
+- `StyleFlexibleBoxData` 增加 `alignSelf`（0=auto/1=stretch/2=flex-start/3=center/4=flex-end）、`order`、`flexBasisType`（0=auto/1=px/2=percent）+ `flexBasisValue`，并同步拷贝/相等/diff（**flex 数据变化返回 Layout diff**，此前 flex 属性变化不触发重排）。
+- 实测解析正确：trace 中 `alignSelf=4`、`basis=1/200` 均按预期进入布局。
+
+### 2) 布局应用（render_flexbox.cpp）
+- **order**：子项按 order 升序稳定排序（同值保持文档顺序）后再分行/分配/放置。
+- **flex-basis**：显式 basis（px 或容器主轴的百分比）覆盖自然主轴尺寸（行内 setWidth + 重新 layout 取高）。
+- **align-self**：每个 item 计算 `effAlign`（auto 回退到容器 align-items），行/列两个放置分支都按它做交叉轴对齐。
+- **单行容器交叉尺寸修正**：此前行交叉尺寸只取"子项最大交叉尺寸"，导致 `align-items/align-self` 在容器有确定高度时全部贴顶（center/flex-end 无效）。现在若单行且行方向容器 `height` 是确定值（`Length::isFixed()`），行交叉尺寸取容器内容高度（减去 padding/border），符合 flexbox 规范；多行与 auto 高度容器行为不变。
+- 实测：`height:80px` + 20px 子项 + `align-self:flex-end` → 子项落在底部（y0 teal=147 顶部、maroon=237 底部，差 90 物理像素 = (80-20)×1.5）✓。
+
+### 3) 回归探针（两页夹具）
+- 新增 `tests/engine_semantics2.html`（order/align-self/flex-basis 专用，页面更矮以适配窗口截图），`tests/engine_semantics_probe.py` 改为两页流程：page1（@supports/-webkit/HTML5/换行/逻辑属性 8 项）+ page2（order/align-self/basis 3 项），共 **11 项像素断言**全过。
+- 探针检测改为"主带（连续行最大簇）"bbox，排除浏览器工具条抗锯齿等杂散像素污染（此前 maroon 被工具条暗红像素拉到 y0=25 造成误报）。
+
+### 实测
+- 引擎探针 **11/11 PASS**；`tile_protocol_test` PASS；**全量回归 2026-10-24 16:41→17:28 `failed: none`**：14 项中 13 项 PASS（engine_semantics_probe 48.2s 两页、bg_smoke、scroll_smoke、resize_probe、tombstone_probe、tile_protocol_test 160.3s）+ bing_ghost_check INCONCLUSIVE（本机 bing 无 #0078D4 蓝块，诚实结论）。
 
 ## 6. 正在/马上要做的
 A. ~~拆那 1.1s~~ **已完成**（字体枚举缓存 + 图标懒加载，构造 1.1s→~0.35s，TTFF 2.0→1.1s）。

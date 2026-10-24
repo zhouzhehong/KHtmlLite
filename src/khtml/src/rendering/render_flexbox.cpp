@@ -12,6 +12,7 @@
 #include "xml/dom_elementimpl.h"
 #include <QVector>
 #include <QRegularExpression>
+#include <algorithm>
 
 using namespace DOM;
 
@@ -131,6 +132,26 @@ static int childGrow(const RenderObject *child)
     return qMax(0, m.captured(1).toInt());
 }
 
+static int childOrder(const RenderObject *child)
+{
+    return child->style() ? child->style()->order() : 0;
+}
+
+static int childAlignSelf(const RenderObject *child)
+{
+    return child->style() ? child->style()->alignSelf() : 0;
+}
+
+static int childBasisType(const RenderObject *child)
+{
+    return child->style() ? child->style()->flexBasisType() : 0;
+}
+
+static int childBasisValue(const RenderObject *child)
+{
+    return child->style() ? child->style()->flexBasisValue() : 0;
+}
+
 void RenderFlexBox::layoutBlockChildren(bool relayoutChildren)
 {
     const FlexConfig cfg = config();
@@ -150,6 +171,10 @@ void RenderFlexBox::layoutBlockChildren(bool relayoutChildren)
         int grow;
         int autoMainBefore;
         int autoMainAfter;
+        int order;
+        int alignSelf;
+        int basisType;
+        int basisValue;
     };
     QVector<Item> items;
 
@@ -199,7 +224,8 @@ void RenderFlexBox::layoutBlockChildren(bool relayoutChildren)
             }
         }
 
-        items.append({box, itemW, box->height(), childGrow(child), autoBefore, autoAfter});
+        items.append({box, itemW, box->height(), childGrow(child), autoBefore, autoAfter,
+                       childOrder(child), childAlignSelf(child), childBasisType(child), childBasisValue(child)});
     }
 
     if (items.isEmpty()) {
@@ -212,6 +238,36 @@ void RenderFlexBox::layoutBlockChildren(bool relayoutChildren)
     // Split the items into flex lines.  A new line starts when the next item
     // would overflow the container's main axis and flex-wrap allows wrapping.
     const int availMain = row ? cw : ch;
+
+    // flex order: ascending, stable for equal values (document order).
+    std::stable_sort(items.begin(), items.end(), [](const Item &a, const Item &b) {
+        return a.order < b.order;
+    });
+
+    // flex-basis overrides the natural main size (px or % of the container).
+    for (int i = 0; i < items.size(); ++i) {
+        Item &it = items[i];
+        int basis = -1;
+        if (it.basisType == 1)
+            basis = it.basisValue;
+        else if (it.basisType == 2)
+            basis = (availMain * it.basisValue) / 100;
+        if (basis < 0)
+            continue;
+        if (row) {
+            it.box->setOverrideWidth(true);
+            it.box->setWidth(basis);
+            it.box->setChildNeedsLayout(true);
+            it.box->layout();
+            it.box->setOverrideWidth(false);
+        } else {
+            it.box->setHeight(basis);
+            it.box->setChildNeedsLayout(true);
+            it.box->layout();
+        }
+        it.baseW = it.box->width();
+        it.baseH = it.box->height();
+    }
     QVector<QVector<int> > lines;
     {
         QVector<int> cur;
@@ -287,6 +343,16 @@ void RenderFlexBox::layoutBlockChildren(bool relayoutChildren)
         int lineCross = 0;
         for (int idx : line)
             lineCross = qMax(lineCross, row ? items[idx].baseH : items[idx].baseW);
+    
+        // Single-line flex container with a definite cross size: the line
+        // cross size is the container's inner cross size, so align-items /
+        // align-self can centre or push items within the whole container.
+        if (lines.size() == 1) {
+            if (row && style() && style()->height().isFixed())
+                lineCross = qMax(lineCross, (int)style()->height().value() - borderTop() - borderBottom() - paddingTop() - paddingBottom());
+            else if (!row)
+                lineCross = qMax(lineCross, cw);
+        }
         maxLineCross = qMax(maxLineCross, lineCross);
 
         int mainPos = 0;
@@ -310,18 +376,25 @@ void RenderFlexBox::layoutBlockChildren(bool relayoutChildren)
 
             cursor += qMax(0, it.autoMainBefore);
 
+            // align-self overrides align-items for this item.
+            int effAlign = cfg.align;
+            if (it.alignSelf == 1) effAlign = AlignStretch;
+            else if (it.alignSelf == 2) effAlign = AlignFlexStart;
+            else if (it.alignSelf == 3) effAlign = AlignCenter;
+            else if (it.alignSelf == 4) effAlign = AlignFlexEnd;
+
             if (row) {
                 int itemY = top + crossCursor;
-                if (cfg.align == AlignCenter)
+                if (effAlign == AlignCenter)
                     itemY = top + crossCursor + qMax(0, (lineCross - it.baseH) / 2);
-                else if (cfg.align == AlignFlexEnd)
+                else if (effAlign == AlignFlexEnd)
                     itemY = top + crossCursor + qMax(0, lineCross - it.baseH);
                 it.box->setPos(left + cursor, itemY);
             } else {
                 int itemX = left + crossCursor;
-                if (cfg.align == AlignCenter)
+                if (effAlign == AlignCenter)
                     itemX = left + crossCursor + qMax(0, (lineCross - it.baseW) / 2);
-                else if (cfg.align == AlignFlexEnd)
+                else if (effAlign == AlignFlexEnd)
                     itemX = left + crossCursor + qMax(0, lineCross - it.baseW);
                 it.box->setPos(itemX, top + cursor);
             }

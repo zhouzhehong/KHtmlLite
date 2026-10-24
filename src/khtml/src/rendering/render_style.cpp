@@ -856,6 +856,11 @@ RenderStyle::Diff RenderStyle::diff(const RenderStyle *other) const
     if (m_svgStyle != other->m_svgStyle) {
         return Layout;
     }
+    // Flex container/child properties (direction, wrap, order, basis, ...)
+    // always change layout when they change.
+    if (*css3NonInheritedData->flexibleBox.get() != *other->css3NonInheritedData->flexibleBox.get()) {
+        return Layout;
+    }
     // we anyway assume they are the same
 //  EDisplay _display : 5;
 

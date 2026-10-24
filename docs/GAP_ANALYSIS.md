@@ -440,6 +440,16 @@ tests/renderer_solo.py（无浏览器直驱渲染进程+帧颜色断言）。
     c) engine_semantics 探针扩到 8 项像素断言（含主聚类检测排除抗锯齿干扰）；
     d) 剩余 flex 项（flex-basis/order/align-self/inline-flex）与 var()/calc()
        仍在路线图。
+ 12. **2026-10-24 引擎渲染能力第三批**（详见 HANDOVER §5n）：
+    a) 新 CSS 属性 align-self(188)/order(189)/flex-basis(190)：cssproperties.h
+       扩展 + parser.cpp added[] + cssparser 值校验 + cssstyleselector 落盘 +
+       StyleFlexibleBoxData 字段（含拷贝/相等），flex 数据变化返回 Layout diff；
+    b) 布局：order 稳定排序、flex-basis 覆盖主轴尺寸（px/百分比）、align-self
+       逐项交叉轴对齐；**单行容器行交叉尺寸**改为取确定高度（Length::isFixed）
+       而非子项最大高，修复 center/flex-end 贴顶问题（实测 +90 物理像素落底）；
+    c) 探针改为两页夹具（新增 engine_semantics2.html），共 11 项像素断言；检测
+       用"主带"bbox 排除工具条抗锯齿污染；
+    d) 剩余：flex-shrink、inline-flex 行内化、flex 简写三分量、var()/calc()。
 
 ---
 

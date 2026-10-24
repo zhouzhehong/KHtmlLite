@@ -847,23 +847,27 @@ class StyleFlexibleBoxData : public Shared<StyleFlexibleBoxData>
 {
 public:
     StyleFlexibleBoxData()
-        : flexDirection(0), justifyContent(0), alignItems(0),
+        : flexDirection(0), justifyContent(0), alignItems(0), alignSelf(0),
+          order(0), flexBasisType(0), flexBasisValue(0),
           flexGrow(0), flexWrap(false), gap(0)
     {
     }
     StyleFlexibleBoxData(const StyleFlexibleBoxData &o)
         : Shared<StyleFlexibleBoxData>(),
           flexDirection(o.flexDirection), justifyContent(o.justifyContent),
-          alignItems(o.alignItems), flexGrow(o.flexGrow),
-          flexWrap(o.flexWrap), gap(o.gap)
+          alignItems(o.alignItems), alignSelf(o.alignSelf), order(o.order),
+          flexBasisType(o.flexBasisType), flexBasisValue(o.flexBasisValue),
+          flexGrow(o.flexGrow), flexWrap(o.flexWrap), gap(o.gap)
     {
     }
 
     bool operator==(const StyleFlexibleBoxData &o) const
     {
         return flexDirection == o.flexDirection && justifyContent == o.justifyContent
-            && alignItems == o.alignItems && flexGrow == o.flexGrow
-            && flexWrap == o.flexWrap && gap == o.gap;
+            && alignItems == o.alignItems && alignSelf == o.alignSelf
+            && order == o.order && flexBasisType == o.flexBasisType
+            && flexBasisValue == o.flexBasisValue
+            && flexGrow == o.flexGrow && flexWrap == o.flexWrap && gap == o.gap;
     }
     bool operator!=(const StyleFlexibleBoxData &o) const
     {
@@ -876,6 +880,13 @@ public:
     int justifyContent;
     // 0=stretch 1=flex-start 2=center 3=flex-end
     int alignItems;
+    // per-child override: 0=auto 1=stretch 2=flex-start 3=center 4=flex-end
+    int alignSelf;
+    // flex order (ascending; document order for ties)
+    int order;
+    // flex-basis: 0=auto 1=px 2=percent (value stored in flexBasisValue)
+    int flexBasisType;
+    int flexBasisValue;
     float flexGrow;
     bool flexWrap;
     int gap;
@@ -1860,6 +1871,42 @@ public:
     {
         if (css3NonInheritedData->flexibleBox->gap != v) {
             css3NonInheritedData.access()->flexibleBox.access()->gap = v;
+        }
+    }
+    int alignSelf() const
+    {
+        return css3NonInheritedData->flexibleBox->alignSelf;
+    }
+    void setAlignSelf(int v)
+    {
+        if (css3NonInheritedData->flexibleBox->alignSelf != v) {
+            css3NonInheritedData.access()->flexibleBox.access()->alignSelf = v;
+        }
+    }
+    int order() const
+    {
+        return css3NonInheritedData->flexibleBox->order;
+    }
+    void setOrder(int v)
+    {
+        if (css3NonInheritedData->flexibleBox->order != v) {
+            css3NonInheritedData.access()->flexibleBox.access()->order = v;
+        }
+    }
+    int flexBasisType() const
+    {
+        return css3NonInheritedData->flexibleBox->flexBasisType;
+    }
+    int flexBasisValue() const
+    {
+        return css3NonInheritedData->flexibleBox->flexBasisValue;
+    }
+    void setFlexBasis(int type, int value)
+    {
+        const StyleFlexibleBoxData *d = css3NonInheritedData->flexibleBox.get();
+        if (d->flexBasisType != type || d->flexBasisValue != value) {
+            css3NonInheritedData.access()->flexibleBox.access()->flexBasisType = type;
+            css3NonInheritedData.access()->flexibleBox.access()->flexBasisValue = value;
         }
     }
     EUserInput userInput() const
