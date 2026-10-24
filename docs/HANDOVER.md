@@ -584,6 +584,36 @@ INCONCLUSIVE、或退出码 0 但输出里出现判定形 FAIL 令牌，都算�
 - `<iframe>` 内部页面的相对链接仍以 iframe 本地副本为基准（iframe HTML 本体不被改写），该路径点击可能落到 file://（iframe 在此引擎本就依赖本地镜像）；未在本轮处理。
 - 宿主仍对每个页面做正则级 CSS 降级改写（grid→flex、transform→translate、删除约 103 个现代属性、假 polyfill 等）——这些是**通用兼容层**不是站点特调，删除需先补引擎能力，已列入引擎级路线图（本轮 WebKit 对照报告）。
 
+## 5l. 引擎渲染能力第一批（2026-10-24，对标 Safari/WebKit，组件"够用即止"）
+
+用户指令：内核级渲染引擎补全，对标 Safari，组件够用即可、不追新版本；外壳 EXE 替换后续再说。
+本轮落地三项（均为引擎内实现，不是宿主改写）：
+
+### 1) `-webkit-` 前缀支持（引擎解析层）
+- `src/khtml/src/css/parser.cpp` 的 `DOM::getPropertyID()` 现在对 `-webkit-/-moz-/-ms-/-o-/-khtml-` 前缀做**剥离后重试**：`-webkit-border-radius` 等别名解析到已有的无前缀属性；引擎仍不认识的属性（如 `-webkit-transform`）保持未知，声明被忽略（不破坏级联）。
+- `DOM::getValueID()` 把旧 flex 拼写映射到现有值 id：`display:-webkit-box`/`-webkit-flex` → flex(334)，`-webkit-inline-box`/`-webkit-inline-flex` → inline-flex(335)。
+- 宿主 `pageloader.cpp` 的 CSS 降级清单里**不再删除厂商前缀属性**（10 条），它们直接交给引擎。
+- 背景：伪装 UA 声称 Safari，站点因此下发 `-webkit-` CSS；此前这些声明被全部丢弃。
+
+### 2) HTML5 语义元素 UA 默认块级（引擎 UA 样式层）
+- 运行时 html4.css 来自安装前缀（`C:\msys64\mingw64\bin\data\kf5\khtml\css\html4.css` 或便携包同名副本），改仓库里的 `src/khtml/src/css/html4.css` 不生效，因此规则**追加在引擎代码里**（`CSSStyleSelector::loadDefaultStyle`，读文件后拼接）：
+  `article,aside,figcaption,figure,footer,header,main,nav,section{display:block}`、`figure{margin:1em 40px}`、`summary/details{display:block}`、`template,[hidden],dialog{display:none}`、`mark{background-color:yellow;color:black}`。
+- 背景：引擎把未知元素按 inline 处理（dtd.cpp "custom elements same as <span>"），此前 `<section>/<nav>/<main>` 在无站点样式时全部行内堆叠。
+
+### 3) `@supports` 引擎级求值（不依赖 bison）
+- 语法文件 parser.y 无 `@supports` token，且构建树没有 bison（parser.cpp 是提交的生成文件），因此在**引擎样式表预处理**阶段实现：`CSSStyleSheetImpl::parseString()` 在交给解析器前扫描 `@supports` 块——真条件把内部规则**内联**回样式表，假条件**整块丢弃**；支持 `and`/`or`/`not`、嵌套递归、跳过注释、at-rule 规则边界判断；`selector()/font-tech()/font-format()` 保守取 false。
+- 判定依据：属性 id 已知（含前缀剥离）→ 支持；额外把 `display:grid/inline-grid`、`position:sticky` 判为不支持；值级未知一律按支持处理（够用原则）。
+- 宿主 `pageloader.cpp` **不再删除 @supports 块**（此前整块删除会连带丢掉引擎能渲染的规则）。
+- 附带修正：宿主不再把 `display:grid` 盲改成 `display:flex;flex-wrap:wrap`——它会把 `@supports (display:grid)` 的条件文本一起改坏，且 flex 无 wrap 时卡片墙塌成一行。
+
+### 行为级验证（新增永久回归探针）
+- 新增 `tests/engine_semantics.html` + `tests/engine_semantics_probe.py`（真实浏览器、像素级 6 项断言，已加入 `tests/run_regression.ps1`）：
+  `@supports (display:flex)` 真块应用（绿字出现）；`@supports (display:grid)` 假块丢弃（无红字）；`-webkit-border-radius` 圆角（角落非蓝）；`display:-webkit-flex` 三项同一行（bbox 179×59）；`<section>` 块级（黄色背景宽 1711/1805 px）。
+- 实测：探针 **PASS**；`tile_protocol_test` PASS；**全量回归 2026-10-24 13:24→14:11 `failed: none`**：14 项中 13 项 PASS（含新增 engine_semantics_probe 24.2s、bg_smoke、scroll_smoke、resize_probe、tombstone_probe、tile_protocol_test 178.5s）+ bing_ghost_check INCONCLUSIVE（本机 bing 无 #0078D4 蓝块，诚实结论）。
+
+### 下一批（路线图，按收益排序）
+`var()` 自定义属性 → 逻辑属性 → `calc()/min()/max()/clamp()` → flex 完整化（wrap/basis/order/align-self/inline-flex）→ grid → sticky/aspect-ratio → 渐变/transform/transition/animation。每条都要求：本地 fixture + 像素断言 + 全量回归绿。
+
 ## 6. 正在/马上要做的
 A. ~~拆那 1.1s~~ **已完成**（字体枚举缓存 + 图标懒加载，构造 1.1s→~0.35s，TTFF 2.0→1.1s）。
    下一步同部位残账：渲染进程镜像加载+socket 连接 ~500ms（每次新标签都付），

@@ -354,16 +354,13 @@ static QString simplifyUnsupportedCss(const QString &text)
 {
     QString out = text;
 
-    // CSS Grid -> Flexbox fallback. KHTML has no grid layout; flex with wrap
-    // approximates the most common grid use cases (card rows, galleries).
-    out.replace(QRegularExpression(
-        QStringLiteral("display\\s*:\\s*grid"),
-        QRegularExpression::CaseInsensitiveOption),
-        QStringLiteral("display:flex;flex-wrap:wrap"));
-    out.replace(QRegularExpression(
-        QStringLiteral("display\\s*:\\s*inline-grid"),
-        QRegularExpression::CaseInsensitiveOption),
-        QStringLiteral("display:inline-flex;flex-wrap:wrap"));
+    // display:grid is NOT rewritten to flex any more: the engine has no grid
+    // and the rewrite (a) collapsed card walls to one row (flex has no wrap)
+    // and (b) corrupted @supports conditions — "(@supports (display:grid))"
+    // became "(display:flex;flex-wrap:wrap)", so the engine could not answer
+    // the query correctly.  The declaration now simply stays unknown (the
+    // element keeps its block fallback), and @supports lets sites choose
+    // their own fallback.
 
     // position: sticky -> relative (layout stays valid, no scroll-pin)
     out.replace(QRegularExpression(
@@ -426,20 +423,19 @@ static QString simplifyUnsupportedCss(const QString &text)
         calcOut.append(out.midRef(last));
         out = calcOut;
     }
+    // Vendor-prefixed property names reach the engine now: getPropertyID()
+    // strips -webkit-/-moz-/-ms-/-o-/-khtml- and retries, so e.g.
+    // -webkit-border-radius applies and -webkit-transform is ignored
+    // gracefully.  They are deliberately NOT stripped here any more.
+
     const QStringList props = {
-        QStringLiteral("transform"), QStringLiteral("-webkit-transform"),
-        QStringLiteral("-moz-transform"), QStringLiteral("-ms-transform"),
-        QStringLiteral("backdrop-filter"), QStringLiteral("-webkit-backdrop-filter"),
-        QStringLiteral("filter"), QStringLiteral("-webkit-filter"),
-        QStringLiteral("animation"), QStringLiteral("animation-name"),
+        QStringLiteral("transform"), QStringLiteral("backdrop-filter"), QStringLiteral("filter"), QStringLiteral("animation"), QStringLiteral("animation-name"),
         QStringLiteral("animation-duration"), QStringLiteral("animation-timing-function"),
         QStringLiteral("animation-delay"), QStringLiteral("animation-iteration-count"),
         QStringLiteral("animation-direction"), QStringLiteral("animation-fill-mode"),
-        QStringLiteral("animation-play-state"), QStringLiteral("-webkit-animation"),
-        QStringLiteral("transition"), QStringLiteral("transition-property"),
+        QStringLiteral("animation-play-state"), QStringLiteral("transition"), QStringLiteral("transition-property"),
         QStringLiteral("transition-duration"), QStringLiteral("transition-timing-function"),
-        QStringLiteral("transition-delay"), QStringLiteral("-webkit-transition"),
-        QStringLiteral("grid"), QStringLiteral("grid-template"),
+        QStringLiteral("transition-delay"), QStringLiteral("grid"), QStringLiteral("grid-template"),
         QStringLiteral("grid-template-columns"), QStringLiteral("grid-template-rows"),
         QStringLiteral("grid-template-areas"), QStringLiteral("grid-area"),
         QStringLiteral("grid-column"), QStringLiteral("grid-row"),
@@ -447,9 +443,8 @@ static QString simplifyUnsupportedCss(const QString &text)
         QStringLiteral("grid-auto-rows"), QStringLiteral("place-items"),
         QStringLiteral("place-content"), QStringLiteral("place-self"),
         QStringLiteral("aspect-ratio"), QStringLiteral("clip-path"),
-        QStringLiteral("-webkit-clip-path"), QStringLiteral("mask"),
-        QStringLiteral("mask-image"), QStringLiteral("-webkit-mask"),
-        QStringLiteral("-webkit-mask-image"), QStringLiteral("will-change"),
+        QStringLiteral("mask"),
+        QStringLiteral("mask-image"), QStringLiteral("will-change"),
         QStringLiteral("contain"), QStringLiteral("scroll-behavior"),
         QStringLiteral("backface-visibility"), QStringLiteral("perspective"),
         QStringLiteral("transform-style"), QStringLiteral("object-fit"),
@@ -494,11 +489,10 @@ static QString simplifyUnsupportedCss(const QString &text)
     while ((pos = out.indexOf(QRegularExpression(QStringLiteral("@-?[a-z]*keyframes")), pos)) >= 0)
         out = removeAtBlock(out, pos);
 
-    // Remove @supports blocks (KHTML doesn't evaluate them; they may wrap
-    // unsupported rules that crash the parser).
-    pos = 0;
-    while ((pos = out.indexOf(QStringLiteral("@supports"), pos, Qt::CaseInsensitive)) >= 0)
-        out = removeAtBlock(out, pos);
+    // @supports blocks are now EVALUATED by the engine
+    // (CSSStyleSheetImpl::parseString expands true conditions and drops false
+    // ones), so they must not be deleted here: deleting them also threw away
+    // rules the engine can render.
 
     return out;
 }

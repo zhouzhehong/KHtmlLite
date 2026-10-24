@@ -466,6 +466,22 @@ void CSSStyleSelector::loadDefaultStyle(const KHTMLSettings *s, DocumentImpl *do
         if (s) {
             style += s->settingsToCSS();
         }
+        // HTML5 semantic elements must default to block-level.  The shipped
+        // html4.css predates HTML5 and the engine maps unknown elements to
+        // inline (dtd.cpp: "custom elements same as <span>"), so without
+        // this <section>/<nav>/<main>/<header>/... stack inline on every page
+        // that does not restyle them.  Kept in code (not in the file) so an
+        // html4.css installed by another prefix still gets the rules; these
+        // come after the file, so they win over its defaults.
+        // Also: <template>/[hidden] must not render, <details>/<summary> get
+        // the minimal block behaviour, <mark> gets its highlight.
+        style += QLatin1String(
+            "article,aside,figcaption,figure,footer,header,main,nav,section{display:block}"
+            "figure{margin:1em 40px}"
+            "summary{display:block}"
+            "details{display:block}"
+            "template,[hidden],dialog{display:none}"
+            "mark{background-color:yellow;color:black}");
         DOMString str(style);
 
         s_defaultSheet = new DOM::CSSStyleSheetImpl(doc);

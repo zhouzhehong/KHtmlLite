@@ -43,6 +43,9 @@
 #include "khtml_debug.h"
 
 #include <QRegularExpression>
+#include "cssproperties.h"
+#include <QStringList>
+#include <functional>
 
 using namespace DOM;
 using namespace khtml;
@@ -338,12 +341,192 @@ bool CSSStyleSheetImpl::parseString(const DOMString &string, bool strict)
     qCDebug(KHTML_LOG) << "parsing sheet, len=" << string.length() << ", sheet is " << string.string();
 #endif
 
+    QString css = string.string();
+
+    // ---- @supports condition evaluation (engine-side, pre-parse) ----------
+    // The bison grammar has no @supports token, so the block is expanded (or
+    // dropped) here before parsing: a true condition inlines its rules, a
+    // false condition removes the block entirely.  This is the behaviour
+    // modern sites rely on for progressive enhancement; previously the host
+    // deleted the whole block textually, which also killed rules the engine
+    // could actually render.
+    //
+    // Declarations are considered supported when the property id is known
+    // (after -webkit-/-moz-/-ms-/-o- prefix stripping); a handful of
+    // known-property-but-unsupported values (display:grid, position:sticky)
+    // are answered false.  Selector()/font-tech() queries are answered false
+    // (conservative).  Nested blocks recurse.
+    {
+        // Split |s| on |kw| at paren/quote depth 0 (case-insensitive).
+        auto splitTop = [](const QString &s, const QString &kw) {
+            QStringList parts;
+            int depth = 0, start = 0;
+            QChar quote = QChar::Null;
+            for (int i = 0; i < s.size(); ++i) {
+                const QChar c = s.at(i);
+                if (!quote.isNull()) {
+                    if (c == quote) quote = QChar::Null;
+                    continue;
+                }
+                if (c == QLatin1Char('"') || c == QLatin1Char('\'')) { quote = c; continue; }
+                if (c == QLatin1Char('(')) { ++depth; continue; }
+                if (c == QLatin1Char(')')) { if (depth > 0) --depth; continue; }
+                if (depth == 0 && i + kw.size() <= s.size()
+                    && s.midRef(i, kw.size()).compare(kw, Qt::CaseInsensitive) == 0) {
+                    parts.append(s.mid(start, i - start));
+                    i += kw.size() - 1;
+                    start = i + 1;
+                }
+            }
+            parts.append(s.mid(start));
+            return parts;
+        };
+        // A single "(property: value)" query (or selector()/font-tech()).
+        std::function<bool(const QString &)> condTrue;
+        condTrue = [&](const QString &raw) -> bool {
+            QString s = raw;
+            // Strip comments from the condition before evaluating it.
+            while (true) {
+                const int cs = s.indexOf(QLatin1String("/*"));
+                if (cs < 0) break;
+                const int ce = s.indexOf(QLatin1String("*/"), cs + 2);
+                if (ce < 0) { s.truncate(cs); break; }
+                s.remove(cs, ce + 2 - cs);
+            }
+            s = s.trimmed();
+            if (s.isEmpty())
+                return false;
+            if (s.startsWith(QLatin1String("not "), Qt::CaseInsensitive))
+                return !condTrue(s.mid(4));
+            // OR has lower precedence than AND.
+            const QStringList ors = splitTop(s, QStringLiteral(" or "));
+            if (ors.size() > 1) {
+                for (const QString &p : ors)
+                    if (condTrue(p)) return true;
+                return false;
+            }
+            const QStringList ands = splitTop(s, QStringLiteral(" and "));
+            if (ands.size() > 1) {
+                for (const QString &p : ands)
+                    if (!condTrue(p)) return false;
+                return true;
+            }
+            // Strip balanced outer parentheses.
+            while (s.startsWith(QLatin1Char('(')) && s.endsWith(QLatin1Char(')'))) {
+                int d = 0;
+                bool whole = true;
+                for (int i = 0; i < s.size(); ++i) {
+                    if (s.at(i) == QLatin1Char('(')) ++d;
+                    else if (s.at(i) == QLatin1Char(')')) {
+                        --d;
+                        if (d == 0 && i != s.size() - 1) { whole = false; break; }
+                    }
+                }
+                if (!whole) break;
+                s = s.mid(1, s.size() - 2).trimmed();
+            }
+            if (s.startsWith(QLatin1String("selector("), Qt::CaseInsensitive)
+                || s.startsWith(QLatin1String("font-tech("), Qt::CaseInsensitive)
+                || s.startsWith(QLatin1String("font-format("), Qt::CaseInsensitive))
+                return false;
+            const int colon = s.indexOf(QLatin1Char(':'));
+            if (colon <= 0)
+                return false;
+            const QString prop = s.left(colon).trimmed().toLower();
+            const QString val = s.mid(colon + 1).trimmed().toLower();
+            const QByteArray pb = prop.toLatin1();
+            const int pid = DOM::getPropertyID(pb.constData(), pb.size());
+            if (pid == 0)
+                return false;
+            if (pid == CSS_PROP_DISPLAY
+                && (val.startsWith(QLatin1String("grid")) || val.startsWith(QLatin1String("inline-grid"))))
+                return false;   // no grid layout
+            if (pid == CSS_PROP_POSITION && val.startsWith(QLatin1String("sticky")))
+                return false;   // no sticky positioning
+            return true;
+        };
+        std::function<QString(const QString &)> expand;
+        expand = [&](const QString &css) -> QString {
+            QString out;
+            out.reserve(css.size());
+            int i = 0;
+            const int n = css.size();
+            while (i < n) {
+                // Skip comments: a literal "@supports" inside a comment must
+                // not be treated as an at-rule start.
+                if (css.at(i) == QLatin1Char('/') && i + 1 < n && css.at(i + 1) == QLatin1Char('*')) {
+                    const int ce = css.indexOf(QLatin1String("*/"), i + 2);
+                    if (ce < 0) { out.append(css.mid(i)); break; }
+                    out.append(css.mid(i, ce + 2 - i));
+                    i = ce + 2;
+                    continue;
+                }
+                // An at-rule only starts at a rule boundary.
+                bool atBoundary = (i == 0);
+                if (!atBoundary) {
+                    const QChar prev = css.at(i - 1);
+                    atBoundary = prev.isSpace() || prev == QLatin1Char('{{')
+                                 || prev == QLatin1Char('}}') || prev == QLatin1Char(';');
+                }
+                if (atBoundary && css.at(i) == QLatin1Char('@')
+                    && i + 9 <= n
+                    && css.midRef(i, 9).compare(QLatin1String("@supports"), Qt::CaseInsensitive) == 0
+                    && (i + 9 >= n || !css.at(i + 9).isLetterOrNumber())) {
+                    int j = i + 9;
+                    int depth = 0;
+                    QChar quote = QChar::Null;
+                    int brace = -1;
+                    for (; j < n; ++j) {
+                        const QChar c = css.at(j);
+                        if (c == QLatin1Char('/') && j + 1 < n && css.at(j + 1) == QLatin1Char('*')) {
+                            const int ce = css.indexOf(QLatin1String("*/"), j + 2);
+                            j = ce < 0 ? n : ce + 1;
+                            continue;
+                        }
+                        if (!quote.isNull()) { if (c == quote) quote = QChar::Null; continue; }
+                        if (c == QLatin1Char('"') || c == QLatin1Char('\'')) { quote = c; continue; }
+                        if (c == QLatin1Char('(')) { ++depth; continue; }
+                        if (c == QLatin1Char(')')) { if (depth > 0) --depth; continue; }
+                        if (c == QLatin1Char('{') && depth == 0) { brace = j; break; }
+                        if (c == QLatin1Char(';') && depth == 0) break;
+                    }
+                    if (brace < 0) { out.append(css.at(i)); ++i; continue; }
+                    int d = 0, end = -1;
+                    quote = QChar::Null;
+                    for (int k = brace; k < n; ++k) {
+                        const QChar c = css.at(k);
+                        if (c == QLatin1Char('/') && k + 1 < n && css.at(k + 1) == QLatin1Char('*')) {
+                            const int ce = css.indexOf(QLatin1String("*/"), k + 2);
+                            k = ce < 0 ? n : ce + 1;
+                            continue;
+                        }
+                        if (!quote.isNull()) { if (c == quote) quote = QChar::Null; continue; }
+                        if (c == QLatin1Char('"') || c == QLatin1Char('\'')) { quote = c; continue; }
+                        if (c == QLatin1Char('{')) ++d;
+                        else if (c == QLatin1Char('}')) { --d; if (d == 0) { end = k; break; } }
+                    }
+                    if (end < 0) { out.append(css.at(i)); ++i; continue; }
+                    const QString cond = css.mid(i + 9, brace - (i + 9));
+                    const QString inner = css.mid(brace + 1, end - brace - 1);
+                    if (condTrue(cond))
+                        out.append(expand(inner));   // inline the nested rules
+                    // else: drop the unsupported block entirely
+                    i = end + 1;
+                    continue;
+                }
+                out.append(css.at(i));
+                ++i;
+            }
+            return out;
+        };
+        css = expand(css);
+    }
+
     // Strip CSS custom property declarations (--name: value;). KHTML's parser
     // does not support them and a single custom property can cause the whole
     // stylesheet to fail parsing (rules=0). We remove the declarations but
     // keep all other rules intact. This is a generic compatibility fix, not
     // site-specific.
-    QString css = string.string();
     {
         QString out;
         out.reserve(css.size());

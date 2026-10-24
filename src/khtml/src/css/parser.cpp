@@ -140,18 +140,30 @@ int DOM::getPropertyID(const char *tagStr, int len)
         {"flex-grow", 183}, {"flex-wrap", 184}, {"gap", 185}, {"flex", 186},
         {"box-shadow", 187},
     };
-    for (const auto &a : added) {
-        if (len == (int)strlen(a.name) && !strncmp(tagStr, a.name, len))
-            return a.id;
-    }
-    { // HTML CSS Properties
-        const struct css_prop *prop = findProp(tagStr, len);
-        if (!prop) {
-            return 0;
+    auto lookup = [&](const char *s, int n) -> int {
+        for (const auto &a : added) {
+            if (n == (int)strlen(a.name) && !strncmp(s, a.name, n))
+                return a.id;
         }
-
-        return prop->id;
+        const struct css_prop *prop = findProp(s, n);
+        return prop ? prop->id : 0;
+    };
+    int id = lookup(tagStr, len);
+    if (id)
+        return id;
+    // Vendor-prefixed aliases: "-webkit-border-radius" etc. are extremely
+    // common on the modern web (sites serve them because our UA claims to be
+    // Safari).  Strip the prefix and retry; properties we still do not know
+    // stay unknown, which the parser handles by ignoring the declaration.
+    static const char *const prefixes[] = {
+        "-webkit-", "-moz-", "-ms-", "-o-", "-khtml-",
+    };
+    for (const char *prefix : prefixes) {
+        const int pl = (int)strlen(prefix);
+        if (len > pl && !strncmp(tagStr, prefix, pl))
+            return lookup(tagStr + pl, len - pl);
     }
+    return 0;
 }
 
 int DOM::getValueID(const char *tagStr, int len)
@@ -169,6 +181,18 @@ int DOM::getValueID(const char *tagStr, int len)
     if (len == 12 && !strncmp(tagStr, "space-around", 12)) return 343;
     if (len == 7 && !strncmp(tagStr, "stretch", 7)) return 344;
     if (len == 4 && !strncmp(tagStr, "wrap", 4)) return 345;
+    // Old/flex-prefixed display values map onto the flex value ids so that
+    // "display:-webkit-box" / "-webkit-flex" / "-webkit-inline-flex" engage
+    // the flex formatting context instead of being dropped.
+    if (len > 8 && !strncmp(tagStr, "-webkit-", 8)) {
+        const char *n = tagStr + 8;
+        const int nl = len - 8;
+        if ((nl == 3 && !strncmp(n, "box", 3)) || (nl == 4 && !strncmp(n, "flex", 4)))
+            return 334;   // flex
+        if ((nl == 11 && !strncmp(n, "inline-box", 11))
+            || (nl == 11 && !strncmp(n, "inline-flex", 11)))
+            return 335;   // inline-flex
+    }
     { // HTML CSS Values
         const struct css_value *val = findValue(tagStr, len);
         if (!val) {

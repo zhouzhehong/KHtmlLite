@@ -1,0 +1,23 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>engine-semantics</title>
+<style>
+  /* @supports true: must apply (green text). */
+  @supports (display: flex) { #sup_true { color: #00ff00; } }
+  /* @supports false: engine has no grid -> block dropped (text stays black). */
+  @supports (display: grid) { #sup_false { color: #ff0000; } }
+  /* -webkit- prefixed property must reach the engine (border-radius). */
+  #prefixed { -webkit-border-radius: 12px; background-color: #0000ff;
+              width: 200px; height: 40px; color: #ffffff; }
+  /* Old flex spelling via -webkit- display value must engage flex layout. */
+  #flexbox { display: -webkit-flex; }
+  #flexbox div { width: 40px; height: 40px; background-color: #ff00ff; }
+  /* HTML5 semantic element: UA sheet must make it block (full-width bg). */
+  section { background-color: #ffff00; }
+</style></head>
+<body>
+  <div id="sup_true">SUP_TRUE</div>
+  <div id="sup_false">SUP_FALSE</div>
+  <div id="prefixed">PREFIXED</div>
+  <div id="flexbox"><div></div><div></div><div></div></div>
+  <section id="sem">X</section>
+</body></html>

@@ -416,6 +416,20 @@ tests/renderer_solo.py（无浏览器直驱渲染进程+帧颜色断言）。
        支持内联 SVG：`htmlparser.cpp:287-304/924-926`，提交 70bb3a0/413e0ad）；
     d) 残留：iframe 内相对链接仍指向本地副本；宿主通用 CSS 降级层属引擎能力
        缺口，不在「站点特调」范畴，已按引擎路线图（P0-P3）分阶段处理。
+ 10. **2026-10-24 引擎渲染能力第一批**（详见 HANDOVER §5l，对标 Safari/WebKit，
+     组件「够用即止」）：
+    a) `-webkit-` 前缀支持：parser.cpp 的 getPropertyID 剥离 `-webkit-/-moz-/
+       -ms-/-o-/-khtml-` 后重试，getValueID 把 `display:-webkit-box/-webkit-flex/
+       -webkit-inline-flex` 映射到 flex 值；宿主不再删除厂商前缀属性；
+    b) HTML5 语义元素 UA 默认块级：在 `CSSStyleSelector::loadDefaultStyle`
+       追加（article/section/nav/main/aside/header/footer/figure 等 display:block，
+       template/[hidden]/dialog display:none，mark 高亮）——运行时 html4.css 来自
+       安装前缀，改仓库文件不生效，故放代码里；
+    c) `@supports` 引擎级求值：`CSSStyleSheetImpl::parseString` 预处理阶段展开真
+       条件/丢弃假条件（and/or/not、嵌套、注释跳过、规则边界、selector() 保守
+       false），宿主不再删除该块；宿主也不再盲改 `display:grid`（会破坏条件文本）；
+    d) 新增永久回归 `tests/engine_semantics.{html,py}`（像素级 6 项）并接入
+       run_regression.ps1；下一批：var()/逻辑属性/calc()/flex 完整化/grid/绘制。
 
 ---
 

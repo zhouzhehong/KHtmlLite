@@ -122,6 +122,7 @@ $probes = @(
     "title_probe.py",
     "tombstone_probe.py",
     "resize_ghost_probe.py",
+    "engine_semantics_probe.py",
     "rg_diag4.py",
     "bing_ghost_check.py"
 )
