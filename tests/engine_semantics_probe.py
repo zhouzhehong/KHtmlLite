@@ -37,6 +37,20 @@ def near(px, want, tol=40):
     return all(abs(px[i] - want[i]) <= tol for i in range(3))
 
 
+def main_cluster_bbox(pixels, w, h, want, tol=45, min_row=20):
+    """bbox of the dominant cluster: rows with many matching pixels.
+    Filters out stray anti-aliasing pixels from other elements."""
+    rows = {}
+    for y in range(h):
+        xs = [x for x in range(w) if near(pixels[x, y], want, tol)]
+        if len(xs) >= min_row:
+            rows[y] = xs
+    if not rows:
+        return None
+    xs = [x for v in rows.values() for x in v]
+    ys = list(rows.keys())
+    return (min(xs), min(ys), max(xs), max(ys))
+
 def bbox(pixels, w, h, want, tol=40):
     xs, ys = [], []
     for y in range(h):
@@ -129,6 +143,26 @@ def main():
                   "(yellow bbox w=%d of %d)" % (x1 - x0, w))
         else:
             check("HTML5 <section> renders", False)
+
+        # 6) flex-wrap: 5 x 100px cards in a 300px container wrap into rows
+        #    (3 per row => bbox ~450 x 120 physical at dpr 1.5).
+        cyan = bbox(pixels, w, h, (0, 255, 255), tol=40)
+        if cyan:
+            x0, y0, x1, y1 = cyan
+            check("flex-wrap wraps into rows",
+                  (x1 - x0) > 300 and (y1 - y0) > 90,
+                  "(cyan bbox w=%d h=%d)" % (x1 - x0, y1 - y0))
+        else:
+            check("flex-wrap cards render", False)
+
+        # 7) logical property margin-inline-start (LTR) offsets the box.
+        orange = main_cluster_bbox(pixels, w, h, (255, 128, 0), tol=45)
+        if orange:
+            x0, y0, x1, y1 = orange
+            check("margin-inline-start maps to left", x0 > 150 and 60 < (x1 - x0) < 140,
+                  "(orange bbox x0=%d w=%d)" % (x0, x1 - x0))
+        else:
+            check("logical-margin box renders", False)
 
         print("\nRESULT:", "PASS" if ok else "FAIL")
         return 0 if ok else 1

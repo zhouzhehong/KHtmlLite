@@ -151,6 +151,35 @@ int DOM::getPropertyID(const char *tagStr, int len)
     int id = lookup(tagStr, len);
     if (id)
         return id;
+    // Logical properties: map the modern logical longhands onto the physical
+    // ones the engine already implements (horizontal-tb, LTR — the direction
+    // flip is not applied yet; RTL logical mapping is a later refinement).
+    struct { const char *logical; const char *physical; } static const logicalProps[] = {
+        {"margin-inline-start", "margin-left"},
+        {"margin-inline-end", "margin-right"},
+        {"padding-inline-start", "padding-left"},
+        {"padding-inline-end", "padding-right"},
+        {"border-inline-start-width", "border-left-width"},
+        {"border-inline-end-width", "border-right-width"},
+        {"border-inline-start-style", "border-left-style"},
+        {"border-inline-end-style", "border-right-style"},
+        {"border-inline-start-color", "border-left-color"},
+        {"border-inline-end-color", "border-right-color"},
+        {"inset-inline-start", "left"},
+        {"inset-inline-end", "right"},
+        {"inset-block-start", "top"},
+        {"inset-block-end", "bottom"},
+        {"inline-size", "width"},
+        {"block-size", "height"},
+        {"min-inline-size", "min-width"},
+        {"max-inline-size", "max-width"},
+        {"min-block-size", "min-height"},
+        {"max-block-size", "max-height"},
+    };
+    for (const auto &l : logicalProps) {
+        if (len == (int)strlen(l.logical) && !strncmp(tagStr, l.logical, len))
+            return lookup(l.physical, (int)strlen(l.physical));
+    }
     // Vendor-prefixed aliases: "-webkit-border-radius" etc. are extremely
     // common on the modern web (sites serve them because our UA claims to be
     // Safari).  Strip the prefix and retry; properties we still do not know

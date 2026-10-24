@@ -430,6 +430,16 @@ tests/renderer_solo.py（无浏览器直驱渲染进程+帧颜色断言）。
        false），宿主不再删除该块；宿主也不再盲改 `display:grid`（会破坏条件文本）；
     d) 新增永久回归 `tests/engine_semantics.{html,py}`（像素级 6 项）并接入
        run_regression.ps1；下一批：var()/逻辑属性/calc()/flex 完整化/grid/绘制。
+ 11. **2026-10-24 引擎渲染能力第二批**（详见 HANDOVER §5m）：
+    a) flex-wrap 换行布局：FlexConfig.wrap + config() 读取（style flexWrap 与
+       行内 style），布局重写为按行分段（每行独立 grow/auto-margin/justify/
+       align），行间 gap 作 row-gap；单行路径保持原行为；实测 3+2 两行；
+    b) 逻辑属性别名：getPropertyID 增加 20 项逻辑→物理长属性映射（LTR、
+       horizontal-tb）：margin/padding-inline-*、border-inline-*、inset-inline/
+       block-*、inline-size/block-size 及 min/max；RTL 翻转未实现（后续项）；
+    c) engine_semantics 探针扩到 8 项像素断言（含主聚类检测排除抗锯齿干扰）；
+    d) 剩余 flex 项（flex-basis/order/align-self/inline-flex）与 var()/calc()
+       仍在路线图。
 
 ---
 

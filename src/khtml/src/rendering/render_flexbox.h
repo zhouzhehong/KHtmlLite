@@ -43,6 +43,7 @@ private:
         FlexDir dir = FlexDirRow;
         FlexJustify justify = JustifyFlexStart;
         FlexAlign align = AlignStretch;
+        bool wrap = false;   // flex-wrap: wrap
         int gap = 0;
     };
 

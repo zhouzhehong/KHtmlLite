@@ -55,6 +55,7 @@ RenderFlexBox::FlexConfig RenderFlexBox::config() const
         }
         cfg.justify = static_cast<FlexJustify>(style()->justifyContent());
         cfg.align = static_cast<FlexAlign>(style()->alignItems());
+        cfg.wrap = style()->flexWrap();
         cfg.gap = style()->gap();
     }
 
@@ -72,6 +73,12 @@ RenderFlexBox::FlexConfig RenderFlexBox::config() const
         cfg.dir = FlexDirColumn;
     }
 
+
+    const QRegularExpression fw(QStringLiteral("flex-wrap\\s*:\\s*(wrap|nowrap)"),
+                               QRegularExpression::CaseInsensitiveOption);
+    const QRegularExpressionMatch fwm = fw.match(style);
+    if (fwm.hasMatch())
+        cfg.wrap = (fwm.captured(1).toLower() == QLatin1String("wrap"));
     const QRegularExpression jc(QStringLiteral("justify-content\\s*:\\s*(\\w+(?:-\\w+)?)"),
                                 QRegularExpression::CaseInsensitiveOption);
     const QRegularExpressionMatch jm = jc.match(style);
@@ -202,100 +209,137 @@ void RenderFlexBox::layoutBlockChildren(bool relayoutChildren)
         return;
     }
 
-    int used = 0;
-    for (const Item &it : items)
-        used += row ? it.baseW : it.baseH;
-    used += cfg.gap * (items.size() - 1);
-    const int free = row ? (cw - used) : (ch - used);
-
-    // Second pass: grow children share any free space.
-    int growSum = 0;
-    for (const Item &it : items)
-        growSum += it.grow;
-    if (free > 0 && growSum > 0) {
-        for (Item &it : items) {
-            if (it.grow <= 0)
-                continue;
-            const int share = (free * it.grow) / growSum;
-            if (row)
-                it.box->setWidth(it.baseW + share);
-            else
-                it.box->setHeight(it.baseH + share);
-            it.baseW = it.box->width();
-            it.baseH = it.box->height();
+    // Split the items into flex lines.  A new line starts when the next item
+    // would overflow the container's main axis and flex-wrap allows wrapping.
+    const int availMain = row ? cw : ch;
+    QVector<QVector<int> > lines;
+    {
+        QVector<int> cur;
+        int curMain = 0;
+        for (int i = 0; i < items.size(); ++i) {
+            const int mainSize = row ? items[i].baseW : items[i].baseH;
+            const int add = cur.isEmpty() ? mainSize : cfg.gap + mainSize;
+            if (cfg.wrap && !cur.isEmpty() && curMain + add > availMain) {
+                lines.append(cur);
+                cur.clear();
+                curMain = 0;
+            }
+            curMain += cur.isEmpty() ? mainSize : cfg.gap + mainSize;
+            cur.append(i);
         }
+        if (!cur.isEmpty())
+            lines.append(cur);
     }
 
-    // Recompute free space after flex-grow; auto margins absorb what remains.
-    int usedAfterGrow = 0;
-    for (const Item &it : items)
-        usedAfterGrow += row ? it.baseW : it.baseH;
-    usedAfterGrow += cfg.gap * (items.size() - 1);
-    int freeAfterGrow = (row ? cw : ch) - usedAfterGrow;
+    int crossCursor = 0;      // cross-axis offset of the current line
+    int maxMainExtent = 0;    // widest line main extent (overflow bookkeeping)
+    int maxLineCross = 0;     // tallest line cross size
+    for (int li = 0; li < lines.size(); ++li) {
+        const QVector<int> &line = lines[li];
 
-    int autoCount = 0;
-    for (const Item &it : items) {
-        if (it.autoMainBefore >= 0) ++autoCount;
-        if (it.autoMainAfter  >= 0) ++autoCount;
-    }
-    if (freeAfterGrow > 0 && autoCount > 0) {
-        const int share = freeAfterGrow / autoCount;
-        for (Item &it : items) {
-            if (it.autoMainBefore >= 0) it.autoMainBefore = share;
-            if (it.autoMainAfter  >= 0) it.autoMainAfter  = share;
-        }
-        freeAfterGrow = 0;
-    }
+        int used = 0;
+        for (int idx : line)
+            used += row ? items[idx].baseW : items[idx].baseH;
+        used += cfg.gap * (line.size() - 1);
+        int free = availMain - used;
 
-    // Third pass: place children along the main axis.
-    const int totalMain = usedAfterGrow;
-    int mainPos = 0;
-    if (autoCount == 0) {
-        if (cfg.justify == JustifyCenter) {
-            mainPos = (row ? cw : ch) / 2 - totalMain / 2;
-        } else if (cfg.justify == JustifyFlexEnd) {
-            mainPos = (row ? cw : ch) - totalMain;
-        }
-    }
-
-    int crossMax = 0;
-    for (const Item &it : items)
-        crossMax = qMax(crossMax, row ? it.baseH : it.baseW);
-
-    int cursor = qMax(0, mainPos);
-    for (int i = 0; i < items.size(); ++i) {
-        Item &it = items[i];
-        int spacing = cfg.gap;
-        if (autoCount == 0) {
-            if (cfg.justify == JustifySpaceBetween && items.size() > 1) {
-                spacing = qMax(0, freeAfterGrow) / (items.size() - 1);
-            } else if (cfg.justify == JustifySpaceAround) {
-                spacing = qMax(0, freeAfterGrow) / items.size();
+        // flex-grow shares the line's free space (never across lines).
+        int growSum = 0;
+        for (int idx : line)
+            growSum += items[idx].grow;
+        if (free > 0 && growSum > 0) {
+            for (int idx : line) {
+                Item &it = items[idx];
+                if (it.grow <= 0)
+                    continue;
+                const int share = (free * it.grow) / growSum;
+                if (row)
+                    it.box->setWidth(it.baseW + share);
+                else
+                    it.box->setHeight(it.baseH + share);
+                it.baseW = it.box->width();
+                it.baseH = it.box->height();
             }
         }
 
-        cursor += qMax(0, it.autoMainBefore);
+        // Recompute free space after flex-grow; auto margins absorb what remains.
+        int used2 = 0;
+        for (int idx : line)
+            used2 += row ? items[idx].baseW : items[idx].baseH;
+        used2 += cfg.gap * (line.size() - 1);
+        int free2 = availMain - used2;
+        maxMainExtent = qMax(maxMainExtent, used2);
 
-        if (row) {
-            int itemY = top;
-            if (cfg.align == AlignCenter)
-                itemY = top + qMax(0, (crossMax - it.baseH) / 2);
-            else if (cfg.align == AlignFlexEnd)
-                itemY = top + qMax(0, crossMax - it.baseH);
-            it.box->setPos(left + cursor, itemY);
-        } else {
-            int itemX = left;
-            if (cfg.align == AlignCenter)
-                itemX = left + qMax(0, (crossMax - it.baseW) / 2);
-            else if (cfg.align == AlignFlexEnd)
-                itemX = left + qMax(0, crossMax - it.baseW);
-            it.box->setPos(itemX, top + cursor);
+        int autoCount = 0;
+        for (int idx : line) {
+            if (items[idx].autoMainBefore >= 0) ++autoCount;
+            if (items[idx].autoMainAfter >= 0) ++autoCount;
         }
-        cursor += (row ? it.baseW : it.baseH) + qMax(0, it.autoMainAfter) + spacing;
+        if (free2 > 0 && autoCount > 0) {
+            const int share = free2 / autoCount;
+            for (int idx : line) {
+                if (items[idx].autoMainBefore >= 0) items[idx].autoMainBefore = share;
+                if (items[idx].autoMainAfter >= 0) items[idx].autoMainAfter = share;
+            }
+            free2 = 0;
+        }
+
+        int lineCross = 0;
+        for (int idx : line)
+            lineCross = qMax(lineCross, row ? items[idx].baseH : items[idx].baseW);
+        maxLineCross = qMax(maxLineCross, lineCross);
+
+        int mainPos = 0;
+        if (autoCount == 0) {
+            if (cfg.justify == JustifyCenter)
+                mainPos = availMain / 2 - used2 / 2;
+            else if (cfg.justify == JustifyFlexEnd)
+                mainPos = availMain - used2;
+        }
+
+        int cursor = qMax(0, mainPos);
+        for (int k = 0; k < line.size(); ++k) {
+            Item &it = items[line[k]];
+            int spacing = cfg.gap;
+            if (autoCount == 0) {
+                if (cfg.justify == JustifySpaceBetween && line.size() > 1)
+                    spacing = qMax(0, free2) / (line.size() - 1);
+                else if (cfg.justify == JustifySpaceAround)
+                    spacing = qMax(0, free2) / line.size();
+            }
+
+            cursor += qMax(0, it.autoMainBefore);
+
+            if (row) {
+                int itemY = top + crossCursor;
+                if (cfg.align == AlignCenter)
+                    itemY = top + crossCursor + qMax(0, (lineCross - it.baseH) / 2);
+                else if (cfg.align == AlignFlexEnd)
+                    itemY = top + crossCursor + qMax(0, lineCross - it.baseH);
+                it.box->setPos(left + cursor, itemY);
+            } else {
+                int itemX = left + crossCursor;
+                if (cfg.align == AlignCenter)
+                    itemX = left + crossCursor + qMax(0, (lineCross - it.baseW) / 2);
+                else if (cfg.align == AlignFlexEnd)
+                    itemX = left + crossCursor + qMax(0, lineCross - it.baseW);
+                it.box->setPos(itemX, top + cursor);
+            }
+            cursor += (row ? it.baseW : it.baseH) + qMax(0, it.autoMainAfter) + spacing;
+        }
+
+        crossCursor += lineCross;
+        if (li + 1 < lines.size())
+            crossCursor += cfg.gap;   // gap between flex lines
     }
 
-    m_height = m_overflowHeight = top + (row ? crossMax : qMax(0, cursor - cfg.gap)) + bottom;
-    m_overflowWidth = left + (row ? qMax(0, cursor - cfg.gap) : crossMax) + right;
+    if (row) {
+        m_height = m_overflowHeight = top + crossCursor + bottom;
+        m_overflowWidth = left + qMax(cw, maxMainExtent) + right;
+    } else {
+        m_height = m_overflowHeight = top + qMax(ch, maxMainExtent) + bottom;
+        m_overflowWidth = left + qMax(cw, maxLineCross) + right;
+    }
 
     layoutPositionedObjects(relayoutChildren);
 }

@@ -11,6 +11,12 @@
   /* Old flex spelling via -webkit- display value must engage flex layout. */
   #flexbox { display: -webkit-flex; }
   #flexbox div { width: 40px; height: 40px; background-color: #ff00ff; }
+  /* flex-wrap: 5 x 100px cards in a 300px row must wrap into 3 + 2 rows. */
+  #wrap { display: flex; flex-wrap: wrap; width: 300px; }
+  #wrap div { width: 100px; height: 40px; background-color: #00ffff; }
+  /* logical property (LTR): margin-inline-start maps to margin-left. */
+  #logical { margin-inline-start: 120px; width: 60px; height: 30px;
+             background-color: #ff8000; }
   /* HTML5 semantic element: UA sheet must make it block (full-width bg). */
   section { background-color: #ffff00; }
 </style></head>
@@ -19,5 +25,7 @@
   <div id="sup_false">SUP_FALSE</div>
   <div id="prefixed">PREFIXED</div>
   <div id="flexbox"><div></div><div></div><div></div></div>
+  <div id="wrap"><div></div><div></div><div></div><div></div><div></div></div>
+  <div id="logical"></div>
   <section id="sem">X</section>
 </body></html>

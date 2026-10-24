@@ -612,7 +612,24 @@ INCONCLUSIVE、或退出码 0 但输出里出现判定形 FAIL 令牌，都算�
 - 实测：探针 **PASS**；`tile_protocol_test` PASS；**全量回归 2026-10-24 13:24→14:11 `failed: none`**：14 项中 13 项 PASS（含新增 engine_semantics_probe 24.2s、bg_smoke、scroll_smoke、resize_probe、tombstone_probe、tile_protocol_test 178.5s）+ bing_ghost_check INCONCLUSIVE（本机 bing 无 #0078D4 蓝块，诚实结论）。
 
 ### 下一批（路线图，按收益排序）
-`var()` 自定义属性 → 逻辑属性 → `calc()/min()/max()/clamp()` → flex 完整化（wrap/basis/order/align-self/inline-flex）→ grid → sticky/aspect-ratio → 渐变/transform/transition/animation。每条都要求：本地 fixture + 像素断言 + 全量回归绿。
+`var()` 自定义属性 → `calc()/min()/max()/clamp()` → flex 剩余项（flex-basis/order/align-self/inline-flex）→ grid → sticky/aspect-ratio → 渐变/transform/transition/animation。每条都要求：本地 fixture + 像素断言 + 全量回归绿。
+（flex-wrap 与逻辑属性已在 §5m 完成，从本列表移除。）
+
+## 5m. 引擎渲染能力第二批（2026-10-24，flex-wrap + 逻辑属性）
+
+### 1) flex-wrap 换行布局（rendering/render_flexbox.{h,cpp}）
+- `FlexConfig` 增加 `wrap`；`config()` 从 `style()->flexWrap()`（stylesheets 已接入）与行内 style 的 `flex-wrap: wrap|nowrap` 读取。
+- 布局重写为**按行分段**：主轴上按 `(已用 + gap + 下一项) > 容器主轴` 换行；每行独立做 flex-grow 分配、auto margin 吸收、justify-content（含 space-between/around）、align-items 交叉轴对齐；行间用 `gap` 作为 row-gap；总高度/溢出尺寸按行累计。
+- 单行（wrap=false）路径保持原行为。
+- 实测：fixture 中 5 个 100px 卡片在 300px 容器里换行为 **3+2 两行**（cyan bbox 449×119 @dpr1.5）；此前会挤成一行溢出。
+
+### 2) 逻辑属性别名（css/parser.cpp）
+- `getPropertyID()` 在属性表之外增加**逻辑→物理长属性映射**（horizontal-tb、LTR）：`margin-inline-start/end → margin-left/right`、`padding-inline-start/end`、`border-inline-start/end-width/style/color`、`inset-inline-start/end → left/right`、`inset-block-start/end → top/bottom`、`inline-size/block-size → width/height` 及 min/max 变体（共 20 项）。RTL 方向翻转尚未实现（记为后续项）。
+- 实测：fixture 中 `#logical{margin-inline-start:120px;width:60px}` 的盒子落在 x=206、宽 89 物理像素（= body margin + 120px×1.5），确认映射生效。
+
+### 行为级验证（探针扩展）
+- `tests/engine_semantics_probe.py` 增加两项像素断言（并改为"主聚类"检测以排除其他元素的抗锯齿干扰）：flex-wrap 换行（cyan bbox 宽>300 且高>90）；逻辑属性偏移（orange 主聚类 x0>150 且宽 60..140）。
+- 实测：**8/8 检查 PASS**；**全量回归 2026-10-24 14:27→15:17 `failed: none`**：14 项中 13 项 PASS（engine_semantics_probe 31.8s 含 8 项断言、bg_smoke、scroll_smoke、resize_probe、tombstone_probe、tile_protocol_test 182.7s）+ bing_ghost_check INCONCLUSIVE（本机 bing 无 #0078D4 蓝块，诚实结论）。
 
 ## 6. 正在/马上要做的
 A. ~~拆那 1.1s~~ **已完成**（字体枚举缓存 + 图标懒加载，构造 1.1s→~0.35s，TTFF 2.0→1.1s）。
