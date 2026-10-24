@@ -502,6 +502,15 @@ tests/renderer_solo.py（无浏览器直驱渲染进程+帧颜色断言）。
     b) 夹具 page2 新增两个 inline-flex 容器 + 探针 3 项断言（同行、子项横向行、
        第二个容器独立渲染），四页合计 26 项；剩余：grid、sticky、calc()、
        transition/animation。
+ 19. **2026-10-25 引擎渲染能力第十批**（详见 HANDOVER §5u）：
+    a) CSS Grid 实用子集：新增 display 值 grid(342)/inline-grid(343) 与
+       EDisplay.GRID/INLINE_GRID；新属性 grid-template-columns(194) 支持
+       px/%/fr/auto/minmax/repeat(n)/repeat(auto-fit|auto-fill,minmax(px,1fr))；
+    b) 新 RenderGrid（行优先自动放置、列宽分配、行高取最高项、gap、auto 宽度
+       拉伸到列宽、容器高度求和）；render_object 映射 GRID/INLINE_GRID 到
+       RenderGrid；@supports (display:grid) 改为 true；
+    c) 新夹具 page5（3×3 网格）+ 探针 4 项断言，五页合计 30 项；已知未支持：
+       grid-template-rows、span、命名线/区域、grid-auto-flow、非 px minmax 下限。
 
 ---
 

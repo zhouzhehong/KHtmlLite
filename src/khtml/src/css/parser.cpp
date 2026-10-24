@@ -141,7 +141,7 @@ int DOM::getPropertyID(const char *tagStr, int len)
         {"box-shadow", 187},
         {"align-self", 188}, {"order", 189}, {"flex-basis", 190}, {"flex-shrink", 191},
     {"aspect-ratio", 192},
-    {"transform", 193},
+    {"transform", 193}, {"grid-template-columns", 194},
     };
     auto lookup = [&](const char *s, int n) -> int {
         for (const auto &a : added) {
@@ -209,6 +209,8 @@ int DOM::getValueID(const char *tagStr, int len)
     if (len == 14 && !strncmp(tagStr, "column-reverse", 14)) return 339;
     if (len == 10 && !strncmp(tagStr, "flex-start", 10)) return 340;
     if (len == 8 && !strncmp(tagStr, "flex-end", 8)) return 341;
+    if (len == 4 && !strncmp(tagStr, "grid", 4)) return 344;
+    if (len == 11 && !strncmp(tagStr, "inline-grid", 11)) return 345;
     if (len == 13 && !strncmp(tagStr, "space-between", 13)) return 342;
     if (len == 12 && !strncmp(tagStr, "space-around", 12)) return 343;
     if (len == 7 && !strncmp(tagStr, "stretch", 7)) return 344;

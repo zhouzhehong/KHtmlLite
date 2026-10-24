@@ -468,6 +468,7 @@ StyleCSS3NonInheritedData::StyleCSS3NonInheritedData(const StyleCSS3NonInherited
     : Shared<StyleCSS3NonInheritedData>(),
       opacity(o.opacity),
       transform(o.transform),
+      gridTemplateColumns(o.gridTemplateColumns),
       flexibleBox(o.flexibleBox),
       marquee(o.marquee),
       borderRadius(o.borderRadius)
@@ -481,6 +482,7 @@ bool StyleCSS3NonInheritedData::operator==(const StyleCSS3NonInheritedData &o) c
         || (boxShadow && o.boxShadow && *boxShadow == *o.boxShadow);
     return
         transform == o.transform &&
+        gridTemplateColumns == o.gridTemplateColumns &&
         opacity == o.opacity &&
         flexibleBox == o.flexibleBox &&
         marquee == o.marquee &&

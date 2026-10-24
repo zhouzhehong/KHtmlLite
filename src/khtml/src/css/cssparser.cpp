@@ -35,6 +35,7 @@
 #include <QtMath>
 #include <cmath>
 #include <memory>
+#include <functional>
 
 #include "css_valueimpl.h"
 #include "css_ruleimpl.h"
@@ -708,7 +709,8 @@ bool CSSParser::parseValue(int propId, bool important)
         // table-column-group | table-column | table-cell | table-caption | none | inherit
         // flex | inline-flex (minimal flexbox support)
         if ((id >= CSS_VAL_INLINE && id <= CSS_VAL_TABLE_CAPTION) || id == CSS_VAL_NONE ||
-            id == CSS_VAL_FLEX || id == CSS_VAL_INLINE_FLEX) {
+            id == CSS_VAL_FLEX || id == CSS_VAL_INLINE_FLEX ||
+            id == CSS_VAL_GRID || id == CSS_VAL_INLINE_GRID) {
             valid_primitive = true;
         }
         break;
@@ -723,6 +725,9 @@ bool CSSParser::parseValue(int propId, bool important)
     case CSS_PROP_TRANSFORM:
         // transform: none | translate()/scale()/rotate() ... (engine-painted)
         return parseTransformSpec(important);
+    case CSS_PROP_GRID_TEMPLATE_COLUMNS:
+        // grid-template-columns: none | <track>+ | repeat(...)
+        return parseGridTemplateColumns(important);
     case CSS_PROP_FLEX_DIRECTION:
         if ((id >= CSS_VAL_ROW && id <= CSS_VAL_COLUMN_REVERSE) || id == CSS_VAL_INHERIT) {
             valid_primitive = true;
@@ -2410,6 +2415,135 @@ bool CSSParser::parseAspectRatio(bool important)
         return false;
     const QString spec = QString::number(w) + QLatin1Char('/') + QString::number(h);
     addProperty(CSS_PROP_ASPECT_RATIO,
+                new CSSPrimitiveValueImpl(DOMString(spec), CSSPrimitiveValue::CSS_STRING),
+                important);
+    return true;
+}
+
+bool CSSParser::parseGridTemplateColumns(bool important)
+{
+    // grid-template-columns: none | <track>+ | repeat(<n>|auto-fit|auto-fill, <track>)
+    // <track> = <length> | <percentage> | <fr> | auto | minmax(<min>, <max>)
+    // Serialised as "px:100,pct:25,fr:1,auto", "repeat:3,fr:1" or "autofit:200".
+    if (!valueList || !valueList->current())
+        return false;
+
+    // Serialise one track value; an empty result means "unsupported".
+    std::function<QString(Value *)> trackSpec = [&](Value *v) -> QString {
+        if (v->unit == CSSPrimitiveValue::CSS_PX)
+            return QStringLiteral("px:") + QString::number(v->fValue);
+        if (v->unit == CSSPrimitiveValue::CSS_PERCENTAGE)
+            return QStringLiteral("pct:") + QString::number(v->fValue);
+        if (v->unit == CSSPrimitiveValue::CSS_DIMENSION) {
+            const QString s = qString(v->string).toLower();
+            if (s.endsWith(QLatin1String("fr")))
+                return QStringLiteral("fr:") + s.left(s.size() - 2);
+            return QString();
+        }
+        if (v->unit == CSSPrimitiveValue::CSS_IDENT
+            && qString(v->string).toLower() == QLatin1String("auto"))
+            return QStringLiteral("auto");
+        if (v->unit == Value::Function && v->function && v->function->args) {
+            QString fname = qString(v->function->name).toLower();
+            if (fname.endsWith(QLatin1Char('(')))
+                fname.chop(1);
+            if (fname != QLatin1String("minmax"))
+                return QString();
+            QStringList mm;
+            ValueList *args = v->function->args;
+            for (Value *a = args->current(); a; a = args->next()) {
+                if (a->unit == Value::Operator)
+                    continue;
+                const QString sub = trackSpec(a);
+                if (sub.isEmpty())
+                    return QString();
+                mm.append(sub);
+            }
+            if (mm.size() != 2)
+                return QString();
+            return QStringLiteral("minmax:") + mm[0] + QLatin1Char(',') + mm[1];
+        }
+        return QString();
+    };
+
+    QString spec;
+    for (Value *v = valueList->current(); v; v = valueList->next()) {
+        if (v->unit == Value::Operator)
+            continue;
+        if (v->unit == CSSPrimitiveValue::CSS_IDENT
+            && qString(v->string).toLower() == QLatin1String("none")) {
+            addProperty(CSS_PROP_GRID_TEMPLATE_COLUMNS,
+                        new CSSPrimitiveValueImpl(DOMString(QString()),
+                                                  CSSPrimitiveValue::CSS_STRING), important);
+            return true;
+        }
+        if (v->unit == Value::Function && v->function && v->function->args) {
+            QString fname = qString(v->function->name).toLower();
+            if (fname.endsWith(QLatin1Char('(')))
+                fname.chop(1);
+            if (fname == QLatin1String("repeat")) {
+                ValueList *args = v->function->args;
+                bool autoFit = false, autoFill = false;
+                int count = 0;
+                QString sub;
+                Value *first = args->current();
+                if (first && first->unit == CSSPrimitiveValue::CSS_IDENT) {
+                    const QString id = qString(first->string).toLower();
+                    if (id == QLatin1String("auto-fit")) autoFit = true;
+                    else if (id == QLatin1String("auto-fill")) autoFill = true;
+                    else return false;
+                } else if (first && first->unit == CSSPrimitiveValue::CSS_NUMBER) {
+                    count = int(first->fValue);
+                } else {
+                    return false;
+                }
+                for (Value *a = args->next(); a; a = args->next()) {
+                    if (a->unit == Value::Operator)
+                        continue;
+                    const QString s = trackSpec(a);
+                    if (s.isEmpty())
+                        return false;
+                    sub = s;
+                }
+                if (sub.isEmpty())
+                    return false;
+                if (autoFit || autoFill) {
+                    int minPx = 160;
+                    if (sub.startsWith(QLatin1String("minmax:"))) {
+                        const QStringList parts = sub.mid(7).split(QLatin1Char(','));
+                        if (!parts.isEmpty() && parts[0].startsWith(QLatin1String("px:")))
+                            minPx = qRound(parts[0].mid(3).toDouble());
+                    } else if (sub.startsWith(QLatin1String("px:"))) {
+                        minPx = qRound(sub.mid(3).toDouble());
+                    }
+                    if (!spec.isEmpty())
+                        spec += QLatin1Char(',');
+                    spec += QStringLiteral("autofit:") + QString::number(minPx);
+                } else {
+                    if (count < 1)
+                        return false;
+                    if (!spec.isEmpty())
+                        spec += QLatin1Char(',');
+                    spec += QStringLiteral("repeat:") + QString::number(count) + QLatin1Char(',') + sub;
+                }
+                continue;
+            }
+            const QString s = trackSpec(v);
+            if (s.isEmpty())
+                return false;
+            if (!spec.isEmpty())
+                spec += QLatin1Char(',');
+            spec += s;
+            continue;
+        }
+        const QString s = trackSpec(v);
+        if (s.isEmpty())
+            return false;
+        if (!spec.isEmpty())
+            spec += QLatin1Char(',');
+        spec += s;
+    }
+    addProperty(CSS_PROP_GRID_TEMPLATE_COLUMNS,
                 new CSSPrimitiveValueImpl(DOMString(spec), CSSPrimitiveValue::CSS_STRING),
                 important);
     return true;

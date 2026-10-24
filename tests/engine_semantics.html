@@ -3,8 +3,10 @@
 <style>
   /* @supports true: must apply (green text). */
   @supports (display: flex) { #sup_true { color: #00ff00; } }
-  /* @supports false: engine has no grid -> block dropped (text stays black). */
-  @supports (display: grid) { #sup_false { color: #ff0000; } }
+  /* @supports true since the grid batch: must apply (red text). */
+  @supports (display: grid) { #sup_grid { color: #ff0000; } }
+  /* @supports false: sticky is still unsupported -> block dropped. */
+  @supports (position: sticky) { #sup_sticky { background-color: #00ff88; width: 40px; height: 20px; } }
   /* -webkit- prefixed property must reach the engine (border-radius). */
   #prefixed { -webkit-border-radius: 12px; background-color: #0000ff;
               width: 200px; height: 40px; color: #ffffff; }
@@ -27,7 +29,8 @@
 </style></head>
 <body>
   <div id="sup_true">SUP_TRUE</div>
-  <div id="sup_false">SUP_FALSE</div>
+  <div id="sup_grid">SUP_GRID</div>
+  <div id="sup_sticky">SUP_STICKY</div>
   <div id="prefixed">PREFIXED</div>
   <div id="flexbox"><div></div><div></div><div></div></div>
   <div id="wrap"><div></div><div></div><div></div><div></div><div></div></div>

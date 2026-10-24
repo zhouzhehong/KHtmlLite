@@ -313,6 +313,7 @@ set(khtmlrender_STAT_SRCS
   rendering/break_lines.cpp
   rendering/render_block.cpp
   rendering/render_flexbox.cpp
+  rendering/render_grid.cpp
   rendering/render_inline.cpp
   rendering/render_style.cpp
   rendering/render_object.cpp

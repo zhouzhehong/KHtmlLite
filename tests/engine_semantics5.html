@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>engine semantics 5 - grid</title>
+<style>
+  html, body { margin: 0; padding: 0; }
+  /* 3 fixed columns, row-major auto placement, 10px gap */
+  #grid1 { display: grid; grid-template-columns: 100px 100px 100px;
+           gap: 10px; width: 340px; }
+  #grid1 div { width: 100px; height: 50px; }
+  #c1 { background-color: #cc1414; }
+  #c2 { background-color: #14cc14; }
+  #c3 { background-color: #1414cc; }
+  #c4 { background-color: #cccc14; }
+  #c5 { background-color: #cc14cc; }
+  #c6 { background-color: #14cccc; }
+  #c7 { background-color: #cc6614; }
+  #c8 { background-color: #14cc66; }
+  #c9 { background-color: #6614cc; }
+</style></head>
+<body>
+  <div id="grid1">
+    <div id="c1"></div><div id="c2"></div><div id="c3"></div>
+    <div id="c4"></div><div id="c5"></div><div id="c6"></div>
+    <div id="c7"></div><div id="c8"></div><div id="c9"></div>
+  </div>
+</body></html>

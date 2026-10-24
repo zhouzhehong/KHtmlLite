@@ -440,11 +440,8 @@ bool CSSStyleSheetImpl::parseString(const DOMString &string, bool strict)
             const int pid = DOM::getPropertyID(pb.constData(), pb.size());
             if (pid == 0)
                 return false;
-            if (pid == CSS_PROP_DISPLAY
-                && (val.startsWith(QLatin1String("grid")) || val.startsWith(QLatin1String("inline-grid"))))
-                return false;   // no grid layout
             if (pid == CSS_PROP_POSITION && val.startsWith(QLatin1String("sticky")))
-                return false;   // no sticky positioning
+                return false;   // no sticky positioning yet
             return true;
         };
         std::function<QString(const QString &)> expand;

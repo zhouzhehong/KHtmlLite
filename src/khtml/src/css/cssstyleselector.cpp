@@ -1003,6 +1003,7 @@ void CSSStyleSelector::adjustRenderStyle(RenderStyle *style, DOM::ElementImpl *e
         // positions.  We also force inline-level roots to be block-level.
         if (style->display() != BLOCK && style->display() != TABLE &&
                 style->display() != FLEX && style->display() != INLINE_FLEX &&
+                style->display() != GRID && style->display() != INLINE_GRID &&
                 (style->position() == PABSOLUTE || style->position() == PFIXED || style->floating() != FNONE ||
                  (e && e->document()->documentElement() == e))) {
             if (style->display() == INLINE_TABLE) {
@@ -2761,6 +2762,8 @@ void CSSStyleSelector::applyRule(int id, DOM::CSSValueImpl *value)
         int id = primitiveValue->getIdent();
         if (id == CSS_VAL_FLEX) { style->setDisplay(FLEX); break; }
         if (id == CSS_VAL_INLINE_FLEX) { style->setDisplay(INLINE_FLEX); break; }
+    if (id == CSS_VAL_GRID) { style->setDisplay(GRID); break; }
+    if (id == CSS_VAL_INLINE_GRID) { style->setDisplay(INLINE_GRID); break; }
         style->setDisplay(id == CSS_VAL_NONE ? NONE : EDisplay(id - CSS_VAL_INLINE));
         break;
     }
@@ -4687,6 +4690,12 @@ void CSSStyleSelector::applyRule(int id, DOM::CSSValueImpl *value)
         const double w = s.left(slash).toDouble();
         const double h = s.mid(slash + 1).toDouble();
         style->setAspectRatio(h > 0.0 ? float(w / h) : 0.0f);
+        break;
+    }
+    case CSS_PROP_GRID_TEMPLATE_COLUMNS: {
+        if (isInitial || isInherit) { style->setGridTemplateColumns(QString()); return; }
+        if (!primitiveValue || primitiveValue->primitiveType() != CSSPrimitiveValue::CSS_STRING) return;
+        style->setGridTemplateColumns(DOMString(primitiveValue->getStringValue()).string());
         break;
     }
     case CSS_PROP_TRANSFORM: {

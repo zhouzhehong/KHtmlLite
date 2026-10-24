@@ -31,6 +31,7 @@
 #include "rendering/render_canvas.h"
 #include "rendering/render_block.h"
 #include "rendering/render_flexbox.h"
+#include "rendering/render_grid.h"
 #include "rendering/render_arena.h"
 #include "rendering/render_layer.h"
 #include "rendering/render_line.h"
@@ -153,6 +154,10 @@ RenderObject *RenderObject::createObject(DOM::NodeImpl *node,  RenderStyle *styl
     case FLEX:
     case INLINE_FLEX:
         o = new(arena) RenderFlexBox(node);
+        break;
+    case GRID:
+    case INLINE_GRID:
+        o = new(arena) RenderGrid(node);
         break;
     }
     return o;

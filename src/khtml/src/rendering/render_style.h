@@ -933,6 +933,7 @@ public:
 
     float opacity;         // Whether or not we're transparent.
     QString transform;     // CSS transform spec (engine-painted).
+    QString gridTemplateColumns; // grid-template-columns spec ("px:100,fr:1,...")
     DataRef<StyleFlexibleBoxData> flexibleBox; // Flexible box properties
     DataRef<StyleMarqueeData> marquee; // Marquee properties
     DataRef<BorderRadiusData> borderRadius;
@@ -1094,7 +1095,7 @@ enum EDisplay {
     COMPACT, INLINE_BLOCK, TABLE, INLINE_TABLE,
     TABLE_ROW_GROUP, TABLE_HEADER_GROUP, TABLE_FOOTER_GROUP, TABLE_ROW,
     TABLE_COLUMN_GROUP, TABLE_COLUMN, TABLE_CELL,
-    TABLE_CAPTION, FLEX, INLINE_FLEX, NONE
+    TABLE_CAPTION, FLEX, INLINE_FLEX, GRID, INLINE_GRID, NONE
 };
 
 class RenderStyle : public Shared<RenderStyle>
@@ -1863,6 +1864,18 @@ public:
         }
     }
 
+    // grid-template-columns spec, built by CSSParser::parseGridTemplateColumns().
+    QString gridTemplateColumns() const
+    {
+        return css3NonInheritedData->gridTemplateColumns;
+    }
+    void setGridTemplateColumns(const QString &s)
+    {
+        if (css3NonInheritedData->gridTemplateColumns != s) {
+            css3NonInheritedData.access()->gridTemplateColumns = s;
+        }
+    }
+
     // --- minimal flexbox (RenderFlexBox) ---
     int flexDirection() const
     {
@@ -2564,7 +2577,7 @@ public:
 
     bool isDisplayReplacedType()
     {
-        return display() == INLINE_BLOCK || display() == INLINE_FLEX ||
+        return display() == INLINE_BLOCK || display() == INLINE_FLEX || display() == INLINE_GRID ||
                /* display() == INLINE_BOX ||*/ display() == INLINE_TABLE;
     }
     bool isDisplayInlineType()
@@ -2574,7 +2587,7 @@ public:
     bool isOriginalDisplayInlineType()
     {
         return originalDisplay() == INLINE || originalDisplay() == INLINE_BLOCK ||
-               originalDisplay() == INLINE_FLEX ||
+               originalDisplay() == INLINE_FLEX || originalDisplay() == INLINE_GRID ||
                /*originalDisplay() == INLINE_BOX ||*/ originalDisplay() == INLINE_TABLE;
     }
 

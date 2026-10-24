@@ -22,6 +22,7 @@ PAGE1 = "file:///" + ROOT.replace("\\", "/") + "/tests/engine_semantics.html"
 PAGE2 = "file:///" + ROOT.replace("\\", "/") + "/tests/engine_semantics2.html"
 PAGE3 = "file:///" + ROOT.replace("\\", "/") + "/tests/engine_semantics3.html"
 PAGE4 = "file:///" + ROOT.replace("\\", "/") + "/tests/engine_semantics4.html"
+PAGE5 = "file:///" + ROOT.replace("\\", "/") + "/tests/engine_semantics5.html"
 OUT = os.path.join(ROOT, "tests", "engine_semantics.png")
 ERR = os.path.join(ROOT, "tests", "engine_semantics_err.txt")
 
@@ -112,10 +113,21 @@ def launch(page, wait_color, timeout=40):
         if bbox(pixels, w, h, wait_color, tol=45) is not None:
             break
         time.sleep(0.5)
-    # Settle one more frame so the checks read the finished paint, not a
-    # partially uploaded tile frame.
-    time.sleep(0.3)
-    grab(hwnd, OUT)
+    # Settle: wait until two consecutive grabs are identical, so the checks
+    # read the finished paint instead of a partially uploaded tile frame.
+    import hashlib
+    prev = None
+    for _ in range(8):
+        time.sleep(0.25)
+        grab(hwnd, OUT)
+        try:
+            with open(OUT, "rb") as fh:
+                cur = hashlib.md5(fh.read()).hexdigest()
+        except OSError:
+            cur = None
+        if cur is not None and cur == prev:
+            break
+        prev = cur
     size, pixels = load_pixels(OUT)
     return proc, errf, hwnd, size, pixels
 
@@ -137,7 +149,11 @@ def page1_checks(pixels, w, h):
     green = bbox(pixels, w, h, (0, 255, 0), tol=60)
     add("@supports (display:flex) applied", green is not None, "(green bbox %s)" % (green,))
     red = bbox(pixels, w, h, (255, 0, 0), tol=40)
-    add("@supports (display:grid) dropped", red is None, "(red bbox %s)" % (red,))
+    add("@supports (display:grid) applied", red is not None, "(red bbox %s)" % (red,))
+    unsupported_px = sum(1 for y in range(h) for x in range(w)
+                        if near(pixels[x, y], (0, 255, 136), 25))
+    add("@supports (position:sticky) dropped", unsupported_px < 50,
+        "(matching px %d)" % unsupported_px)
 
     blue = bbox(pixels, w, h, (0, 0, 255), tol=40)
     if blue:
@@ -366,6 +382,45 @@ def page4_checks(pixels, w, h):
     return out
 
 
+def page5_checks(pixels, w, h):
+    """Engine-painted CSS grid: 3 fixed columns, row-major auto placement."""
+    out = []
+    def add(name, good, detail=""):
+        out.append((name, good, detail))
+
+    colors = {
+        "c1": (204, 20, 20), "c2": (20, 204, 20), "c3": (20, 20, 204),
+        "c4": (204, 204, 20), "c5": (204, 20, 204), "c6": (20, 204, 204),
+        "c7": (204, 102, 20), "c8": (20, 204, 102), "c9": (102, 20, 204),
+    }
+    boxes = {}
+    for name, want in colors.items():
+        boxes[name] = main_cluster_bbox(pixels, w, h, want, tol=40)
+    if not all(boxes.values()):
+        add("grid cells render", False,
+            "(missing: %s)" % ",".join(k for k, v in boxes.items() if not v))
+        return out
+
+    c1, c2, c3 = boxes["c1"], boxes["c2"], boxes["c3"]
+    c4, c7 = boxes["c4"], boxes["c7"]
+    row_ok = (abs(c1[1] - c2[1]) <= 3 and abs(c1[1] - c3[1]) <= 3
+              and 155 <= (c2[0] - c1[0]) <= 175 and 155 <= (c3[0] - c2[0]) <= 175)
+    add("grid row 1 shares one row", row_ok,
+        "(y0 %d/%d/%d x %d/%d/%d)" % (c1[1], c2[1], c3[1], c1[0], c2[0], c3[0]))
+
+    add("grid auto rows below each other",
+        c4[1] > c1[1] + 80 and c7[1] > c4[1] + 80,
+        "(row y %d/%d/%d)" % (c1[1], c4[1], c7[1]))
+
+    add("grid row 2 starts at column 0", abs(c4[0] - c1[0]) <= 3,
+        "(c1.x0=%d c4.x0=%d)" % (c1[0], c4[0]))
+
+    cw, ch = c1[2] - c1[0], c1[3] - c1[1]
+    add("grid cell sized by template", 145 <= cw <= 165 and 70 <= ch <= 80,
+        "(cell %dx%d)" % (cw, ch))
+    return out
+
+
 def main():
     if not os.path.exists(EXE):
         print("FAIL: browser exe missing:", EXE)
@@ -374,7 +429,8 @@ def main():
     for page, name, fn, wait in ((PAGE1, "page1 (batch1)", page1_checks, (0, 0, 255)),
                                  (PAGE2, "page2 (flex)", page2_checks, (255, 0, 0)),
                                  (PAGE3, "page3 (gradients)", page3_checks, (170, 0, 170)),
-            (PAGE4, "page4 (transforms)", page4_checks, (136, 68, 204))):
+            (PAGE4, "page4 (transforms)", page4_checks, (136, 68, 204)),
+            (PAGE5, "page5 (grid)", page5_checks, (204, 20, 20))):
         print("\n=== %s ===" % name)
         started = launch(page, wait)
         if not started:

@@ -783,6 +783,36 @@ INCONCLUSIVE、或退出码 0 但输出里出现判定形 FAIL 令牌，都算�
 - `tile_protocol_test` PASS；**全量回归 2026-10-25 04:00→04:49 `failed: none`**：14 项中 13 项 PASS（engine_semantics_probe 68.4s、bg_smoke 602.4s、scroll_smoke 601.7s、resize_probe 601.4s、tombstone_probe 623.2s、tile_protocol_test 126.2s）+ bing_ghost_check INCONCLUSIVE（本机 bing 无 #0078D4 蓝块，诚实结论）。
 - 调试记录：初版 inline-flex 容器底色 (#bb6600) 与 aspect-ratio 盒 (#cc8800) 在像素容差内串色，导致 ratio/inline 检查互相污染；改为 #6644bb / #44bb66 后全部通过（inline-flex 本身第一次构建即生效）。
 
+## 5u. 引擎渲染能力第十批（2026-10-25，CSS Grid 实用子集）
+
+### 1) display 值与枚举
+- 新增显示值 id：`grid`=342、`inline-grid`=343（parser.cpp getValueID 硬编码）；`EDisplay` 增加 `GRID`、`INLINE_GRID`（排在 INLINE_FLEX 后、NONE 前）。
+- display 校验接受 grid/inline-grid；CSSStyleSelector 的 display 应用分支映射到 GRID/INLINE_GRID；absolute/floating 时的 display 变形例外表同步加入；`inline-grid` 复用 inline-block 行内通道（isDisplayReplacedType/isOriginalDisplayInlineType 包含 INLINE_GRID，RenderObject 创建映射到 RenderGrid）。
+
+### 2) 新属性 grid-template-columns（id 194，TOTAL 195）
+- 解析：`CSSParser::parseGridTemplateColumns()` 支持 `none | <track>+ | repeat(<n>, <track>) | repeat(auto-fit|auto-fill, minmax(<length>, 1fr))`，其中 track 支持 px / % / fr / auto / minmax(px,1fr)；序列化为紧凑谱 `"px:100,fr:1,auto"` / `"repeat:3,fr:1"` / `"autofit:200"` 以 CSS_STRING 随属性传递。
+- 样式：`StyleCSS3NonInheritedData.gridTemplateColumns`（含拷贝/相等）+ RenderStyle 访问器（DataRef COW）；applyProperty 落盘。
+- 宿主层无需改动（display:grid 早已不再被改写为 flex）。
+
+### 3) RenderGrid（新文件 rendering/render_grid.{h,cpp} + CMake）
+- `layoutBlockChildren()` 实现子集布局：
+  - 解析列模板 → 列数与本列宽（px/%、fr 按剩余空间分配、auto 视作 fr、minmax 取 min 为底 + fr 分配、autofit 按最小宽度算列数）；
+  - 子项**行优先自动放置**（row-major），每行高度取最高子项；
+  - 子项宽度 auto 时拉伸到列宽（setOverrideWidth + relayout）；
+  - 容器高度 = 各行高度 + gap 间距（移除末尾多余 gap）；
+  - 定位子项 `setPos()`，并调用 `layoutPositionedObjects()`。
+- 渲染器创建：GRID/INLINE_GRID → `RenderGrid`（render_object.cpp）。
+- @supports：`(display:grid)` 现在返回 **true**（sticky 仍为 false）。已知未支持：grid-template-rows、span、命名线/区域、grid-auto-flow 显式控制、minmax 的非 px 下限等。
+
+### 4) 行为级验证
+- 新夹具 `tests/engine_semantics5.html`：3×3 网格（`grid-template-columns:100px 100px 100px; gap:10px; width:340px`），9 个 100×50 的彩色单元格。
+- 探针新增 page5 四项断言：第一行三格同一行且列间距 155..175 物理像素、第二/三行依次下移、第二行回到第 0 列、单元格按列宽尺寸；五页合计 **30 项断言**。
+
+### 实测
+- 引擎探针 **31/31 PASS**：page5 网格四项全过（第一行 y0 均为 87、列 x=11/176/341、三行 y=87/177/267、单元格 149×74）；page1 的 `@supports (display:grid)` 已变为 **applied**（红块出现），新增 `@supports (position:sticky) dropped` 负向断言通过。
+- `tile_protocol_test` PASS；**全量回归 2026-10-25 05:46→06:32 `failed: none`**：14 项中 13 项 PASS（engine_semantics_probe 116.1s、bg_smoke 602s、scroll_smoke 602s、resize_probe 601.4s、tombstone_probe 623.2s、tile_protocol_test 127.4s）+ bing_ghost_check INCONCLUSIVE（本机 bing 无 #0078D4 蓝块，诚实结论）。**@supports (display:grid) 变真未引起回归**（bg_smoke 等探针页面无 grid 布局）。
+- 调试记录（如实）：CSS_VAL_GRID/INLINE_GRID 初选 342/343 与既有 space-between/space-around 冲突，改用 344/345；render_style.h 的访问器插入位置多了一个 `}` 导致类结构破坏（编译错误），已修复；探针新增"稳定帧等待"（连续两次抓图一致才返回）解决 page5 部分瓦片帧导致的假缺失。
+
 ## 6. 正在/马上要做的
 A. ~~拆那 1.1s~~ **已完成**（字体枚举缓存 + 图标懒加载，构造 1.1s→~0.35s，TTFF 2.0→1.1s）。
    下一步同部位残账：渲染进程镜像加载+socket 连接 ~500ms（每次新标签都付），
