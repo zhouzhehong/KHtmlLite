@@ -30,6 +30,10 @@
 //#define CLIP_DEBUG
 
 #include <QPainter>
+#include <QBrush>
+#include <QLinearGradient>
+#include <QRadialGradient>
+#include <QtMath>
 
 #include "misc/loader.h"
 #include "rendering/render_form.h"
@@ -149,6 +153,13 @@ void RenderBox::setStyle(RenderStyle *_style)
                          parent() && (parent()->isBlockFlow() || parent()->isInlineFlow());
 
     RenderContainer::setStyle(_style);
+
+    // A CSS gradient background counts as paint-worthy even though it has no
+    // background colour and no background image (see RenderStyle::hasBackground).
+    if (!shouldPaintBackgroundOrBorder() && _style->backgroundLayers()
+        && !_style->backgroundLayers()->backgroundGradient().isEmpty()) {
+        setShouldPaintBackgroundOrBorder(true);
+    }
 
     // The root always paints its background/border.
     if (isRoot()) {
@@ -571,8 +582,56 @@ void RenderBox::paintAllBackgrounds(QPainter *p, const QColor &c, const Backgrou
     paintOneBackground(p, c, bgLayer, clipr, _tx, _ty, w, height);
 }
 
+// Turn the compact gradient spec produced by CSSParser::parseGradientSpec()
+// ("khtml-grad:L|<angle>|<#rrggbb>:<pos>,..." or "khtml-grad:R||<...>") into a
+// QGradient sized to |rect|.
+static QGradient buildBackgroundGradient(const QString &spec, const QRect &rect)
+{
+    QString body = spec;
+    if (body.startsWith(QLatin1String("khtml-grad:")))
+        body = body.mid(11);
+    const QStringList parts = body.split(QLatin1Char('|'));
+    QGradientStops stops;
+    if (!parts.isEmpty()) {
+        const QStringList stopParts = parts.last().split(QLatin1Char(','));
+        for (const QString &s : stopParts) {
+            const int colon = s.indexOf(QLatin1Char(':'));
+            const QString col = colon >= 0 ? s.left(colon) : s;
+            const double pos = colon >= 0 ? s.mid(colon + 1).toDouble() / 1000.0 : 0.0;
+            if (col.isEmpty())
+                continue;
+            stops.append(QGradientStop(qBound(0.0, pos, 1.0), QColor(col)));
+        }
+    }
+    if (body.startsWith(QLatin1String("L|"))) {
+        const double angle = parts.size() >= 2 ? parts.at(1).toDouble() : 180.0;
+        const double a = qDegreesToRadians(angle);
+        const double dx = std::sin(a);
+        const double dy = -std::cos(a);
+        const double len = qAbs(rect.width() * dx) + qAbs(rect.height() * dy);
+        const QPointF c = rect.center();
+        QLinearGradient g(c.x() - dx * len / 2.0, c.y() - dy * len / 2.0,
+                          c.x() + dx * len / 2.0, c.y() + dy * len / 2.0);
+        g.setStops(stops);
+        return g;
+    }
+    QRadialGradient g(QPointF(rect.center()),
+                      qMax(rect.width(), rect.height()) * 0.75);
+    g.setStops(stops);
+    return g;
+}
+
 void RenderBox::paintOneBackground(QPainter *p, const QColor &c, const BackgroundLayer *bgLayer, QRect clipr, int _tx, int _ty, int w, int height)
 {
+    if (!bgLayer->backgroundGradient().isEmpty()) {
+        const QRect target(_tx, _ty, w, height);
+        const QGradient g = buildBackgroundGradient(bgLayer->backgroundGradient(), target);
+        p->save();
+        p->setClipRect(clipr);
+        p->fillRect(target, QBrush(g));
+        p->restore();
+        return;
+    }
     paintBackgroundExtended(p, c, bgLayer, clipr, _tx, _ty, w, height,
                             borderLeft(), borderRight(), paddingLeft(), paddingRight(),
                             borderTop(), borderBottom(), paddingTop(), paddingBottom());

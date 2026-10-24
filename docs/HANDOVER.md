@@ -693,6 +693,33 @@ INCONCLUSIVE、或退出码 0 但输出里出现判定形 FAIL 令牌，都算�
 ### 实测
 - 引擎探针 **14/14 PASS**（新增 var() 应用 bbox 119×35 与 fallback bbox 119×35，均符合 80×24 CSS×1.5）；`tile_protocol_test` PASS；**全量回归 2026-10-24 20:41→21:30 `failed: none`**：14 项中 13 项 PASS（engine_semantics_probe 62.5s、bg_smoke 613.6s、scroll_smoke、resize_probe、tombstone_probe、tile_protocol_test 169.1s）+ bing_ghost_check INCONCLUSIVE（本机 bing 无 #0078D4 蓝块，诚实结论）。
 
+## 5q. 引擎渲染能力第六批（2026-10-24，CSS 渐变引擎解析 + 绘制）
+
+### 1) 解析层（CSSParser）
+- 新增 `CSSParser::parseGradientSpec()`：识别 `linear-gradient()/radial-gradient()`（含 `-webkit-`、`repeating-` 前缀）函数值，解析角度（deg/rad/grad）、方向关键字（`to right/bottom/...`）、颜色（hex/命名色/rgb()/rgba()/hsl()/hsla()，复用 `parseColorFromValue`）与百分比色标；未给位置的色标按首尾 0/1000 与相邻色标线性插值补齐。
+- 输出**紧凑谱字符串**：`khtml-grad:L|<angle>|<#rrggbb>:<pos0-1000>,...`（径向为 `R||...`），以 CSS_STRING 形式随 `background-image` 进入样式层——不新增 DOM CSSValue 子类。
+- `background-image: <gradient>` 在 `parseValue` 的 background 分支被优先识别（多图层列表里的渐变暂不支持，返回声明无效）。
+
+### 2) 样式层（BackgroundLayer / RenderStyle）
+- `BackgroundLayer` 新增 `QString m_gradient` + `backgroundGradient()/setBackgroundGradient()`；拷贝构造/赋值/`operator==` 全部同步（样式 diff 因此能感知渐变变化）；设置渐变会清掉同层的图片。
+- `applyProperty(CSS_PROP_BACKGROUND_IMAGE)`：遇到 `khtml-grad:` 前缀的字符串值即写入渐变、跳过图片路径；普通 `background-image` 声明会清除渐变（同名属性覆盖语义）。
+
+### 3) 绘制层（RenderBox）
+- `paintOneBackground()`：渐变层直接用 `QLinearGradient/QRadialGradient` 填充（角度→端点投影按 CSS 约定：0deg=向上、90deg=向右；径向取中心+0.75×max(w,h) 半径），受 clipr 裁剪；背景色、多图层顺序沿用原有逻辑。
+- 已知限制：渐变背景暂不做 border-radius 圆角裁剪（`paintBackgroundExtended` 的圆角路径未复用）；旧式 `-webkit-gradient(...)` 不支持。
+
+### 4) 宿主去掉渐变压平
+- `pageloader.cpp` 删除两处 `simplifyGradients()` 调用（inline `<style>` 与外部 CSS），渐变原样交给引擎解析与绘制。`simplifyGradients` 函数保留但不再调用。
+
+### 5) 行为级验证
+- 新增夹具 `tests/engine_semantics3.html`（唯一饱和色页面，避免干扰其它页断言）：`#g1` 垂直渐变 `#aa00aa→#00aa88`（300×60 CSS），`#g2` 90° 水平渐变 `#ff00aa→#00aaff`。
+- 探针新增 page3 共 5 项：整体尺寸、垂直渐变上/下端点颜色方向、水平渐变左/右端点颜色方向；三页合计 **19 项像素断言**。
+
+### 实测
+- 引擎探针 **19/19 PASS**：page3 渐变 5 项全过（bbox 449×191；垂直渐变上端 (157,13,167)→下端 (15,155,139)；水平渐变左 (251,3,171)→右 (3,168,254)）。
+- `tile_protocol_test` PASS；**全量回归 2026-10-24 22:45→23:35 `failed: none`**：14 项中 13 项 PASS（engine_semantics_probe 76.9s、bg_smoke 602.9s、scroll_smoke 603.4s、resize_probe 602s、tombstone_probe 624.7s、tile_protocol_test 194s）+ bing_ghost_check INCONCLUSIVE（本机 bing 无 #0078D4 蓝块，诚实结论）。
+- 调试记录（如实）：渐变首次实现后不绘制，根因是 `RenderStyle::hasBackground()` 只认背景色/背景图，导致 `paintBoxDecorations` 被跳过；在 `RenderBox::setStyle` 里把"有渐变"也视为需要绘制背景（纯 .cpp 修复）后正常。另修复了诊断代码插入位置导致 `parseGradientSpec` 恒返回空的 bug。
+
 ## 6. 正在/马上要做的
 A. ~~拆那 1.1s~~ **已完成**（字体枚举缓存 + 图标懒加载，构造 1.1s→~0.35s，TTFF 2.0→1.1s）。
    下一步同部位残账：渲染进程镜像加载+socket 连接 ~500ms（每次新标签都付），

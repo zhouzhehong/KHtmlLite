@@ -1211,7 +1211,7 @@ void PageLoader::rewriteAndSave()
             out = io;
         }
         out = stripUnsupportedFonts(out);
-        out = simplifyGradients(out);
+        // CSS gradients are parsed and painted by the ENGINE now.
         out = simplifyUnsupportedCss(out);
         htmlOut.append(QStringLiteral("<style>") + out + QStringLiteral("</style>"));
         lastPos = sm.capturedEnd();
@@ -1449,8 +1449,7 @@ void PageLoader::rewriteCssFiles()
 
         // Drop @font-face rules that only reference unloadable formats.
         out = stripUnsupportedFonts(out);
-        // Collapse CSS gradients to flat colors (KHTML has no gradient painter).
-        out = simplifyGradients(out);
+        // CSS gradients are parsed and painted by the ENGINE now.
         // Drop properties KHTML cannot parse (sticky/transform/filter).
         out = simplifyUnsupportedCss(out);
 

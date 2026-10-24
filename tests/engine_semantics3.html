@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>engine semantics 3 - gradients</title>
+<style>
+  html, body { margin: 0; padding: 0; }
+  /* vertical gradient: #aa00aa (top) -> #00aa88 (bottom) */
+  #g1 { width: 300px; height: 60px;
+        background-image: linear-gradient(#aa00aa, #00aa88); }
+  /* horizontal gradient (90deg): #ff00aa (left) -> #00aaff (right) */
+  #g2 { width: 300px; height: 60px; margin-top: 8px;
+        background-image: linear-gradient(90deg, #ff00aa, #00aaff); }
+</style></head>
+<body>
+  <div id="g1"></div>
+  <div id="g2"></div>
+</body></html>

@@ -209,6 +209,9 @@ public:
     CSSValueListImpl *parseFontFamily();
     CSSPrimitiveValueImpl *parseColor();
     CSSPrimitiveValueImpl *parseColorFromValue(Value *val);
+    // Parse a linear-gradient()/radial-gradient() function value into the
+    // engine's compact gradient spec (empty string when unsupported).
+    QString parseGradientSpec();
     CSSValueImpl *parseCounterContent(ValueList *args, bool counters);
 
     // CSS3 Parsing Routines (for properties specific to CSS3)

@@ -20,6 +20,7 @@ ROOT = r"C:\Users\zhouzhehong\Desktop\KHtmlLite"
 EXE = os.path.join(ROOT, "build", "host", "khtml_browser.exe")
 PAGE1 = "file:///" + ROOT.replace("\\", "/") + "/tests/engine_semantics.html"
 PAGE2 = "file:///" + ROOT.replace("\\", "/") + "/tests/engine_semantics2.html"
+PAGE3 = "file:///" + ROOT.replace("\\", "/") + "/tests/engine_semantics3.html"
 OUT = os.path.join(ROOT, "tests", "engine_semantics.png")
 ERR = os.path.join(ROOT, "tests", "engine_semantics_err.txt")
 
@@ -229,13 +230,67 @@ def page2_checks(pixels, w, h):
     return out
 
 
+def page3_checks(pixels, w, h):
+    """Engine-painted CSS gradients: geometry + direction checks."""
+    out = []
+    def add(name, good, detail=""):
+        out.append((name, good, detail))
+
+    def dist(a, b):
+        return sum(abs(a[i] - b[i]) for i in range(3))
+
+    # The two gradient boxes are the only saturated pixels on this page.
+    # A gradient row spans the 450px-wide box; browser-chrome accent rows are
+    # either much wider (spread over the whole window) or much narrower, so
+    # keep only rows whose saturated-pixel span is ~450px.
+    rows = []
+    for y in range(h):
+        row = [x for x in range(w)
+               if max(pixels[x, y]) - min(pixels[x, y]) > 40 and max(pixels[x, y]) > 60]
+        if not row:
+            continue
+        if 400 <= (max(row) - min(row)) <= 480:
+            rows.append((y, row))
+    if not rows:
+        add("gradient boxes render", False)
+        return out
+    y_top = rows[0][0]
+    y_bot = rows[-1][0]
+    x0 = min(min(r[1]) for r in rows)
+    x1 = max(max(r[1]) for r in rows)
+    bw, bh = x1 - x0, y_bot - y_top
+    add("gradient boxes sized", 430 < bw < 470 and 180 < bh < 200,
+        "(bbox %d,%d %dx%d)" % (x0, y_top, bw, bh))
+
+    cx = (x0 + x1) // 2
+    # g1: vertical gradient, 300x60 CSS -> 450x90 physical.
+    top = pixels[cx, y_top + 5]
+    bottom = pixels[cx, y_top + 80]
+    add("vertical gradient top = start colour",
+        dist(top, (170, 0, 170)) < dist(top, (0, 170, 136)), "(top %s)" % (top,))
+    add("vertical gradient bottom = end colour",
+        dist(bottom, (0, 170, 136)) < dist(bottom, (170, 0, 170)),
+        "(bottom %s)" % (bottom,))
+
+    # g2: horizontal gradient; sample near the bottom box's vertical centre.
+    g2y = y_bot - 44
+    left = pixels[x0 + 5, g2y]
+    right = pixels[x1 - 5, g2y]
+    add("horizontal gradient left = start colour",
+        dist(left, (255, 0, 170)) < dist(left, (0, 170, 255)), "(left %s)" % (left,))
+    add("horizontal gradient right = end colour",
+        dist(right, (0, 170, 255)) < dist(right, (255, 0, 170)), "(right %s)" % (right,))
+    return out
+
+
 def main():
     if not os.path.exists(EXE):
         print("FAIL: browser exe missing:", EXE)
         return 1
     ok = True
     for page, name, fn, wait in ((PAGE1, "page1 (batch1)", page1_checks, (0, 0, 255)),
-                                 (PAGE2, "page2 (flex)", page2_checks, (255, 0, 0))):
+                                 (PAGE2, "page2 (flex)", page2_checks, (255, 0, 0)),
+                                 (PAGE3, "page3 (gradients)", page3_checks, (170, 0, 170))):
         print("\n=== %s ===" % name)
         started = launch(page, wait)
         if not started:

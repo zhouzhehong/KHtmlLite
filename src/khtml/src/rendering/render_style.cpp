@@ -130,6 +130,7 @@ BackgroundLayer::BackgroundLayer(const BackgroundLayer &o)
     m_bgOrigin = o.m_bgOrigin;
     m_bgRepeat = o.m_bgRepeat;
     m_backgroundSize = o.m_backgroundSize;
+    m_gradient = o.m_gradient;
     m_imageSet = o.m_imageSet;
     m_attachmentSet = o.m_attachmentSet;
     m_clipSet = o.m_clipSet;
@@ -160,6 +161,7 @@ BackgroundLayer &BackgroundLayer::operator=(const BackgroundLayer &o)
     m_bgOrigin = o.m_bgOrigin;
     m_bgRepeat = o.m_bgRepeat;
     m_backgroundSize = o.m_backgroundSize;
+    m_gradient = o.m_gradient;
 
     m_imageSet = o.m_imageSet;
     m_attachmentSet = o.m_attachmentSet;
@@ -177,6 +179,7 @@ bool BackgroundLayer::operator==(const BackgroundLayer &o) const
     return m_image == o.m_image && m_xPosition == o.m_xPosition && m_yPosition == o.m_yPosition &&
            m_bgAttachment == o.m_bgAttachment && m_bgClip == o.m_bgClip && m_bgOrigin == o.m_bgOrigin &&
            m_bgRepeat == o.m_bgRepeat && m_backgroundSize == o.m_backgroundSize &&
+           m_gradient == o.m_gradient &&
            m_imageSet == o.m_imageSet && m_attachmentSet == o.m_attachmentSet && m_repeatSet == o.m_repeatSet &&
            m_xPosSet == o.m_xPosSet && m_yPosSet == o.m_yPosSet && m_backgroundSizeSet == o.m_backgroundSizeSet &&
            ((m_next && o.m_next) ? *m_next == *o.m_next : m_next == o.m_next);

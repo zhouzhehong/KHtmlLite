@@ -555,6 +555,24 @@ public:
         m_backgroundSizeSet = true;
     }
 
+    // CSS gradient background (linear/radial) rendered by the engine.
+    // The string is the compact spec produced by CSSParser::parseGradientSpec():
+    //   "L|<angleDeg>|<#rrggbb>:<pos0-1000>,..."  or
+    //   "R|<#rrggbb>:<pos0-1000>,..."
+    // An empty string means "no gradient".
+    QString backgroundGradient() const
+    {
+        return m_gradient;
+    }
+    void setBackgroundGradient(const QString &g)
+    {
+        m_gradient = g;
+        if (!g.isEmpty()) {
+            m_imageSet = false;
+            m_image = nullptr;
+        }
+    }
+
     void clearBackgroundImage()
     {
         m_imageSet = false;
@@ -652,6 +670,8 @@ public:
     bool m_xPosSet : 1;
     bool m_yPosSet : 1;
     bool m_backgroundSizeSet : 1;
+
+    QString m_gradient;
 
     BackgroundLayer *m_next;
 };

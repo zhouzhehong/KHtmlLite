@@ -29,7 +29,11 @@
 #include "cssparser.h"
 
 #include "khtml_debug.h"
+#include <QColor>
 #include <QUrl>
+#include <QVector>
+#include <QtMath>
+#include <cmath>
 #include <memory>
 
 #include "css_valueimpl.h"
@@ -951,6 +955,20 @@ bool CSSParser::parseValue(int propId, bool important)
     case CSS_PROP_BACKGROUND_POSITION_Y:
     case CSS_PROP_BACKGROUND_SIZE:
     case CSS_PROP_BACKGROUND_REPEAT: {
+        // CSS gradients are painted by the engine: parse the function value
+        // into our compact spec and hand it to the style layer as a string.
+        if (propId == CSS_PROP_BACKGROUND_IMAGE && value->unit == Value::Function) {
+            const QString spec = parseGradientSpec();
+            if (spec.isEmpty())
+                return false;
+            valueList->next();
+            if (valueList->current())
+                return false;   // multi-layer lists containing gradients
+            addProperty(propId,
+                        new CSSPrimitiveValueImpl(DOMString(spec), CSSPrimitiveValue::CSS_STRING),
+                        important);
+            return true;
+        }
         CSSValueImpl *val1 = nullptr, *val2 = nullptr;
         int propId1, propId2;
         if (parseBackgroundProperty(propId, propId1, propId2, val1, val2)) {
@@ -2905,6 +2923,108 @@ static bool parseColor(int unit, const QString &name, QRgb &rgb, bool strict)
 CSSPrimitiveValueImpl *CSSParser::parseColor()
 {
     return parseColorFromValue(valueList->current());
+}
+
+QString CSSParser::parseGradientSpec()
+{
+    // linear-gradient([<angle>|to <side-or-corner>,] <color> [<pos>]? , ...)
+    // radial-gradient([<shape>|<size>]? [at <pos>]?, <color> [<pos>]? , ...)
+    // The result is "khtml-grad:L|<angleDeg>|<#rrggbb>:<pos0-1000>,..." or
+    // "khtml-grad:R||<...>"; the painter turns it into a QLinearGradient /
+    // QRadialGradient.  An empty string means "not a supported gradient".
+    if (!valueList || !valueList->current())
+        return QString();
+    Value *fn = valueList->current();
+    if (fn->unit != Value::Function || !fn->function || !fn->function->args)
+        return QString();
+    const QString fname = qString(fn->function->name).toLower();
+    const bool linear = fname.endsWith(QLatin1String("linear-gradient("));
+    const bool radial = fname.endsWith(QLatin1String("radial-gradient("));
+    if (!linear && !radial)
+        return QString();
+
+    ValueList *args = fn->function->args;
+    int angle = 180;            // CSS default is "to bottom"
+    bool sawTo = false;
+    int dirX = 0, dirY = 0;
+    QVector<QColor> colors;
+    QVector<int> positions;     // stop positions in 0..1000, -1 = not given
+    for (Value *v = args->current(); v; v = args->next()) {
+        if (v->unit == Value::Operator)
+            continue;
+        if (linear) {
+            if (v->unit == CSSPrimitiveValue::CSS_DEG) {
+                angle = qRound(v->fValue);
+                continue;
+            }
+            if (v->unit == CSSPrimitiveValue::CSS_RAD) {
+                angle = qRound(v->fValue * 180.0 / M_PI);
+                continue;
+            }
+            if (v->unit == CSSPrimitiveValue::CSS_GRAD) {
+                angle = qRound(v->fValue * 0.9);
+                continue;
+            }
+        }
+        if (v->unit == CSSPrimitiveValue::CSS_IDENT) {
+            const QString kw = qString(v->string).toLower();
+            if (kw == QLatin1String("to")) {
+                sawTo = true;
+                continue;
+            }
+            if (sawTo) {
+                if (kw == QLatin1String("right")) dirX = 1;
+                else if (kw == QLatin1String("left")) dirX = -1;
+                else if (kw == QLatin1String("bottom")) dirY = 1;
+                else if (kw == QLatin1String("top")) dirY = -1;
+            }
+        }
+        CSSPrimitiveValueImpl *cv = parseColorFromValue(v);
+        if (cv) {
+            const QRgb c = cv->getRGBColorValue();
+            colors.append(QColor(qRed(c), qGreen(c), qBlue(c)));
+            positions.append(-1);
+            delete cv;
+            continue;
+        }
+        if (!colors.isEmpty() && v->unit == CSSPrimitiveValue::CSS_PERCENTAGE) {
+            positions.last() = qBound(0, qRound(v->fValue * 10.0), 1000);
+            continue;
+        }
+        if (v->unit == CSSPrimitiveValue::CSS_IDENT)
+            continue;           // shape/size/position keywords: ignored
+        return QString();
+    }
+    if (colors.size() < 2) {
+        return QString();
+    }
+    if (sawTo && (dirX || dirY))
+        angle = qRound(qRadiansToDegrees(std::atan2(double(dirX), -double(dirY))));
+    angle = ((angle % 360) + 360) % 360;
+    if (positions.first() < 0)
+        positions.first() = 0;
+    if (positions.last() < 0)
+        positions.last() = 1000;
+    for (int i = 1; i < colors.size() - 1; ++i) {
+        if (positions[i] >= 0)
+            continue;
+        int prev = i - 1;
+        while (prev >= 0 && positions[prev] < 0)
+            --prev;
+        int next = i + 1;
+        while (next < colors.size() && positions[next] < 0)
+            ++next;
+        const int a = positions[qMax(0, prev)];
+        const int b = next < colors.size() ? positions[next] : 1000;
+        positions[i] = a + (b - a) * (i - prev) / qMax(1, next - prev);
+    }
+    QString spec = linear ? QStringLiteral("khtml-grad:L|%1|").arg(angle)
+                          : QStringLiteral("khtml-grad:R||");
+    QStringList stops;
+    for (int i = 0; i < colors.size(); ++i)
+        stops.append(colors[i].name() + QLatin1Char(':') + QString::number(positions[i]));
+    spec += stops.join(QLatin1Char(','));
+    return spec;
 }
 
 CSSPrimitiveValueImpl *CSSParser::parseColorFromValue(Value *value)

@@ -467,6 +467,16 @@ tests/renderer_solo.py（无浏览器直驱渲染进程+帧颜色断言）。
        本地化；变量语义由引擎负责（去掉了宿主"替引擎猜"的一层）；
     c) 探针扩至 14 项（新增 var() 应用与 fallback 两项）；已知限制：全局透传
        语义（无级联作用域）、style 属性内 var() 未展开、跨表依赖定义先于使用。
+ 15. **2026-10-24 引擎渲染能力第六批**（详见 HANDOVER §5q）：
+    a) CSS 渐变引擎化：CSSParser::parseGradientSpec 解析 linear/radial（含
+       -webkit-/repeating- 前缀、角度/方向关键字/rgb/hsl/hex 颜色/百分比色标），
+       输出紧凑谱字符串随 background-image 进入样式层；
+    b) BackgroundLayer 增加渐变字段（拷贝/相等/样式 diff 同步），applyProperty
+       识别并落实，普通 background-image 覆盖时清除；
+    c) RenderBox 用 QLinearGradient/QRadialGradient 绘制渐变背景；
+    d) 宿主删除两处 simplifyGradients 压平，渐变交给引擎；探针新增 page3
+       5 项断言（三页共 19 项）；已知限制：渐变不做 border-radius 裁剪、
+       旧式 -webkit-gradient 不支持。
 
 ---
 

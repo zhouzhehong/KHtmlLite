@@ -3456,9 +3456,27 @@ void CSSStyleSelector::applyRule(int id, DOM::CSSValueImpl *value)
     }
     break;
 // uri || inherit
-    case CSS_PROP_BACKGROUND_IMAGE:
+    case CSS_PROP_BACKGROUND_IMAGE: {
+        // Engine-painted CSS gradients: CSSParser stores the compact gradient
+        // spec as a string value instead of an image URL.
+        if (value->isPrimitiveValue()) {
+            CSSPrimitiveValueImpl *pv = static_cast<CSSPrimitiveValueImpl *>(value);
+            if (pv->primitiveType() == CSSPrimitiveValue::CSS_STRING) {
+                const QString s = DOMString(pv->getStringValue()).string();
+                if (s.startsWith(QLatin1String("khtml-grad:"))) {
+                    BackgroundLayer *layer = style->accessBackgroundLayers();
+                    if (layer)
+                        layer->setBackgroundGradient(s);
+                    break;
+                }
+            }
+        }
+        // A normal background-image declaration replaces any gradient.
+        if (BackgroundLayer *layer = style->accessBackgroundLayers())
+            layer->setBackgroundGradient(QString());
         HANDLE_BACKGROUND_VALUE(backgroundImage, BackgroundImage, value)
         break;
+    }
     case CSS_PROP_LIST_STYLE_IMAGE: {
         HANDLE_INITIAL_AND_INHERIT_ON_INHERITED_PROPERTY(listStyleImage, ListStyleImage)
         if (!primitiveValue) {
