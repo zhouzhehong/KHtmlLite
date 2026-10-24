@@ -166,6 +166,24 @@ def page1_checks(pixels, w, h):
             "(orange bbox x0=%d w=%d)" % (x0, x1 - x0))
     else:
         add("logical-margin box renders", False)
+
+    # CSS custom properties: var(--brand-bg) defined on :root must paint the
+    # box; var(--missing, fallback) must use the fallback colour.
+    v1 = main_cluster_bbox(pixels, w, h, (0, 153, 153), tol=40)
+    if v1:
+        x0, y0, x1, y1 = v1
+        add("var() custom property applied", (x1 - x0) > 80 and (y1 - y0) > 20,
+            "(vars1 bbox w=%d h=%d)" % (x1 - x0, y1 - y0))
+    else:
+        add("var() custom property applied", False)
+
+    v2 = main_cluster_bbox(pixels, w, h, (204, 204, 0), tol=40)
+    if v2:
+        x0, y0, x1, y1 = v2
+        add("var() fallback applied", (x1 - x0) > 80 and (y1 - y0) > 20,
+            "(vars2 bbox w=%d h=%d)" % (x1 - x0, y1 - y0))
+    else:
+        add("var() fallback applied", False)
     return out
 
 

@@ -924,8 +924,28 @@ protected:
     mutable ElementMappingCache m_getElementByIdCache;
 
     SharedPtr<khtml::RenderArena> m_renderArena;
+
+public:
+    // CSS custom properties (--name) collected from this document's
+    // stylesheets; var() references are expanded against this map while the
+    // engine parses a sheet (see css/css_variables.h).  This replaces the
+    // host's textual var() expansion with an engine-level implementation.
+    void setCustomProperty(const QString &name, const QString &value)
+    {
+        m_customProperties.insert(name, value);
+    }
+    QString customProperty(const QString &name) const
+    {
+        return m_customProperties.value(name);
+    }
+    bool hasCustomProperty(const QString &name) const
+    {
+        return m_customProperties.contains(name);
+    }
+
 private:
     JSEditor *m_jsEditor;
+    QHash<QString, QString> m_customProperties;
     mutable RefPtr<khtml::SecurityOrigin> m_origin;
 
     int m_selfOnlyRefCount;

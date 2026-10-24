@@ -28,6 +28,8 @@
 #include "css_ruleimpl.h"
 #include "css_valueimpl.h"
 #include "cssparser.h"
+#include "css_variables.h"
+#include "xml/dom_docimpl.h"
 #include "css_mediaquery.h"
 
 #include <dom/dom_string.h>
@@ -465,8 +467,8 @@ bool CSSStyleSheetImpl::parseString(const DOMString &string, bool strict)
                 bool atBoundary = (i == 0);
                 if (!atBoundary) {
                     const QChar prev = css.at(i - 1);
-                    atBoundary = prev.isSpace() || prev == QLatin1Char('{{')
-                                 || prev == QLatin1Char('}}') || prev == QLatin1Char(';');
+                    atBoundary = prev.isSpace() || prev == QLatin1Char('{')
+                                 || prev == QLatin1Char('}') || prev == QLatin1Char(';');
                 }
                 if (atBoundary && css.at(i) == QLatin1Char('@')
                     && i + 9 <= n
@@ -522,64 +524,25 @@ bool CSSStyleSheetImpl::parseString(const DOMString &string, bool strict)
         css = expand(css);
     }
 
-    // Strip CSS custom property declarations (--name: value;). KHTML's parser
-    // does not support them and a single custom property can cause the whole
-    // stylesheet to fail parsing (rules=0). We remove the declarations but
-    // keep all other rules intact. This is a generic compatibility fix, not
-    // site-specific.
+    // CSS custom properties: collect "--name: value" declarations into the
+    // document's property map and expand all var() references against it.
+    // This is the engine-level replacement for the host's textual expansion,
+    // and it also lets a LATER stylesheet (e.g. an external .css) resolve
+    // variables defined by an earlier one (the inline <style> in <head>).
     {
-        QString out;
-        out.reserve(css.size());
-        int i = 0;
-        const int n = css.size();
-        while (i < n) {
-            // Detect custom property start: -- followed by name char
-            if (i + 1 < n && css.at(i) == QLatin1Char('-') && css.at(i + 1) == QLatin1Char('-')) {
-                // Must be at declaration start (after {, ;, or whitespace)
-                bool atStart = false;
-                for (int j = i - 1; j >= 0; --j) {
-                    const QChar c = css.at(j);
-                    if (c == QLatin1Char('{') || c == QLatin1Char(';')) { atStart = true; break; }
-                    if (!c.isSpace()) break;
-                }
-                if (atStart) {
-                    int k = i + 2;
-                    while (k < n && (css.at(k).isLetterOrNumber() || css.at(k) == QLatin1Char('-') || css.at(k) == QLatin1Char('_')))
-                        ++k;
-                    // Skip whitespace and colon
-                    int colon = k;
-                    while (colon < n && css.at(colon).isSpace()) ++colon;
-                    if (colon < n && css.at(colon) == QLatin1Char(':')) {
-                        // Skip value until ; or } at bracket depth 0
-                        int depth = 0;
-                        int end = colon + 1;
-                        QChar quote = QChar::Null;
-                        while (end < n) {
-                            const QChar c = css.at(end);
-                            if (!quote.isNull()) {
-                                if (c == quote) quote = QChar::Null;
-                            } else if (c == QLatin1Char('"') || c == QLatin1Char('\'')) {
-                                quote = c;
-                            } else if (c == QLatin1Char('(') || c == QLatin1Char('{') || c == QLatin1Char('[')) {
-                                ++depth;
-                            } else if (c == QLatin1Char(')') || c == QLatin1Char('}') || c == QLatin1Char(']')) {
-                                if (depth > 0) --depth;
-                                else if (c == QLatin1Char('}')) { break; } // end of block, keep }
-                            } else if (depth == 0 && c == QLatin1Char(';')) {
-                                ++end; // consume ;
-                                break;
-                            }
-                            ++end;
-                        }
-                        i = end;
-                        continue;
-                    }
-                }
-            }
-            out.append(css.at(i));
-            ++i;
-        }
-        css = out;
+        DOM::DocumentImpl *doc = this->doc();
+        QHash<QString, QString> local;
+        css = DOM::khtmlCollectCustomProperties(css,
+            [doc, &local](const QString &name, const QString &value) {
+                if (doc)
+                    doc->setCustomProperty(name, value);
+                local.insert(name, value);
+            });
+        auto lookup = [doc, &local](const QString &name) -> QString {
+            const QString v = doc ? doc->customProperty(name) : QString();
+            return v.isEmpty() ? local.value(name) : v;
+        };
+        css = DOM::khtmlExpandCssVariables(css, lookup);
     }
 
     // Remove empty rule blocks (selector { }) left after stripping custom

@@ -17,6 +17,11 @@
   /* logical property (LTR): margin-inline-start maps to margin-left. */
   #logical { margin-inline-start: 120px; width: 60px; height: 30px;
              background-color: #ff8000; }
+  /* CSS custom properties: defined on :root, consumed via var() (and a
+     fallback form for an undefined variable). */
+  :root { --brand-bg: #009999; }
+  #vars1 { background-color: var(--brand-bg); width: 80px; height: 24px; }
+  #vars2 { background-color: var(--missing-bg, #cccc00); width: 80px; height: 24px; }
   /* HTML5 semantic element: UA sheet must make it block (full-width bg). */
   section { background-color: #ffff00; }
 </style></head>
@@ -27,5 +32,7 @@
   <div id="flexbox"><div></div><div></div><div></div></div>
   <div id="wrap"><div></div><div></div><div></div><div></div><div></div></div>
   <div id="logical"></div>
+  <div id="vars1"></div>
+  <div id="vars2"></div>
   <section id="sem">X</section>
 </body></html>

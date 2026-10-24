@@ -669,6 +669,30 @@ INCONCLUSIVE、或退出码 0 但输出里出现判定形 FAIL 令牌，都算�
 ### 实测
 - 引擎探针 **12/12 PASS**（page2 新增 shrink 断言：bbox 299×29 物理像素）；`tile_protocol_test` PASS；**全量回归 2026-10-24 18:10→18:58 `failed: none`**：14 项中 13 项 PASS（engine_semantics_probe 51.5s、bg_smoke、scroll_smoke、resize_probe、tombstone_probe、tile_protocol_test 172.1s）+ bing_ghost_check INCONCLUSIVE（本机 bing 无 #0078D4 蓝块，诚实结论）。
 
+## 5p. 引擎渲染能力第五批（2026-10-24，CSS 变量 var() 引擎级实现）
+
+### 1) 文档级自定义属性存储（DocumentImpl）
+- `DocumentImpl` 新增 `m_customProperties`（QHash<QString,QString>）与 `setCustomProperty/customProperty/hasCustomProperty`（public）。样式表解析期收集的 `--name: value` 存入文档级 map，因此**后解析的样式表**（如外部 .css）能解析**先解析的样式表**（如 head 内联 `<style>`）里定义的变量。
+
+### 2) 样式表解析期展开（引擎，header-only）
+- 新增 `css/css_variables.h`：
+  - `khtmlCollectCustomProperties()`：扫描并移除 `--name: value` 声明（尊重引号与括号嵌套），把键值对交给 sink；
+  - `khtmlExpandCssVariables()`：递归展开 `var(--name[, fallback])`（最多 8 层）；未解析且无 fallback 的引用保留原样，交给解析器安全丢弃该声明。
+- `CSSStyleSheetImpl::parseString()`：先收集声明 → 写入 DocumentImpl → 展开整段样式表文本 → 再交给 bison 解析（此前只是"整块删除 -- 声明"）。顺带修正一处 `{{`/`}}` 多字符字面量为 `{`/`}`。
+
+### 3) 宿主移除 var() 文本展开
+- `pageloader.cpp` 删除 `m_cssVars` 的收集/嵌套解析/展开逻辑（inline `<style>` 与外部 CSS 两处），只保留 url()/@import 本地化重写；自定义属性与 var() 完全交给引擎，宿主不再"替引擎猜"。
+
+### 4) 行为级验证 + 已知限制
+- 夹具 page1 新增：`:root { --brand-bg: #009999 }` + `#vars1{background:var(--brand-bg)}`、`#vars2{background:var(--missing-bg,#cccc00)}`；探针新增 2 项像素断言（变量应用 / fallback），两页合计 **14 项**。
+- 验证结果见下方"实测"；已知限制（如实记录）：
+  - 文档级 map 是**全局透传**语义，未实现 CSS 级联作用域（选择器/媒体查询/继承下的变量作用域差异）；
+  - 内联 `style="..."` 属性里的 var() 暂不展开（声明解析路径未接入；宿主此前同样不处理，无回归）；
+  - 跨表解析依赖"定义先于使用"的解析顺序（常见站点头部 `<style>` 先于外部 CSS，满足）。
+
+### 实测
+- 引擎探针 **14/14 PASS**（新增 var() 应用 bbox 119×35 与 fallback bbox 119×35，均符合 80×24 CSS×1.5）；`tile_protocol_test` PASS；**全量回归 2026-10-24 20:41→21:30 `failed: none`**：14 项中 13 项 PASS（engine_semantics_probe 62.5s、bg_smoke 613.6s、scroll_smoke、resize_probe、tombstone_probe、tile_protocol_test 169.1s）+ bing_ghost_check INCONCLUSIVE（本机 bing 无 #0078D4 蓝块，诚实结论）。
+
 ## 6. 正在/马上要做的
 A. ~~拆那 1.1s~~ **已完成**（字体枚举缓存 + 图标懒加载，构造 1.1s→~0.35s，TTFF 2.0→1.1s）。
    下一步同部位残账：渲染进程镜像加载+socket 连接 ~500ms（每次新标签都付），

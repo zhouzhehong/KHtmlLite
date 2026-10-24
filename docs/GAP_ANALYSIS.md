@@ -458,6 +458,15 @@ tests/renderer_solo.py（无浏览器直驱渲染进程+帧颜色断言）。
        加权收缩（实测 200px 容器内两个 flex:0 1 150px 收成各 100px）；
     c) 探针扩展至 12 项（新增 shrink 用例）；剩余：inline-flex 行内化、
        var()/calc()、grid/sticky/aspect-ratio、渐变/transform/动画。
+ 14. **2026-10-24 引擎渲染能力第五批**（详见 HANDOVER §5p）：
+    a) CSS 变量 var() 引擎级实现：DocumentImpl 增加文档级自定义属性 map；
+       新增 header-only `css/css_variables.h`（收集 --name 声明 + 递归展开
+       var(--name, fallback)）；CSSStyleSheetImpl::parseString 在交给解析器前
+       收集并展开（此前只是整块删除）；
+    b) 宿主 pageloader 删除 m_cssVars 的收集/嵌套/展开逻辑，只保留 url()/@import
+       本地化；变量语义由引擎负责（去掉了宿主"替引擎猜"的一层）；
+    c) 探针扩至 14 项（新增 var() 应用与 fallback 两项）；已知限制：全局透传
+       语义（无级联作用域）、style 属性内 var() 未展开、跨表依赖定义先于使用。
 
 ---
 

@@ -1137,46 +1137,17 @@ void PageLoader::rewriteAndSave()
     // See restoreNavigationTargets().
     html = restoreNavigationTargets(html);
 
-    // Pre-collect custom property definitions from inline <style> blocks so
-    // that external stylesheets (processed next) can resolve their var()
-    // references against them. Many modern sites define --vars in inline
-    // <style> and consume them in external .css files.
-    {
-        const QRegularExpression rePreStyle(
-            QStringLiteral("<style[^>]*>(.*?)</style>"),
-            QRegularExpression::CaseInsensitiveOption | QRegularExpression::DotMatchesEverythingOption);
-        const QRegularExpression rePreVarDef(
-            QStringLiteral("(--[a-zA-Z0-9_-]+)\s*:\s*([^;!{}]+?)(?:\s*!important)?\s*[;}]"),
-            QRegularExpression::CaseInsensitiveOption);
-        auto pit = rePreStyle.globalMatch(html);
-        while (pit.hasNext()) {
-            const QRegularExpressionMatch pm = pit.next();
-            const QString block = pm.captured(1);
-            auto dit = rePreVarDef.globalMatch(block);
-            while (dit.hasNext()) {
-                const QRegularExpressionMatch dm = dit.next();
-                m_cssVars.insert(dm.captured(1).toLower(), dm.captured(2).trimmed());
-            }
-        }
-    }
-
-    // Process inline <style> blocks: collect their custom properties, expand
-    // var() references, and rewrite url() to local files. External stylesheets
-    // were already handled by rewriteCssFiles(); we run it first so its
-    // variable definitions are available to inline styles.
     PERF_MARK("rewrite_css_start");
     rewriteCssFiles();
     PERF_MARK("rewrite_css_done");
 
+    // Process inline <style> blocks: rewrite url() references to the local
+    // mirror.  Custom properties/var() are handled by the engine; external
+    // stylesheets were already rewritten by rewriteCssFiles().
+
     const QRegularExpression reStyle(
         QStringLiteral("<style[^>]*>(.*?)</style>"),
         QRegularExpression::CaseInsensitiveOption | QRegularExpression::DotMatchesEverythingOption);
-    const QRegularExpression reVarDef(
-        QStringLiteral("(--[a-zA-Z0-9_-]+)\\s*:\\s*([^;!{}]+?)(?:\\s*!important)?\\s*[;}]"),
-        QRegularExpression::CaseInsensitiveOption);
-    const QRegularExpression reVarRef(
-        QStringLiteral("var\\(\\s*(--[a-zA-Z0-9_-]+)\\s*(?:,\\s*([^)]+))?\\)"),
-        QRegularExpression::CaseInsensitiveOption);
     const QRegularExpression reUrl(
         QStringLiteral("(url\\(\\s*[\"']?)([^\"')]+)([\"']?\\s*\\))"));
 
@@ -1198,34 +1169,12 @@ void PageLoader::rewriteAndSave()
         const QRegularExpressionMatch sm = styleIt.next();
         htmlOut.append(html.midRef(lastPos, sm.capturedStart() - lastPos));
         QString css = sm.captured(1);
-        // Collect variable definitions from this block.
-        auto dit = reVarDef.globalMatch(css);
-        while (dit.hasNext()) {
-            const QRegularExpressionMatch dm = dit.next();
-            m_cssVars.insert(dm.captured(1).toLower(), dm.captured(2).trimmed());
-        }
-        // Expand var() references.
+        // var()/custom properties are expanded by the ENGINE; the host
+        // only rewrites url() references below.
         QString out;
-        out.reserve(css.size());
-        int last = 0;
-        auto vit = reVarRef.globalMatch(css);
-        while (vit.hasNext()) {
-            const QRegularExpressionMatch vm = vit.next();
-            out.append(css.midRef(last, vm.capturedStart() - last));
-            const QString name = vm.captured(1).toLower();
-            if (m_cssVars.contains(name))
-                out.append(m_cssVars.value(name));
-            else if (vm.lastCapturedIndex() >= 2 && !vm.captured(2).isEmpty())
-                out.append(vm.captured(2).trimmed());
-            else
-                out.append(vm.captured(0));
-            last = vm.capturedEnd();
-        }
-        out.append(css.midRef(last));
-        css = out;
         // Rewrite url() references.
         out.clear();
-        last = 0;
+        int last = 0;
         auto uit = reUrl.globalMatch(css);
         while (uit.hasNext()) {
             const QRegularExpressionMatch um = uit.next();
@@ -1429,53 +1378,8 @@ void PageLoader::rewriteAndSave()
 
 void PageLoader::rewriteCssFiles()
 {
-    // --- Pass 1: collect custom property (--name: value) definitions ---
-    // m_cssVars already pre-collected from inline <style>; do not clear.
-    const QRegularExpression reVarDef(
-        QStringLiteral("(--[a-zA-Z0-9_-]+)\\s*:\\s*([^;!{}]+?)(?:\\s*!important)?\\s*[;}]"),
-        QRegularExpression::CaseInsensitiveOption);
-    for (auto it = m_cssRaw.begin(); it != m_cssRaw.end(); ++it) {
-        const QString css = QString::fromUtf8(it.value());
-        auto mit = reVarDef.globalMatch(css);
-        while (mit.hasNext()) {
-            const QRegularExpressionMatch m = mit.next();
-            m_cssVars.insert(m.captured(1).toLower(), m.captured(2).trimmed());
-        }
-    }
-
-    // Resolve variables that reference other variables (up to 8 deep to avoid
-    // infinite loops from circular references).
-    const QRegularExpression reVarRef(
-        QStringLiteral("var\\(\\s*(--[a-zA-Z0-9_-]+)\\s*(?:,\\s*([^)]+))?\\)"),
-        QRegularExpression::CaseInsensitiveOption);
-    for (int depth = 0; depth < 8; ++depth) {
-        bool changed = false;
-        for (auto it = m_cssVars.begin(); it != m_cssVars.end(); ++it) {
-            QString val = it.value();
-            QString out;
-            out.reserve(val.size());
-            int last = 0;
-            auto mit = reVarRef.globalMatch(val);
-            while (mit.hasNext()) {
-                const QRegularExpressionMatch m = mit.next();
-                out.append(val.midRef(last, m.capturedStart() - last));
-                const QString name = m.captured(1).toLower();
-                if (m_cssVars.contains(name)) {
-                    out.append(m_cssVars.value(name));
-                    changed = true;
-                } else if (m.lastCapturedIndex() >= 2 && !m.captured(2).isEmpty()) {
-                    out.append(m.captured(2).trimmed());
-                } else {
-                    out.append(QStringLiteral("inherit"));
-                }
-                last = m.capturedEnd();
-            }
-            out.append(val.midRef(last));
-            it.value() = out;
-        }
-        if (!changed) break;
-    }
-
+    // Custom properties (--name) and var() are handled by the ENGINE
+    // (css_variables.h + DocumentImpl map); no textual expansion here.
     // --- Pass 2: build URL rewrite map ---
     QHash<QString, QString> baseUrlToLocal;
     for (const Res &res : m_resources) {
@@ -1503,27 +1407,8 @@ void PageLoader::rewriteCssFiles()
         for (auto sit = sheetMap.begin(); sit != sheetMap.end(); ++sit)
             urlToLocal.insert(sit.key(), sit.value());
 
-        // Expand var() references in this stylesheet.
-        {
-            QString out;
-            out.reserve(css.size());
-            int last = 0;
-            auto mit = reVarRef.globalMatch(css);
-            while (mit.hasNext()) {
-                const QRegularExpressionMatch m = mit.next();
-                out.append(css.midRef(last, m.capturedStart() - last));
-                const QString name = m.captured(1).toLower();
-                if (m_cssVars.contains(name))
-                    out.append(m_cssVars.value(name));
-                else if (m.lastCapturedIndex() >= 2 && !m.captured(2).isEmpty())
-                    out.append(m.captured(2).trimmed());
-                else
-                    out.append(m.captured(0)); // leave unresolved var() as-is
-                last = m.capturedEnd();
-            }
-            out.append(css.midRef(last));
-            css = out;
-        }
+        // var() references are expanded by the ENGINE (css_variables.h);
+        // the host only rewrites url()/@import references here.
 
         // Rewrite url() references to local files.
         QString out;
