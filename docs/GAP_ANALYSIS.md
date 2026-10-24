@@ -450,6 +450,14 @@ tests/renderer_solo.py（无浏览器直驱渲染进程+帧颜色断言）。
     c) 探针改为两页夹具（新增 engine_semantics2.html），共 11 项像素断言；检测
        用"主带"bbox 排除工具条抗锯齿污染；
     d) 剩余：flex-shrink、inline-flex 行内化、flex 简写三分量、var()/calc()。
+ 13. **2026-10-24 引擎渲染能力第四批**（详见 HANDOVER §5o）：
+    a) `flex` 简写解析：新增 `CSSParser::parseFlexShorthand()`（none/auto/
+       grow shrink? basis?），多值简写不再被整体拒绝；
+    b) `flex-shrink` 属性 id=191 + StyleFlexibleBoxData.flexShrink（默认 1.0）
+       + 值校验 + applyProperty；布局在主轴负剩余空间时按 shrink×基础尺寸
+       加权收缩（实测 200px 容器内两个 flex:0 1 150px 收成各 100px）；
+    c) 探针扩展至 12 项（新增 shrink 用例）；剩余：inline-flex 行内化、
+       var()/calc()、grid/sticky/aspect-ratio、渐变/transform/动画。
 
 ---
 

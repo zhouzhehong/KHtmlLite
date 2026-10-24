@@ -4654,6 +4654,12 @@ void CSSStyleSelector::applyRule(int id, DOM::CSSValueImpl *value)
         style->setFlexGrow(qMax(0.0, primitiveValue->floatValue(CSSPrimitiveValue::CSS_NUMBER)));
         break;
     }
+    case CSS_PROP_FLEX_SHRINK: {
+        if (isInitial || isInherit) { style->setFlexShrink(1.0f); return; }
+        if (!primitiveValue || primitiveValue->primitiveType() != CSSPrimitiveValue::CSS_NUMBER) return;
+        style->setFlexShrink(qMax(0.0f, (float)primitiveValue->floatValue(CSSPrimitiveValue::CSS_NUMBER)));
+        break;
+    }
     case CSS_PROP_FLEX_WRAP: {
         if (isInitial || isInherit) { style->setFlexWrap(false); return; }
         if (!primitiveValue) return;

@@ -709,12 +709,10 @@ bool CSSParser::parseValue(int propId, bool important)
         }
         break;
     case CSS_PROP_FLEX:
-        // flex: <grow> [<shrink> <basis>] | none — we only honour the grow part.
-        if (id == CSS_VAL_NONE || id == CSS_VAL_INHERIT
-            || (value && value->unit == CSSPrimitiveValue::CSS_NUMBER)) {
-            valid_primitive = true;
-        }
-        break;
+        // flex: none | auto | <grow> <shrink>? <basis>?  — handled as a
+        // shorthand in parseFlexShorthand(); parseValue() only ever validates
+        // a single token, so multi-token values must not fall through here.
+        return parseFlexShorthand(important);
     case CSS_PROP_FLEX_DIRECTION:
         if ((id >= CSS_VAL_ROW && id <= CSS_VAL_COLUMN_REVERSE) || id == CSS_VAL_INHERIT) {
             valid_primitive = true;
@@ -732,6 +730,11 @@ bool CSSParser::parseValue(int propId, bool important)
         }
         break;
     case CSS_PROP_FLEX_GROW:
+        if (value && value->unit == CSSPrimitiveValue::CSS_NUMBER) {
+            valid_primitive = true;
+        }
+        break;
+    case CSS_PROP_FLEX_SHRINK:
         if (value && value->unit == CSSPrimitiveValue::CSS_NUMBER) {
             valid_primitive = true;
         }
@@ -2305,6 +2308,55 @@ bool CSSParser::parseShape(int propId, bool important)
 
 // [ [ <'font-style'> || <'font-variant'> || <'font-weight'> ]? <'font-size'> [ / <'line-height'> ]? <'font-family'> ] |
 // caption | icon | menu | message-box | small-caption | status-bar
+bool CSSParser::parseFlexShorthand(bool important)
+{
+    // flex: none | auto | [ <grow> <shrink>? <basis>? ]
+    Value *first = valueList->current();
+    if (!first)
+        return false;
+    if (valueList->size() == 1 && first->id == CSS_VAL_NONE) {
+        addProperty(CSS_PROP_FLEX_GROW, new CSSPrimitiveValueImpl(0.0, CSSPrimitiveValue::CSS_NUMBER), important);
+        addProperty(CSS_PROP_FLEX_SHRINK, new CSSPrimitiveValueImpl(0.0, CSSPrimitiveValue::CSS_NUMBER), important);
+        addProperty(CSS_PROP_FLEX_BASIS, new CSSPrimitiveValueImpl(CSS_VAL_AUTO), important);
+        return true;
+    }
+    if (valueList->size() == 1 && first->id == CSS_VAL_AUTO) {
+        addProperty(CSS_PROP_FLEX_GROW, new CSSPrimitiveValueImpl(1.0, CSSPrimitiveValue::CSS_NUMBER), important);
+        addProperty(CSS_PROP_FLEX_SHRINK, new CSSPrimitiveValueImpl(1.0, CSSPrimitiveValue::CSS_NUMBER), important);
+        addProperty(CSS_PROP_FLEX_BASIS, new CSSPrimitiveValueImpl(CSS_VAL_AUTO), important);
+        return true;
+    }
+    ShorthandScope scope(this, CSS_PROP_FLEX);
+    const int oldNumParsedProperties = numParsedProperties;
+    int numbers = 0;
+    bool any = false;
+    while (valueList->current()) {
+        Value *v = valueList->current();
+        bool ok = false;
+        if (!v->id && v->unit == CSSPrimitiveValue::CSS_NUMBER) {
+            if (numbers >= 2) {
+                rollbackParsedProperties(oldNumParsedProperties);
+                return false;
+            }
+            ok = (numbers == 0) ? parseValue(CSS_PROP_FLEX_GROW, important)
+                                : parseValue(CSS_PROP_FLEX_SHRINK, important);
+            if (ok)
+                ++numbers;
+        } else if (!v->id && (v->unit == CSSPrimitiveValue::CSS_PX
+                              || v->unit == CSSPrimitiveValue::CSS_PERCENTAGE)) {
+            ok = parseValue(CSS_PROP_FLEX_BASIS, important);
+        } else if (v->id == CSS_VAL_AUTO) {
+            ok = parseValue(CSS_PROP_FLEX_BASIS, important);
+        }
+        if (!ok) {
+            rollbackParsedProperties(oldNumParsedProperties);
+            return false;
+        }
+        any = true;
+    }
+    return any;
+}
+
 bool CSSParser::parseFontShorthand(bool important)
 {
     Value *value = valueList->current();

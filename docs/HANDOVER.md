@@ -612,8 +612,8 @@ INCONCLUSIVE、或退出码 0 但输出里出现判定形 FAIL 令牌，都算�
 - 实测：探针 **PASS**；`tile_protocol_test` PASS；**全量回归 2026-10-24 13:24→14:11 `failed: none`**：14 项中 13 项 PASS（含新增 engine_semantics_probe 24.2s、bg_smoke、scroll_smoke、resize_probe、tombstone_probe、tile_protocol_test 178.5s）+ bing_ghost_check INCONCLUSIVE（本机 bing 无 #0078D4 蓝块，诚实结论）。
 
 ### 下一批（路线图，按收益排序）
-`var()` 自定义属性 → `calc()/min()/max()/clamp()` → flex 收尾（flex-shrink / inline-flex 行内化 / flex 简写三分量）→ grid → sticky/aspect-ratio → 渐变/transform/transition/animation。每条都要求：本地 fixture + 像素断言 + 全量回归绿。
-（flex-wrap/逻辑属性已在 §5m、order/align-self/flex-basis 已在 §5n 完成，从本列表移除。）
+`var()` 自定义属性 → `calc()/min()/max()/clamp()` → flex 最后一项（inline-flex 行内化）→ grid → sticky/aspect-ratio → 渐变/transform/transition/animation。每条都要求：本地 fixture + 像素断言 + 全量回归绿。
+（flex-wrap/逻辑属性 §5m、order/align-self/flex-basis §5n、flex 简写/flex-shrink §5o 已完成，从本列表移除。）
 
 ## 5m. 引擎渲染能力第二批（2026-10-24，flex-wrap + 逻辑属性）
 
@@ -651,6 +651,23 @@ INCONCLUSIVE、或退出码 0 但输出里出现判定形 FAIL 令牌，都算�
 
 ### 实测
 - 引擎探针 **11/11 PASS**；`tile_protocol_test` PASS；**全量回归 2026-10-24 16:41→17:28 `failed: none`**：14 项中 13 项 PASS（engine_semantics_probe 48.2s 两页、bg_smoke、scroll_smoke、resize_probe、tombstone_probe、tile_protocol_test 160.3s）+ bing_ghost_check INCONCLUSIVE（本机 bing 无 #0078D4 蓝块，诚实结论）。
+
+## 5o. 引擎渲染能力第四批（2026-10-24，flex 简写 + flex-shrink）
+
+### 1) `flex` 简写解析（引擎解析层）
+- 问题：`CSSParser::parseValue()` 只校验**单个 token**，多值简写（`flex: 1 1 0%`、`flex: 0 1 150px`）会被整体拒绝；此前只有 `flex: 1` 这种单数字形式生效。
+- 修复：新增 `CSSParser::parseFlexShorthand()`（仿 `parseFontShorthand`），支持 `none | auto | <grow> <shrink>? <basis>?`：逐个 token 转成 `flex-grow`/`flex-shrink`/`flex-basis` 三个子属性（含 `auto`/px/百分比 basis；`flex: none` → 0 0 auto；`flex: auto` → 1 1 auto；超过两个数字回滚拒绝）。`parseValue` 的 `CSS_PROP_FLEX` 分支改为直接调用它。
+
+### 2) `flex-shrink` 属性与布局收缩（engine）
+- 新属性 id：`flex-shrink`=191（CSS_PROP_TOTAL 192）；`StyleFlexibleBoxData` 增加 `flexShrink`（默认 1.0，含拷贝/相等/diff）；cssparser 值校验（CSS_NUMBER）；cssstyleselector applyProperty 落盘。
+- 布局：主轴上 `free < 0` 时按 `shrink × 基础尺寸` 的权重分配收缩量（`need*scaled/totalScaled`，下限 0），收缩后重新计算 free 并继续 auto-margin/justify 流程。
+- 实测：`#shrinkbox{width:200px}` 内两个 `flex: 0 1 150px` 的项收缩为各 100px（bbox 300 物理像素 @dpr1.5），此前会溢出到 450 物理像素。
+
+### 3) 回归探针
+- `tests/engine_semantics2.html` 增加 `#shrinkbox`（flex 简写 + 收缩用例）；`engine_semantics_probe.py` 的 page2 增加第 4 项断言（蓝色 bbox 宽 280..320 物理像素），page2 共 4 项、两页合计 **12 项像素断言**。
+
+### 实测
+- 引擎探针 **12/12 PASS**（page2 新增 shrink 断言：bbox 299×29 物理像素）；`tile_protocol_test` PASS；**全量回归 2026-10-24 18:10→18:58 `failed: none`**：14 项中 13 项 PASS（engine_semantics_probe 51.5s、bg_smoke、scroll_smoke、resize_probe、tombstone_probe、tile_protocol_test 172.1s）+ bing_ghost_check INCONCLUSIVE（本机 bing 无 #0078D4 蓝块，诚实结论）。
 
 ## 6. 正在/马上要做的
 A. ~~拆那 1.1s~~ **已完成**（字体枚举缓存 + 图标懒加载，构造 1.1s→~0.35s，TTFF 2.0→1.1s）。

@@ -199,6 +199,15 @@ def page2_checks(pixels, w, h):
             "(basis bbox w=%d)" % (x1 - x0))
     else:
         add("flex-basis box renders", False)
+
+    shrink = main_cluster_bbox(pixels, w, h, (51, 102, 255), tol=40)
+    if shrink:
+        x0, y0, x1, y1 = shrink
+        add("flex shorthand + shrink fits the row",
+            280 < (x1 - x0) < 320 and (y1 - y0) < 40,
+            "(shrink bbox w=%d h=%d)" % (x1 - x0, y1 - y0))
+    else:
+        add("flex-shrink boxes render", False)
     return out
 
 

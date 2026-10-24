@@ -849,7 +849,7 @@ public:
     StyleFlexibleBoxData()
         : flexDirection(0), justifyContent(0), alignItems(0), alignSelf(0),
           order(0), flexBasisType(0), flexBasisValue(0),
-          flexGrow(0), flexWrap(false), gap(0)
+          flexGrow(0), flexShrink(1.0f), flexWrap(false), gap(0)
     {
     }
     StyleFlexibleBoxData(const StyleFlexibleBoxData &o)
@@ -857,7 +857,8 @@ public:
           flexDirection(o.flexDirection), justifyContent(o.justifyContent),
           alignItems(o.alignItems), alignSelf(o.alignSelf), order(o.order),
           flexBasisType(o.flexBasisType), flexBasisValue(o.flexBasisValue),
-          flexGrow(o.flexGrow), flexWrap(o.flexWrap), gap(o.gap)
+          flexGrow(o.flexGrow), flexShrink(o.flexShrink),
+          flexWrap(o.flexWrap), gap(o.gap)
     {
     }
 
@@ -867,7 +868,8 @@ public:
             && alignItems == o.alignItems && alignSelf == o.alignSelf
             && order == o.order && flexBasisType == o.flexBasisType
             && flexBasisValue == o.flexBasisValue
-            && flexGrow == o.flexGrow && flexWrap == o.flexWrap && gap == o.gap;
+            && flexGrow == o.flexGrow && flexShrink == o.flexShrink
+            && flexWrap == o.flexWrap && gap == o.gap;
     }
     bool operator!=(const StyleFlexibleBoxData &o) const
     {
@@ -888,6 +890,7 @@ public:
     int flexBasisType;
     int flexBasisValue;
     float flexGrow;
+    float flexShrink;
     bool flexWrap;
     int gap;
 };
@@ -1907,6 +1910,16 @@ public:
         if (d->flexBasisType != type || d->flexBasisValue != value) {
             css3NonInheritedData.access()->flexibleBox.access()->flexBasisType = type;
             css3NonInheritedData.access()->flexibleBox.access()->flexBasisValue = value;
+        }
+    }
+    float flexShrink() const
+    {
+        return css3NonInheritedData->flexibleBox->flexShrink;
+    }
+    void setFlexShrink(float v)
+    {
+        if (css3NonInheritedData->flexibleBox->flexShrink != v) {
+            css3NonInheritedData.access()->flexibleBox.access()->flexShrink = v;
         }
     }
     EUserInput userInput() const

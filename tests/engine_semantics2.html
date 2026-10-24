@@ -18,9 +18,15 @@
   /* flex-basis: 200px inside a 300px row. */
   #basisbox { display: flex; width: 300px; }
   #basisbox div { flex-basis: 200px; height: 24px; background-color: #00aa00; }
+
+  /* flex shorthand + flex-shrink: two 150px items in a 200px row have to
+     shrink (flex: 0 1 150px => grow 0, shrink 1, basis 150px). */
+  #shrinkbox { display: flex; width: 200px; }
+  #shrinkbox div { flex: 0 1 150px; height: 20px; background-color: #3366ff; }
 </style></head>
 <body>
   <div id="orderbox"><div id="o1"></div><div id="o2"></div><div id="o3"></div></div>
   <div id="selfbox"><div id="s1"></div><div id="s2"></div></div>
   <div id="basisbox"><div></div></div>
+  <div id="shrinkbox"><div></div><div></div></div>
 </body></html>

@@ -132,6 +132,11 @@ static int childGrow(const RenderObject *child)
     return qMax(0, m.captured(1).toInt());
 }
 
+static float childShrink(const RenderObject *child)
+{
+    return child->style() ? child->style()->flexShrink() : 1.0f;
+}
+
 static int childOrder(const RenderObject *child)
 {
     return child->style() ? child->style()->order() : 0;
@@ -175,6 +180,7 @@ void RenderFlexBox::layoutBlockChildren(bool relayoutChildren)
         int alignSelf;
         int basisType;
         int basisValue;
+        float shrink;
     };
     QVector<Item> items;
 
@@ -225,7 +231,7 @@ void RenderFlexBox::layoutBlockChildren(bool relayoutChildren)
         }
 
         items.append({box, itemW, box->height(), childGrow(child), autoBefore, autoAfter,
-                       childOrder(child), childAlignSelf(child), childBasisType(child), childBasisValue(child)});
+                       childOrder(child), childAlignSelf(child), childBasisType(child), childBasisValue(child), childShrink(child)});
     }
 
     if (items.isEmpty()) {
@@ -315,6 +321,28 @@ void RenderFlexBox::layoutBlockChildren(bool relayoutChildren)
                     it.box->setHeight(it.baseH + share);
                 it.baseW = it.box->width();
                 it.baseH = it.box->height();
+            }
+        } else if (free < 0) {
+            // Negative free space: shrink items proportionally to
+            // flex-shrink * base main size (clamped at zero).
+            int totalScaled = 0;
+            for (int idx : line) {
+                const int base = row ? items[idx].baseW : items[idx].baseH;
+                totalScaled += qMax(0, int(items[idx].shrink * base));
+            }
+            if (totalScaled > 0) {
+                const int need = -free;
+                for (int idx : line) {
+                    Item &it = items[idx];
+                    const int base = row ? it.baseW : it.baseH;
+                    const int scaled = qMax(0, int(it.shrink * base));
+                    const int reduce = (need * scaled) / totalScaled;
+                    const int nw = qMax(0, base - reduce);
+                    if (row) it.box->setWidth(nw);
+                    else it.box->setHeight(nw);
+                    it.baseW = it.box->width();
+                    it.baseH = it.box->height();
+                }
             }
         }
 
