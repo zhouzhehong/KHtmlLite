@@ -494,6 +494,14 @@ tests/renderer_solo.py（无浏览器直驱渲染进程+帧颜色断言）。
     c) 探针新增 page4 三项断言（translate/rotate/scale），四页合计 23 项；
        已知限制：仅 block、无 hit-test 逆变换、无独立图层、origin 固定中心；
        剩余：grid、sticky、calc()、inline-flex、transition/animation。
+ 18. **2026-10-25 引擎渲染能力第九批**（详见 HANDOVER §5t）：
+    a) `display:inline-flex` 行内化：isDisplayReplacedType/isOriginalDisplayInlineType
+       增加 INLINE_FLEX（走 KHTML 既有 inline-block 行内布局通道，伪 replaced），
+       RenderBox::setStyle 的 display switch 增加 INLINE_FLEX → setInline(true)；
+       渲染器创建本就映射到 RenderFlexBox，flex 内部布局能力全部继承；
+    b) 夹具 page2 新增两个 inline-flex 容器 + 探针 3 项断言（同行、子项横向行、
+       第二个容器独立渲染），四页合计 26 项；剩余：grid、sticky、calc()、
+       transition/animation。
 
 ---
 

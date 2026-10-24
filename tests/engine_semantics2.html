@@ -26,6 +26,12 @@
 
   /* aspect-ratio: width 300px + ratio 3/2 => height 200px. */
   #ratio { width: 300px; aspect-ratio: 3 / 2; background-color: #cc8800; }
+
+  /* inline-flex: two inline-level flex containers must share one text line */
+  #if1 { display: inline-flex; width: 70px; height: 40px; background-color: #6644bb; }
+  #if2 { display: inline-flex; width: 70px; height: 40px; background-color: #6644bb; }
+  #if1 div { width: 20px; height: 20px; background-color: #0088bb; }
+  #if2 div { width: 20px; height: 20px; background-color: #44bb66; }
 </style></head>
 <body>
   <div id="orderbox"><div id="o1"></div><div id="o2"></div><div id="o3"></div></div>
@@ -33,4 +39,5 @@
   <div id="basisbox"><div></div></div>
   <div id="shrinkbox"><div></div><div></div></div>
   <div id="ratio"></div>
+  <div id="if1"><div></div><div></div></div><div id="if2"><div></div></div>
 </body></html>

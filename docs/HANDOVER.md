@@ -763,6 +763,26 @@ INCONCLUSIVE、或退出码 0 但输出里出现判定形 FAIL 令牌，都算�
   2) 探针连续多页抓图存在 DWM 竞态（杀掉上一个浏览器后新窗口首帧可能读到空白），`finish()` 增加 1s 稳定等待、抓图前置 `SetForegroundWindow`、等颜色出现后再补抓一帧；修复后 page4 稳定通过。
   3) page4 初版夹具内容过小/命中偶发空白帧，最终以 page3 渐变页为基底 + 追加 transform 盒子，保证稳定。
 
+## 5t. 引擎渲染能力第九批（2026-10-25，`display: inline-flex`）
+
+### 1) 行内级 flex 容器
+- 此前 `display:inline-flex` 会被当作**块级** flex 容器（RenderBox::setStyle 的 display 分支没有 INLINE_FLEX，落到 default → setInline(false)），两个 inline-flex 容器会各占一行。
+- 修复（复用 KHTML 既有的 inline-block 行内布局通道，不新写行布局）：
+  - `RenderStyle::isDisplayReplacedType()` 与 `isOriginalDisplayInlineType()` 增加 `INLINE_FLEX`；
+  - `RenderBlock::setStyle()` 的 `setReplaced(isDisplayReplacedType())` 因此把 inline-flex 容器标记为"伪 replaced"→ `isInlineBlockOrInlineTable()` 为真，行布局按行内级盒子排布（与 inline-block 完全同一条路径）；
+  - `RenderBox::setStyle()` 的 display switch 增加 `case INLINE_FLEX: setInline(true)`；
+  - 渲染器创建逻辑本就把 FLEX/INLINE_FLEX 都映射到 `RenderFlexBox`（render_object.cpp），无需改动。
+- 结果：inline-flex 容器与文字/其它行内元素同处一行，容器内部仍走引擎既有 flex 布局（grow/shrink/order/align 等全部继承生效）。
+
+### 2) 行为级验证
+- 夹具 page2 新增两个 70×40 CSS 的 `display:inline-flex` 容器（同底色 #bb6600）：`#if1` 内两个 20×20 子项（#0088bb）、`#if2` 内一个（#bb8800）。
+- 探针新增 3 项断言：两个容器 bbox 高度 ≤80 物理像素（证明同一行，块级会变 120）、`#if1` 子项 bbox 呈横向行（宽 55..90、高 20..45）、`#if2` 子项单独渲染；page2 共 8 项，四页合计 **26 项**。
+
+### 实测
+- 引擎探针 **26/26 PASS**：inline-flex 三项全过——两个容器同一行（bbox 209×59 物理像素）、`#if1` 两个子项横排（59×29）、`#if2` 子项独立渲染（29×29）；aspect-ratio 仍为 449×299。
+- `tile_protocol_test` PASS；**全量回归 2026-10-25 04:00→04:49 `failed: none`**：14 项中 13 项 PASS（engine_semantics_probe 68.4s、bg_smoke 602.4s、scroll_smoke 601.7s、resize_probe 601.4s、tombstone_probe 623.2s、tile_protocol_test 126.2s）+ bing_ghost_check INCONCLUSIVE（本机 bing 无 #0078D4 蓝块，诚实结论）。
+- 调试记录：初版 inline-flex 容器底色 (#bb6600) 与 aspect-ratio 盒 (#cc8800) 在像素容差内串色，导致 ratio/inline 检查互相污染；改为 #6644bb / #44bb66 后全部通过（inline-flex 本身第一次构建即生效）。
+
 ## 6. 正在/马上要做的
 A. ~~拆那 1.1s~~ **已完成**（字体枚举缓存 + 图标懒加载，构造 1.1s→~0.35s，TTFF 2.0→1.1s）。
    下一步同部位残账：渲染进程镜像加载+socket 连接 ~500ms（每次新标签都付），

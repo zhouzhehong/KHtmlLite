@@ -174,6 +174,7 @@ void RenderBox::setStyle(RenderStyle *_style)
     case INLINE:
     case INLINE_BLOCK:
     case INLINE_TABLE:
+    case INLINE_FLEX:
         setInline(true);
         break;
     case RUN_IN:

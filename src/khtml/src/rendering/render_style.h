@@ -2564,7 +2564,8 @@ public:
 
     bool isDisplayReplacedType()
     {
-        return display() == INLINE_BLOCK ||/* display() == INLINE_BOX ||*/ display() == INLINE_TABLE;
+        return display() == INLINE_BLOCK || display() == INLINE_FLEX ||
+               /* display() == INLINE_BOX ||*/ display() == INLINE_TABLE;
     }
     bool isDisplayInlineType()
     {
@@ -2573,6 +2574,7 @@ public:
     bool isOriginalDisplayInlineType()
     {
         return originalDisplay() == INLINE || originalDisplay() == INLINE_BLOCK ||
+               originalDisplay() == INLINE_FLEX ||
                /*originalDisplay() == INLINE_BOX ||*/ originalDisplay() == INLINE_TABLE;
     }
 

@@ -241,6 +241,32 @@ def page2_checks(pixels, w, h):
     else:
         add("aspect-ratio box renders", False)
 
+    ifbox = main_cluster_bbox(pixels, w, h, (102, 68, 187), tol=40)
+    if ifbox:
+        x0, y0, x1, y1 = ifbox
+        add("inline-flex containers share one line",
+            180 < (x1 - x0) < 230 and 45 < (y1 - y0) < 80,
+            "(ifbox bbox w=%d h=%d)" % (x1 - x0, y1 - y0))
+    else:
+        add("inline-flex containers render", False)
+
+    ifrow = main_cluster_bbox(pixels, w, h, (0, 136, 187), tol=40)
+    if ifrow:
+        x0, y0, x1, y1 = ifrow
+        add("inline-flex lays children out in a row",
+            55 < (x1 - x0) < 90 and 20 < (y1 - y0) < 45,
+            "(if1 children bbox w=%d h=%d)" % (x1 - x0, y1 - y0))
+    else:
+        add("inline-flex children render", False)
+
+    ifone = main_cluster_bbox(pixels, w, h, (68, 187, 102), tol=40)
+    if ifone:
+        x0, y0, x1, y1 = ifone
+        add("second inline-flex renders inline", 20 < (x1 - x0) < 45 and 20 < (y1 - y0) < 45,
+            "(if2 child bbox w=%d h=%d)" % (x1 - x0, y1 - y0))
+    else:
+        add("second inline-flex renders", False)
+
     shrink = main_cluster_bbox(pixels, w, h, (51, 102, 255), tol=40)
     if shrink:
         x0, y0, x1, y1 = shrink
