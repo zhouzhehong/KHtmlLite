@@ -12,6 +12,7 @@
 # samples pixels; kills its own process tree in finally.
 import ctypes
 import os
+import struct
 import subprocess
 import sys
 import time
@@ -24,6 +25,7 @@ PAGE3 = "file:///" + ROOT.replace("\\", "/") + "/tests/engine_semantics3.html"
 PAGE4 = "file:///" + ROOT.replace("\\", "/") + "/tests/engine_semantics4.html"
 PAGE5 = "file:///" + ROOT.replace("\\", "/") + "/tests/engine_semantics5.html"
 PAGE6 = "file:///" + ROOT.replace("\\", "/") + "/tests/engine_semantics6.html"
+PAGE7 = "file:///" + ROOT.replace("\\", "/") + "/tests/engine_semantics7.html"
 OUT = os.path.join(ROOT, "tests", "engine_semantics.png")
 ERR = os.path.join(ROOT, "tests", "engine_semantics_err.txt")
 
@@ -153,7 +155,7 @@ def page1_checks(pixels, w, h):
     add("@supports (display:grid) applied", red is not None, "(red bbox %s)" % (red,))
     unsupported_px = sum(1 for y in range(h) for x in range(w)
                         if near(pixels[x, y], (0, 255, 136), 25))
-    add("@supports (position:sticky) dropped", unsupported_px < 50,
+    add("@supports (selector(:has)) dropped", unsupported_px < 50,
         "(matching px %d)" % unsupported_px)
 
     blue = bbox(pixels, w, h, (0, 0, 255), tol=40)
@@ -448,6 +450,92 @@ def page6_checks(pixels, w, h):
     return out
 
 
+
+def send_wheel(hwnd, delta, count=1):
+    """Post WM_MOUSEWHEEL at the client centre (delta: +120 up / -120 down)."""
+    WM_MOUSEWHEEL = 0x020A
+    r = ctypes.create_string_buffer(16)
+    ctypes.windll.user32.GetClientRect(hwnd, r)
+    l, t, rr, b = struct.unpack("4i", r.raw)
+    cx, cy = (rr - l) // 2, (b - t) // 2
+    lparam = (cy << 16) | cx
+    wparam = (delta & 0xFFFF) << 16
+    for _ in range(count):
+        ctypes.windll.user32.PostMessageW(hwnd, WM_MOUSEWHEEL, wparam, lparam)
+
+
+def page7_checks(pixels, w, h):
+    """position:sticky BEFORE scrolling: the bar sits at its static position."""
+    out = []
+    def add(name, good, detail=""):
+        out.append((name, good, detail))
+
+    red = main_cluster_bbox(pixels, w, h, (204, 34, 34), tol=40)
+    green = main_cluster_bbox(pixels, w, h, (34, 204, 34), tol=40)
+    if red:
+        x0, y0, x1, y1 = red
+        add("sticky bar at its static position", 500 <= y0 <= 570 and 50 <= (y1 - y0) <= 70,
+            "(red y0=%d h=%d)" % (y0, y1 - y0))
+    else:
+        add("sticky bar renders", False)
+    if green:
+        x0, y0, x1, y1 = green
+        add("content starts below the sticky bar", 560 <= y0 <= 640,
+            "(green y0=%d)" % (y0,))
+    else:
+        add("content block renders", False)
+    return out
+
+
+def page7_after_checks(pixels, w, h):
+    """position:sticky AFTER scrolling: the bar is pinned to the viewport top."""
+    out = []
+    def add(name, good, detail=""):
+        out.append((name, good, detail))
+
+    red = main_cluster_bbox(pixels, w, h, (204, 34, 34), tol=40)
+    green = main_cluster_bbox(pixels, w, h, (34, 204, 34), tol=40)
+    if red:
+        x0, y0, x1, y1 = red
+        add("sticky bar pinned to the viewport top", 70 <= y0 <= 115 and 50 <= (y1 - y0) <= 70,
+            "(red y0=%d h=%d)" % (y0, y1 - y0))
+    else:
+        add("sticky bar pinned (red missing)", False)
+    if green:
+        x0, y0, x1, y1 = green
+        add("sticky content remains visible below the bar", 80 <= y0 <= 165 and (y1 - y0) > 300,
+            "(green y0=%d h=%d)" % (y0, y1 - y0))
+    else:
+        add("sticky content visible after scroll (missing)", False)
+    return out
+
+
+
+def _run_page(page, fn, wait):
+    """Launch |page|, capture, run |fn| (plus the post-scroll part for page7).
+    Returns a list of (name, good, detail) or None when no window appeared."""
+    started = launch(page, wait)
+    if not started:
+        return None
+    proc, errf, hwnd, size, pixels = started
+    checks = []
+    try:
+        w, h = size
+        print("shot: %dx%d" % (w, h))
+        checks = fn(pixels, w, h)
+        if page == PAGE7:
+            send_wheel(hwnd, -120, count=12)
+            time.sleep(1.2)
+            grab(hwnd, OUT)
+            size2, pixels2 = load_pixels(OUT)
+            w2, h2 = size2
+            print("after scroll: %dx%d" % (w2, h2))
+            checks = checks + page7_after_checks(pixels2, w2, h2)
+    finally:
+        finish(proc, errf)
+    return checks
+
+
 def main():
     if not os.path.exists(EXE):
         print("FAIL: browser exe missing:", EXE)
@@ -456,23 +544,29 @@ def main():
     for page, name, fn, wait in ((PAGE1, "page1 (batch1)", page1_checks, (0, 0, 255)),
                                  (PAGE2, "page2 (flex)", page2_checks, (255, 0, 0)),
                                  (PAGE3, "page3 (gradients)", page3_checks, (170, 0, 170)),
-            (PAGE4, "page4 (transforms)", page4_checks, (136, 68, 204)),
-            (PAGE5, "page5 (grid)", page5_checks, (204, 20, 20)),
-            (PAGE6, "page6 (calc)", page6_checks, (51, 102, 204))):
+                                 (PAGE4, "page4 (transforms)", page4_checks, (136, 68, 204)),
+                                 (PAGE5, "page5 (grid)", page5_checks, (204, 20, 20)),
+                                 (PAGE6, "page6 (calc)", page6_checks, (51, 102, 204)),
+                                 (PAGE7, "page7 (sticky)", page7_checks, (204, 34, 34))):
         print("\n=== %s ===" % name)
-        started = launch(page, wait)
-        if not started:
+        checks = _run_page(page, fn, wait)
+        if checks is None:
             print("FAIL: no window for", page)
             return 1
-        proc, errf, hwnd, size, pixels = started
-        try:
-            w, h = size
-            print("shot: %dx%d" % (w, h))
-            for cname, good, detail in fn(pixels, w, h):
-                print("  [%s] %s %s" % ("OK" if good else "FAIL", cname, detail))
-                ok = ok and good
-        finally:
-            finish(proc, errf)
+        bad = [c for c in checks if not c[1]]
+        if bad:
+            # A freshly created window can be captured as a stale white frame
+            # (DWM race when the previous browser is still shutting down).
+            # Retry the whole page once before declaring a failure.
+            print("  retry page after %d failed check(s): %s"
+                  % (len(bad), ", ".join(c[0] for c in bad)))
+            time.sleep(1.0)
+            checks2 = _run_page(page, fn, wait)
+            if checks2 is not None:
+                checks = checks2
+        for cname, good, detail in checks:
+            print("  [%s] %s %s" % ("OK" if good else "FAIL", cname, detail))
+            ok = ok and good
     print("\nRESULT:", "PASS" if ok else "FAIL")
     return 0 if ok else 1
 

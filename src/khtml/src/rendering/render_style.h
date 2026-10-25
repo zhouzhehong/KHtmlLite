@@ -112,7 +112,7 @@ struct LengthBox {
 };
 
 enum EPosition {
-    PSTATIC, PRELATIVE, PABSOLUTE, PFIXED
+    PSTATIC, PRELATIVE, PABSOLUTE, PFIXED, PSTICKY
 };
 
 enum EFloat {
@@ -1175,7 +1175,7 @@ protected:
                 KDE_BF_ENUM(EOverflow) _overflowY : 4;
                 KDE_BF_ENUM(EVerticalAlign) _vertical_align : 4;
                 KDE_BF_ENUM(EClear) _clear : 2;
-                KDE_BF_ENUM(EPosition) _position : 2;
+                KDE_BF_ENUM(EPosition) _position : 3;
                 KDE_BF_ENUM(EFloat) _floating : 3;
                 KDE_BF_ENUM(ETableLayout) _table_layout : 1;
                 unsigned _flowAroundFloats : 1;
@@ -1193,7 +1193,7 @@ protected:
 
                 unsigned _inherited_noninherited : 1;
 
-                unsigned int unused : 10;
+                unsigned int unused : 9;
             } f;
             quint64 _niflags;
         };

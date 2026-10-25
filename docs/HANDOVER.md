@@ -840,6 +840,36 @@ INCONCLUSIVE、或退出码 0 但输出里出现判定形 FAIL 令牌，都算�
 - 过程中修复了**测试环境问题**：全量回归首跑时 `browser_click_probe` 失败（真实鼠标点击未送达页面），根因是用户前台被 Edge 占用、Windows 焦点保护使 `SetForegroundWindow` 返回 0，点击被前台窗口吞掉；已在探针中加入 `force_foreground()`（AttachThreadInput 到前台线程 + BringWindowToTop/SW_RESTORE，并轮询确认前台），重跑后点击探针稳定 PASS。
 - 调试记录：bison 表达式文法不支持 `+`/`-`（只有 `/`、`,`，负号靠一元负号），因此在样式表解析前把 `calc(A - B)` 重写为 `calc(A,-B)`（逗号分隔带符号项），再由 `parseCalcSpec()` 求和；height/width 的 applyProperty 各自有独立长度分支，已分别接入 calc 字符串解析；宿主原有的 calc 近似改写已移除（交给引擎）。
 
+## 5w. 引擎渲染能力第十二批（2026-10-25，`position: sticky`）
+
+### 1) 位置类型
+- `EPosition` 增加 `PSTICKY`；新值 id `sticky`=346（cssvalues.h + parser.cpp getValueID）；`position` 校验接受 sticky、applyProperty 映射到 PSTICKY。
+- 布局语义：sticky 元素**留在正常流**中（与 static 相同，不脱离文档流、不生成 positioned 图层）。
+
+### 2) 绘制期视口锚定
+- `RenderBlock::paint()` 在加上 `m_y` 之后：若 `position == PSTICKY` 且非根元素：
+  - 有 `top: <px>` 时：当 `文档y - scrollY < top`，把绘制 y 改为 `scrollY + top`（钉在视口顶部）；
+  - 否则有 `bottom: <px>` 时：当 `文档y > scrollY + viewportH - bottom - height`，把绘制 y 改为该值（钉在视口底部）。
+- 滚动后的收敛由既有渲染宿主机制保证：滚动帧会重置 tile 哈希并安排 250ms **deferred convergence**（invalidateFull + 重绘整个视口），因此 sticky 的锚定位置会在滚动后自动修复，不额外改 tile 协议。
+- 未实现（如实记录）：containing-block 底部约束（sticky 不会在父容器结束时停止吸附，会吸到页面末尾）、left/right 方向 sticky、百分比 inset、z-index 提升。
+
+### 3) @supports 与宿主
+- `@supports (position: sticky)` 现在返回 **true**；page1 的"未支持负向断言"改用 `@supports selector(:has(*))`（引擎 @supports 对 selector()/font-tech()/font-format() 判定为 false），验证 @supports 的 false 分支仍会丢弃整块。
+- 宿主移除 `position: sticky -> relative` 文本重写，交给引擎。
+
+### 4) 行为级验证
+- 新夹具 `tests/engine_semantics7.html`：300px 灰色 spacer + 40px 红色 sticky 条（`top:0`）+ 1200px 绿色内容块。
+- 探针 page7：滚动前两项断言（红条在静态位置 y≈537、绿内容在其下方 y≈597）；随后向窗口投递 12 个滚轮 notch，等待收敛帧后复抓，再断言（红条钉在视口顶部 y≈87、绿色内容仍可见且高度 >300）；七页合计 **38 项断言**。
+
+### 实测
+- 引擎探针 **38/38 PASS**：page7 四项全过——滚动前红条 y0=537 h=59、绿内容 y0=597；投递 12 个滚轮 notch 后红条钉在视口顶部 **y0=87 h=59**，绿内容仍可见（y0=147，紧贴 sticky 条下方，h=769）。
+- `tile_protocol_test` PASS；**全量回归 2026-10-25 15:00→15:46 `failed: none`**：14 项中 13 项 PASS（engine_semantics_probe 135.3s、bg_smoke 602.7s、scroll_smoke 602.4s、resize_probe 601.7s、tombstone_probe 623.4s、tile_protocol_test 154.5s）+ bing_ghost_check INCONCLUSIVE（本机 bing 无 #0078D4 蓝块，诚实结论）。
+- 调试记录（如实）：
+  1) PSTICKY 初版完全不生效——`NonInheritedFlags` 的 `_position` 位域只有 **2 bit**，PSTICKY(4) 被截断成 PSTATIC(0)；扩到 3 bit、`unused` 10→9 后生效（位域总和仍为 64）。
+  2) 钉住的 sticky 条又被后面的绿色内容块覆盖——普通兄弟在 sticky 之后绘制；`RenderBlock::paintObject()` 改为先画普通子元素、**最后画 sticky 子元素**，保证吸附条在上层。
+  3) 探针存在偶发"整页白帧"（上个浏览器关窗的 DWM 竞态；曾让 page3 渐变假失败）——main 循环改为整页重试一次，修复后稳定通过。
+  4) 未实现（如实）：containing-block 底部约束（sticky 不会在父容器结束处停止吸附）、left/right sticky、百分比 inset、z-index 提升（用绘制顺序代替）。
+
 ## 6. 正在/马上要做的
 A. ~~拆那 1.1s~~ **已完成**（字体枚举缓存 + 图标懒加载，构造 1.1s→~0.35s，TTFF 2.0→1.1s）。
    下一步同部位残账：渲染进程镜像加载+socket 连接 ~500ms（每次新标签都付），

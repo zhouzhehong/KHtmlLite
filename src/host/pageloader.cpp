@@ -362,11 +362,7 @@ static QString simplifyUnsupportedCss(const QString &text)
     // element keeps its block fallback), and @supports lets sites choose
     // their own fallback.
 
-    // position: sticky -> relative (layout stays valid, no scroll-pin)
-    out.replace(QRegularExpression(
-        QStringLiteral("position\\s*:\\s*sticky"),
-        QRegularExpression::CaseInsensitiveOption),
-        QStringLiteral("position:relative"));
+    // position:sticky is parsed and painted by the ENGINE now.
 
     // transform is parsed and painted by the ENGINE now (parseTransformSpec).
     // Properties KHTML has no pipeline for 鈥?remove the whole declaration.

@@ -3110,6 +3110,8 @@ void CSSStyleSelector::applyRule(int id, DOM::CSSValueImpl *value)
             p = PABSOLUTE; break;
         case CSS_VAL_FIXED:
             p = PFIXED; break;
+            case CSS_VAL_STICKY:
+                p = PSTICKY; break;
         default:
             return;
         }

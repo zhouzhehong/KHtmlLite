@@ -211,6 +211,7 @@ int DOM::getValueID(const char *tagStr, int len)
     if (len == 8 && !strncmp(tagStr, "flex-end", 8)) return 341;
     if (len == 4 && !strncmp(tagStr, "grid", 4)) return 344;
     if (len == 11 && !strncmp(tagStr, "inline-grid", 11)) return 345;
+    if (len == 6 && !strncmp(tagStr, "sticky", 6)) return 346;
     if (len == 13 && !strncmp(tagStr, "space-between", 13)) return 342;
     if (len == 12 && !strncmp(tagStr, "space-around", 12)) return 343;
     if (len == 7 && !strncmp(tagStr, "stretch", 7)) return 344;

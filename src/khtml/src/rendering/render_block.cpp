@@ -1860,6 +1860,27 @@ void RenderBlock::paint(PaintInfo &pI, int _tx, int _ty)
     _tx += m_x;
     _ty += m_y;
 
+    // position:sticky — pin the box to the viewport while the document is
+    // scrolled (top-only/bottom-only, px insets).  Containing-block clamping
+    // is not implemented; the element sticks for the whole page.
+    if (style() && style()->position() == PSTICKY && canvas() && canvas()->view()
+        && !isRoot()) {
+        const int scrollY = canvas()->view()->contentsY();
+        const int vpH = canvas()->view()->visibleHeight();
+        const Length &tl = style()->top();
+        const Length &bl = style()->bottom();
+        if (tl.isFixed()) {
+            const int t = tl.value();
+            if (_ty - scrollY < t)
+                _ty = scrollY + t;
+        } else if (bl.isFixed()) {
+            const int b = bl.value();
+            const int wantTop = scrollY + vpH - b - height();
+            if (_ty > wantTop)
+                _ty = wantTop;
+        }
+    }
+
     // check if we need to do anything at all...
     if (!isRoot() && !isInlineFlow() && !isRelPositioned() && !isPositioned()) {
         int h = m_overflowHeight;
@@ -1920,8 +1941,16 @@ void RenderBlock::paintObject(PaintInfo &pI, int _tx, int _ty, bool shouldPaintO
     if (childrenInline()) {
         paintLines(pI, scrolledX, scrolledY);
     } else {
+        // position:sticky children paint after their normal-flow siblings so
+        // the pinned bar stays above the content it scrolls over.
         for (RenderObject *child = firstChild(); child; child = child->nextSibling())
-            if (!child->layer() && !child->isFloating()) {
+            if (!child->layer() && !child->isFloating()
+                && !(child->style() && child->style()->position() == PSTICKY)) {
+                child->paint(pI, scrolledX, scrolledY);
+            }
+        for (RenderObject *child = firstChild(); child; child = child->nextSibling())
+            if (!child->layer() && !child->isFloating()
+                && child->style() && child->style()->position() == PSTICKY) {
                 child->paint(pI, scrolledX, scrolledY);
             }
     }

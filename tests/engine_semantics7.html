@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>engine semantics 7 - sticky</title>
+<style>
+  html, body { margin: 0; padding: 0; }
+  /* 300px of spacer, then the sticky bar, then a tall content block.
+     Scrolling past 300px must pin the red bar to the viewport top. */
+  #spacer { height: 300px; background-color: #eeeeee; }
+  #sticky { position: sticky; top: 0; height: 40px; background-color: #cc2222; }
+  #content { height: 1200px; background-color: #22cc22; }
+</style></head>
+<body>
+  <div id="spacer"></div>
+  <div id="sticky"></div>
+  <div id="content"></div>
+</body></html>

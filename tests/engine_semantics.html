@@ -5,8 +5,8 @@
   @supports (display: flex) { #sup_true { color: #00ff00; } }
   /* @supports true since the grid batch: must apply (red text). */
   @supports (display: grid) { #sup_grid { color: #ff0000; } }
-  /* @supports false: sticky is still unsupported -> block dropped. */
-  @supports (position: sticky) { #sup_sticky { background-color: #00ff88; width: 40px; height: 20px; } }
+  /* @supports false: selector(:has(*)) is unsupported -> block dropped. */
+  @supports selector(:has(*)) { #sup_sticky { background-color: #00ff88; width: 40px; height: 20px; } }
   /* -webkit- prefixed property must reach the engine (border-radius). */
   #prefixed { -webkit-border-radius: 12px; background-color: #0000ff;
               width: 200px; height: 40px; color: #ffffff; }

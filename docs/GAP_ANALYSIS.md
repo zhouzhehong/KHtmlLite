@@ -520,6 +520,15 @@ tests/renderer_solo.py（无浏览器直驱渲染进程+帧颜色断言）。
        百分比基准判断；calcWidthUsing/外边距经 Length::width 自动生效；
     c) 探针新增 page6 三项断言（六页合计 34 项）；未支持：calc 内乘除/嵌套/
        em/vh 等单位、left/top 的 calc；剩余：sticky、transition/animation。
+ 21. **2026-10-25 引擎渲染能力第十二批**（详见 HANDOVER §5w）：
+    a) `position: sticky` 引擎化：EPosition 增加 PSTICKY、新值 sticky=346、
+       校验/应用映射；布局上仍在正常流（非 positioned）；
+    b) 绘制期锚定：RenderBlock::paint 用 view->contentsY() 把 sticky 元素钉在
+       视口 top/bottom inset；滚动收敛依赖既有 deferred convergence 帧（无需
+       改 tile 协议）；@supports sticky 改为 true，宿主删除 sticky→relative 重写；
+    c) 新夹具 page7（spacer+sticky 条+长内容）+ 探针滚动前后共 4 项断言，
+       七页合计 38 项；未实现：containing-block 底部约束、left/right sticky、
+       百分比 inset、z-index 提升；剩余：transition/animation。
 
 ---
 

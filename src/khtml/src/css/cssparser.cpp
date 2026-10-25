@@ -596,7 +596,8 @@ bool CSSParser::parseValue(int propId, bool important)
         if (id == CSS_VAL_STATIC ||
                 id == CSS_VAL_RELATIVE ||
                 id == CSS_VAL_ABSOLUTE ||
-                id == CSS_VAL_FIXED) {
+                id == CSS_VAL_FIXED ||
+                id == CSS_VAL_STICKY) {
             valid_primitive = true;
         }
         break;

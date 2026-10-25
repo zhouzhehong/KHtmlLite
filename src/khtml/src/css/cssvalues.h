@@ -354,6 +354,7 @@ DOM::DOMString getValueName(unsigned short id) KHTML_NO_EXPORT;
 #define CSS_VAL_SPACE_AROUND 343
 #define CSS_VAL_GRID 344
 #define CSS_VAL_INLINE_GRID 345
+#define CSS_VAL_STICKY 346
 #define CSS_VAL_STRETCH 344
 #define CSS_VAL_WRAP 345
 
