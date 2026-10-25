@@ -13,6 +13,9 @@
 import ctypes
 import os
 import struct
+import http.server
+import socketserver
+import threading
 import subprocess
 import sys
 import time
@@ -26,6 +29,8 @@ PAGE4 = "file:///" + ROOT.replace("\\", "/") + "/tests/engine_semantics4.html"
 PAGE5 = "file:///" + ROOT.replace("\\", "/") + "/tests/engine_semantics5.html"
 PAGE6 = "file:///" + ROOT.replace("\\", "/") + "/tests/engine_semantics6.html"
 PAGE7 = "file:///" + ROOT.replace("\\", "/") + "/tests/engine_semantics7.html"
+PORT8 = 8234
+PAGE8 = "file:///" + ROOT.replace("\\", "/") + "/tests/engine_semantics8.html"
 OUT = os.path.join(ROOT, "tests", "engine_semantics.png")
 ERR = os.path.join(ROOT, "tests", "engine_semantics_err.txt")
 
@@ -531,9 +536,69 @@ def _run_page(page, fn, wait):
             w2, h2 = size2
             print("after scroll: %dx%d" % (w2, h2))
             checks = checks + page7_after_checks(pixels2, w2, h2)
+        if page == PAGE8:
+            time.sleep(0.55)
+            grab(hwnd, OUT)
+            size2, pixels2 = load_pixels(OUT)
+            w2, h2 = size2
+            checks = checks + page8_after_checks(pixels, w, h, pixels2)
     finally:
         finish(proc, errf)
     return checks
+
+
+
+def page8_checks(pixels, w, h):
+    """CSS animations: the three boxes must be painted at their static spots."""
+    out = []
+    def add(name, good, detail=""):
+        out.append((name, good, detail))
+    for label, x, y in (("fade", 130, 177), ("tint", 731, 177)):
+        p = pixels[x, y]
+        add("%s box rendered" % label, p != (255, 255, 255), "(%s @%d,%d)" % (p, x, y))
+    # The slide box moves horizontally: look for its orange fill in the page.
+    orange = 0
+    for y in range(100, 400):
+        for x in range(0, w):
+            if near(pixels[x, y], (204, 136, 34), 40):
+                orange += 1
+    add("slide box rendered", orange > 500, "(orange px %d)" % orange)
+    return out
+
+
+def page8_after_checks(pixels, w, h, pixels2):
+    """After ~0.55s the animations must have changed opacity/transform/colour."""
+    out = []
+    def add(name, good, detail=""):
+        out.append((name, good, detail))
+
+    def dist(a, b):
+        return abs(a[0] - b[0]) + abs(a[1] - b[1]) + abs(a[2] - b[2])
+
+    def orange_x0(px):
+        # Chrome pixels can share the orange hue: restrict to the page area.
+        xs = []
+        for y in range(100, 400):
+            for x in range(0, w):
+                p = px[x, y]
+                if near(p, (204, 136, 34), 40):
+                    xs.append(x)
+        return min(xs) if xs else None
+
+    f1 = pixels[130, 177]
+    f2 = pixels2[130, 177]
+    add("opacity animation changes pixels", dist(f1, f2) > 12, "(%s -> %s)" % (f1, f2))
+
+    o1 = orange_x0(pixels)
+    o2 = orange_x0(pixels2)
+    # Static x0 is 341; an alternate translate animation must move it right.
+    moved = (o1 is not None and o1 > 355) or (o2 is not None and o2 > 355)
+    add("transform animation moves the box", moved, "(x0 %s then %s, static 341)" % (o1, o2))
+
+    t1 = pixels[731, 177]
+    t2 = pixels2[731, 177]
+    add("background-color animation changes pixels", dist(t1, t2) > 20, "(%s -> %s)" % (t1, t2))
+    return out
 
 
 def main():
@@ -541,13 +606,17 @@ def main():
         print("FAIL: browser exe missing:", EXE)
         return 1
     ok = True
+    httpd = socketserver.TCPServer(("127.0.0.1", PORT8), http.server.SimpleHTTPRequestHandler)
+    os.chdir(os.path.join(ROOT, "tests"))
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
     for page, name, fn, wait in ((PAGE1, "page1 (batch1)", page1_checks, (0, 0, 255)),
                                  (PAGE2, "page2 (flex)", page2_checks, (255, 0, 0)),
                                  (PAGE3, "page3 (gradients)", page3_checks, (170, 0, 170)),
                                  (PAGE4, "page4 (transforms)", page4_checks, (136, 68, 204)),
                                  (PAGE5, "page5 (grid)", page5_checks, (204, 20, 20)),
                                  (PAGE6, "page6 (calc)", page6_checks, (51, 102, 204)),
-                                 (PAGE7, "page7 (sticky)", page7_checks, (204, 34, 34))):
+                                 (PAGE7, "page7 (sticky)", page7_checks, (204, 34, 34)),
+                                 (PAGE8, "page8 (animations)", page8_checks, (51, 170, 51))):
         print("\n=== %s ===" % name)
         checks = _run_page(page, fn, wait)
         if checks is None:
@@ -567,6 +636,7 @@ def main():
         for cname, good, detail in checks:
             print("  [%s] %s %s" % ("OK" if good else "FAIL", cname, detail))
             ok = ok and good
+    httpd.shutdown()
     print("\nRESULT:", "PASS" if ok else "FAIL")
     return 0 if ok else 1
 

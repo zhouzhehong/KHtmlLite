@@ -602,6 +602,14 @@ bool CSSParser::parseValue(int propId, bool important)
         }
         break;
 
+    case CSS_PROP_ANIMATION: {          // <name> <duration> <delay> ... (multi-token)
+        if (valueList->size() == 1 && value->id == CSS_VAL_NONE) {
+            addProperty(propId, new CSSPrimitiveValueImpl(DOMString(), CSSPrimitiveValue::CSS_STRING), important);
+            return true;
+        }
+        return parseAnimationSpec(important);
+    }
+
     case CSS_PROP_PAGE_BREAK_AFTER:     // auto | always | avoid | left | right | inherit
     case CSS_PROP_PAGE_BREAK_BEFORE:    // auto | always | avoid | left | right | inherit
         if (id == CSS_VAL_AUTO ||
@@ -2419,6 +2427,93 @@ bool CSSParser::parseFlexShorthand(bool important)
     }
     return any;
 }
+
+bool CSSParser::parseAnimationSpec(bool important)
+{
+    // animation: <name> <duration>s <delay>s <iteration-count> <direction>
+    //            <timing-function> <fill-mode>
+    // Stored as "name;durMs;delayMs;iter;direction;timing;fill".  This is the
+    // minimal data the host's JS animation polyfill reads back through
+    // getComputedStyle(); the ENGINE itself does not run animations.
+    if (!valueList || !valueList->current())
+        return false;
+    QString name;
+    double duration = 0.0;
+    double delay = 0.0;
+    bool haveDuration = false;
+    QString iterations = QStringLiteral("1");
+    QString direction = QStringLiteral("normal");
+    QString timing = QStringLiteral("ease");
+    QString fill = QStringLiteral("none");
+    for (Value *v = valueList->current(); v; v = valueList->next()) {
+        if (v->unit == Value::Operator)
+            continue;
+        if (v->unit == CSSPrimitiveValue::CSS_S || v->unit == CSSPrimitiveValue::CSS_MS) {
+            const double sec = (v->unit == CSSPrimitiveValue::CSS_MS) ? v->fValue / 1000.0 : v->fValue;
+            if (!haveDuration) {
+                duration = sec;
+                haveDuration = true;
+            } else {
+                delay = sec;
+            }
+            continue;
+        }
+        if (v->unit == CSSPrimitiveValue::CSS_NUMBER) {
+            iterations = QString::number(v->fValue);
+            continue;
+        }
+        if (v->unit == CSSPrimitiveValue::CSS_IDENT) {
+            const QString tok = qString(v->string).toLower();
+            if (tok == QLatin1String("infinite")) { iterations = QStringLiteral("infinite"); continue; }
+            if (tok == QLatin1String("normal") || tok == QLatin1String("reverse")
+                || tok == QLatin1String("alternate") || tok == QLatin1String("alternate-reverse")) {
+                direction = tok;
+                continue;
+            }
+            if (tok == QLatin1String("linear") || tok == QLatin1String("ease")
+                || tok == QLatin1String("ease-in") || tok == QLatin1String("ease-out")
+                || tok == QLatin1String("ease-in-out")) {
+                timing = tok;
+                continue;
+            }
+            if (tok == QLatin1String("forwards") || tok == QLatin1String("backwards")
+                || tok == QLatin1String("both")) {
+                fill = tok;
+                continue;
+            }
+            if (tok == QLatin1String("none") || tok == QLatin1String("paused")
+                || tok == QLatin1String("running")) {
+                continue;
+            }
+            if (name.isEmpty()) {
+                name = tok;
+                continue;
+            }
+            return false;
+        }
+        return false;
+    }
+    if (name.isEmpty())
+        return false;
+    QString spec = name;
+    spec += QLatin1Char(';');
+    spec += QString::number(qRound(duration * 1000.0));
+    spec += QLatin1Char(';');
+    spec += QString::number(qRound(delay * 1000.0));
+    spec += QLatin1Char(';');
+    spec += iterations;
+    spec += QLatin1Char(';');
+    spec += direction;
+    spec += QLatin1Char(';');
+    spec += timing;
+    spec += QLatin1Char(';');
+    spec += fill;
+    addProperty(CSS_PROP_ANIMATION,
+                new CSSPrimitiveValueImpl(DOMString(spec), CSSPrimitiveValue::CSS_STRING),
+                important);
+    return true;
+}
+
 
 bool CSSParser::parseAspectRatio(bool important)
 {

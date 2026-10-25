@@ -338,6 +338,12 @@ public:
      */
     SmoothScrollingMode smoothScrollingMode() const;
 
+    /**
+     * True while at least one rendered element carries a CSS animation spec.
+     * The renderer host polls this to drive the animation frame timer.
+     */
+    bool hasCssAnimations() const;
+
 public Q_SLOTS:
     /**
      * Resize the contents area
@@ -426,6 +432,7 @@ private:
     void unscheduleRelayout();
 
     bool hasLayoutPending();
+
 
     void scheduleRepaint(int x, int y, int w, int h, bool asap = false);
     void unscheduleRepaint();

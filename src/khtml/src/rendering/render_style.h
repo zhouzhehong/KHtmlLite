@@ -934,6 +934,7 @@ public:
     float opacity;         // Whether or not we're transparent.
     QString transform;     // CSS transform spec (engine-painted).
     QString gridTemplateColumns; // grid-template-columns spec ("px:100,fr:1,...")
+    QString animation;    // CSS animation shorthand spec ("name;durMs;delayMs;iter;dir;timing;fill")
     DataRef<StyleFlexibleBoxData> flexibleBox; // Flexible box properties
     DataRef<StyleMarqueeData> marquee; // Marquee properties
     DataRef<BorderRadiusData> borderRadius;
@@ -1876,6 +1877,17 @@ public:
         }
     }
 
+    // CSS animation shorthand spec, built by CSSParser::parseAnimationSpec().
+    QString animation() const
+    {
+        return css3NonInheritedData->animation;
+    }
+    void setAnimation(const QString &s)
+    {
+        if (css3NonInheritedData->animation != s) {
+            css3NonInheritedData.access()->animation = s;
+        }
+    }
     // --- minimal flexbox (RenderFlexBox) ---
     int flexDirection() const
     {

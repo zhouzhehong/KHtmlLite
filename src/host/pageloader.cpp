@@ -377,22 +377,11 @@ static QString simplifyUnsupportedCss(const QString &text)
     // gracefully.  They are deliberately NOT stripped here any more.
 
     const QStringList props = {
-        QStringLiteral("transform"), QStringLiteral("backdrop-filter"), QStringLiteral("filter"), QStringLiteral("animation"), QStringLiteral("animation-name"),
-        QStringLiteral("animation-duration"), QStringLiteral("animation-timing-function"),
-        QStringLiteral("animation-delay"), QStringLiteral("animation-iteration-count"),
-        QStringLiteral("animation-direction"), QStringLiteral("animation-fill-mode"),
-        QStringLiteral("animation-play-state"), QStringLiteral("transition"), QStringLiteral("transition-property"),
+        QStringLiteral("backdrop-filter"), QStringLiteral("filter"),
+        QStringLiteral("transition"), QStringLiteral("transition-property"),
         QStringLiteral("transition-duration"), QStringLiteral("transition-timing-function"),
-        QStringLiteral("transition-delay"), QStringLiteral("grid"), QStringLiteral("grid-template"),
-        QStringLiteral("grid-template-columns"), QStringLiteral("grid-template-rows"),
-        QStringLiteral("grid-template-areas"), QStringLiteral("grid-area"),
-        QStringLiteral("grid-column"), QStringLiteral("grid-row"),
-        QStringLiteral("grid-auto-flow"), QStringLiteral("grid-auto-columns"),
-        QStringLiteral("grid-auto-rows"), QStringLiteral("place-items"),
-        QStringLiteral("place-content"), QStringLiteral("place-self"),
-        QStringLiteral("aspect-ratio"), QStringLiteral("clip-path"),
-        QStringLiteral("mask"),
-        QStringLiteral("mask-image"), QStringLiteral("will-change"),
+        QStringLiteral("transition-delay"), QStringLiteral("clip-path"),
+        QStringLiteral("mask"), QStringLiteral("mask-image"), QStringLiteral("will-change"),
         QStringLiteral("contain"), QStringLiteral("scroll-behavior"),
         QStringLiteral("backface-visibility"), QStringLiteral("perspective"),
         QStringLiteral("transform-style"), QStringLiteral("object-fit"),
@@ -418,11 +407,6 @@ static QString simplifyUnsupportedCss(const QString &text)
         QStringLiteral("column-width"), QStringLiteral("columns"),
         QStringLiteral("mix-blend-mode"), QStringLiteral("isolation"),
         QStringLiteral("shape-outside"), QStringLiteral("shape-margin"),
-        QStringLiteral("accent-color"), QStringLiteral("color-scheme"),
-        QStringLiteral("forced-color-adjust"),
-        QStringLiteral("border-image"), QStringLiteral("border-image-source"),
-        QStringLiteral("border-image-slice"), QStringLiteral("border-image-width"),
-        QStringLiteral("border-image-outset"), QStringLiteral("border-image-repeat")
     };
     for (const QString &p : props) {
         const QRegularExpression re(
@@ -432,10 +416,7 @@ static QString simplifyUnsupportedCss(const QString &text)
         out.replace(re, QStringLiteral(";"));
     }
 
-    // Remove @keyframes and @-webkit-keyframes blocks entirely.
-    int pos = 0;
-    while ((pos = out.indexOf(QRegularExpression(QStringLiteral("@-?[a-z]*keyframes")), pos)) >= 0)
-        out = removeAtBlock(out, pos);
+    // @keyframes are parsed and run by the ENGINE now (css_animations.h).
 
     // @supports blocks are now EVALUATED by the engine
     // (CSSStyleSheetImpl::parseString expands true conditions and drops false
@@ -1273,49 +1254,9 @@ void PageLoader::rewriteAndSave()
     // engine's own CSS and their own stylesheets; no page gets injected
     // styling.  See docs/HANDOVER.md "去特调" for the removal record.)
 
-    // Collect @keyframes from cached stylesheets + inline <style> blocks,
-    // then inject the CSS animation polyfill (driven by requestAnimationFrame).
-    QString allKeyframes = QStringLiteral("{");
-    bool firstKf = true;
-    for (auto it = m_cssRaw.begin(); it != m_cssRaw.end(); ++it) {
-        const QString kfJs = extractKeyframesJs(QString::fromUtf8(it.value()));
-        if (kfJs != QStringLiteral("{}")) {
-            if (!firstKf) allKeyframes += QStringLiteral(",");
-            allKeyframes += kfJs.mid(1, kfJs.length() - 2);
-            firstKf = false;
-        }
-    }
-    const QRegularExpression reStyleKf(QStringLiteral("<style[^>]*>(.*?)</style>"),
-        QRegularExpression::CaseInsensitiveOption | QRegularExpression::DotMatchesEverythingOption);
-    auto sit = reStyleKf.globalMatch(html);
-    while (sit.hasNext()) {
-        const QRegularExpressionMatch sm = sit.next();
-        const QString kfJs = extractKeyframesJs(sm.captured(1));
-        if (kfJs != QStringLiteral("{}")) {
-            if (!firstKf) allKeyframes += QStringLiteral(",");
-            allKeyframes += kfJs.mid(1, kfJs.length() - 2);
-            firstKf = false;
-        }
-    }
-    allKeyframes += QStringLiteral("}");
-    // Only inject when there is actual keyframe data AND it is small enough
-    // for the engine. Empty "{}" means no animations were found — skip
-    // injection entirely so the polyfill does not scan getComputedStyle
-    // on every element.
-    if (allKeyframes.size() > 3 && allKeyframes.size() < 65536) {
-        const QString kfScript = QStringLiteral("<script>window.__cssKeyframes=") + allKeyframes +
-            QStringLiteral(";</script>\n<script>") + QString::fromLatin1(kCssAnimPolyfill) + QStringLiteral("</script>");
-        int kfInsert = html.indexOf(QStringLiteral("</script>"), headPos >= 0 ? headPos : 0);
-        if (kfInsert >= 0) {
-            html.insert(kfInsert + 9, kfScript);
-        } else {
-            html.append(kfScript);
-        }
-    }
-
-
-
-
+    // CSS @keyframes animations are engine-native now: the host keeps the
+    // animation properties and @keyframes in the served CSS; the engine
+    // extracts/registers them (css_animations.h).  No JS polyfill is injected.
     QFile f(m_cacheDir + QStringLiteral("/index.html"));
     if (f.open(QIODevice::WriteOnly)) {
         QTextStream ts(&f);
@@ -1475,6 +1416,10 @@ void PageLoader::deliverInitialDocument()
     PERF_MARK("initial_document_delivered");
     const QUrl local = QUrl::fromLocalFile(m_cacheDir + QStringLiteral("/index.html"));
     emit finished(local, m_finalUrl, QString());
+    // No subresources were pending: run the full rewrite now so the
+    // renderer gets the polyfilled/CSS-simplified copy (refreshed()).
+    if (m_pending == 0 && !m_timedOut)
+        QTimer::singleShot(0, this, [this]() { finalizeSubresources(); });
 }
 
 // Called as subresources finish.  Bookkeeping (cache write of the resource)
@@ -1489,10 +1434,17 @@ void PageLoader::deliverInitialDocument()
 void PageLoader::finalizeSubresources()
 {
     if (m_failed || m_rewritten) return;
-    if (m_criticalPending > 0 && !m_timedOut) return;
-    if (m_pending > 0 && !m_timedOut) return;   // wait for images too
-    m_timeout->stop();
-    m_rewritten = true;
+    if (m_pending > 0 && !m_timedOut) {
+        // Fast pages deliver the initial document before any subresource has
+        // settled; without this retry the final rewrite (polyfill injection,
+        // CSS simplification) would never run for them.
+        QTimer::singleShot(100, this, [this]() { finalizeSubresources(); });
+        return;
+    }
+    if (m_criticalPending > 0 && !m_timedOut) {
+        QTimer::singleShot(100, this, [this]() { finalizeSubresources(); });
+        return;
+    }
     PERF_MARK("rewrite_save_final_begin");
     rewriteAndSave();
     PERF_MARK("rewrite_save_final_done");

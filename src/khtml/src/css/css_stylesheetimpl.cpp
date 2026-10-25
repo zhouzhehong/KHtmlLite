@@ -25,6 +25,7 @@
 //#define CSS_STYLESHEET_DEBUG
 
 #include "css_stylesheetimpl.h"
+#include "css_animations.h"
 #include "css_ruleimpl.h"
 #include "css_valueimpl.h"
 #include "cssparser.h"
@@ -658,6 +659,10 @@ bool CSSStyleSheetImpl::parseString(const DOMString &string, bool strict)
 
     strictParsing = strict;
     CSSParser p(strict);
+    // Engine-native @keyframes: the bison grammar has no at-rule for
+    // them; extract/register the steps before parsing the rest.
+    css = khtmlExtractAndRegisterKeyframes(css);
+
     p.parseSheet(this, DOMString(css));
     return true;
 }

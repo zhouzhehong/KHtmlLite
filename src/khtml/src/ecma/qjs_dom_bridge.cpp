@@ -27,6 +27,8 @@
 #include <dom/html_document.h>
 #include <dom/html_element.h>
 #include <dom/css_value.h>
+#include <xml/dom_elementimpl.h>
+#include <rendering/render_style.h>
 #include <dom/dom_string.h>
 #include <xml/dom2_eventsimpl.h>
 #include <xml/dom_nodeimpl.h>
@@ -551,6 +553,7 @@ static const char *const kStyleProps[] = {
     "transform", "transition", "flex", "flexDirection", "justifyContent",
     "alignItems", "flexWrap", "gap", "whiteSpace", "textDecoration",
     "float", "verticalAlign", "minWidth", "maxWidth", "minHeight", "maxHeight",
+    "backgroundColor", "borderColor", "outlineColor",
 };
 
 static ::JSValue styleGetProp(::JSContext *ctx, ::JSValueConst this_val, int magic)
@@ -624,6 +627,164 @@ static ::JSValue styleGetPropertyValueFn(::JSContext *ctx, ::JSValueConst this_v
     if (el.isNull()) return jsStr(ctx, QString());
     CSSStyleDeclaration style = el.style();
     return jsStr(ctx, dstr(style.getPropertyValue(mk(jsValStr(ctx, argv[0])))));
+}
+
+
+// ---------------------------------------------------------------------------
+// getComputedStyle(): minimal computed-style view.  The animation-* names are
+// real (parsed from the engine's animation shorthand spec); everything else
+// falls back to the inline style value.  The host CSS animation polyfill reads
+// exactly these names plus document.getElementsByTagName("*").
+// ---------------------------------------------------------------------------
+static const char *const kCompProps[] = {
+    "animationName", "animationDuration", "animationDelay",
+    "animationIterationCount", "animationDirection",
+    "animationTimingFunction", "animationFillMode",
+};
+
+static ::JSClassID compClassId;
+
+struct CompWrap {
+    Node node;
+};
+
+static ::JSClassDef compClassDef = {
+    "KHTMLComputedStyle",
+    [](JSRuntime *, ::JSValue val) {
+        CompWrap *w = static_cast<CompWrap *>(JS_GetOpaque(val, compClassId));
+        delete w;
+    },
+};
+
+static CompWrap *unwrapComp(::JSContext *ctx, ::JSValueConst v)
+{
+    if (!JS_IsObject(v)) {
+        return nullptr;
+    }
+    return static_cast<CompWrap *>(JS_GetOpaque(v, compClassId));
+}
+
+static ::JSValue wrapComputedStyle(::JSContext *ctx, const Node &n)
+{
+    ::JSValue proto = JS_GetClassProto(ctx, compClassId);
+    ::JSValue obj = JS_NewObjectProtoClass(ctx, proto, compClassId);
+    JS_FreeValue(ctx, proto);
+    CompWrap *w = new CompWrap;
+    w->node = n;
+    JS_SetOpaque(obj, w);
+    return obj;
+}
+
+static QStringList animationSpecFields(const Node &n)
+{
+    Element el(n);
+    if (el.isNull()) {
+        return QStringList();
+    }
+    NodeImpl *ni = el.handle();
+    if (!ni || ni->nodeType() != Node::ELEMENT_NODE) {
+        return QStringList();
+    }
+    ElementImpl *ei = static_cast<ElementImpl *>(ni);
+    khtml::RenderStyle *rs = ei->computedStyle();
+    if (!rs) {
+        return QStringList();
+    }
+    const QString spec = rs->animation();
+    if (spec.isEmpty()) {
+        return QStringList();
+    }
+    return spec.split(QLatin1Char(';'));
+}
+
+static QString compPropValue(const QStringList &f, int magic)
+{
+    if (f.size() < 7) {
+        return QString();
+    }
+    switch (magic) {
+    case 0: return f.at(0);                                            // name
+    case 1: return QString::number(f.at(1).toDouble() / 1000.0) + QLatin1Char('s');
+    case 2: return QString::number(f.at(2).toDouble() / 1000.0) + QLatin1Char('s');
+    case 3: return f.at(3);                                            // count / infinite
+    case 4: return f.at(4);                                            // direction
+    case 5: return f.at(5);                                            // timing
+    case 6: return f.at(6);                                            // fill
+    }
+    return QString();
+}
+
+static ::JSValue compGetProp(::JSContext *ctx, ::JSValueConst this_val, int magic)
+{
+    CompWrap *w = unwrapComp(ctx, this_val);
+    if (!w || magic < 0 || magic >= (int)_countof(kCompProps)) {
+        return JS_UNDEFINED;
+    }
+    return jsStr(ctx, compPropValue(animationSpecFields(w->node), magic));
+}
+
+static ::JSValue compGetPropertyValueFn(::JSContext *ctx, ::JSValueConst this_val,
+                                        int argc, ::JSValueConst *argv)
+{
+    CompWrap *w = unwrapComp(ctx, this_val);
+    if (!w) {
+        return jsStr(ctx, QString());
+    }
+    const QString name = jsValStr(ctx, argv[0]).toLower();
+    static const char *const kKebab[] = {
+        "animation-name", "animation-duration", "animation-delay",
+        "animation-iteration-count", "animation-direction",
+        "animation-timing-function", "animation-fill-mode",
+    };
+    const QStringList f = animationSpecFields(w->node);
+    for (int i = 0; i < (int)_countof(kKebab); ++i) {
+        if (name == QLatin1String(kKebab[i])) {
+            return jsStr(ctx, compPropValue(f, i));
+        }
+    }
+    Element el(w->node);
+    if (el.isNull()) {
+        return jsStr(ctx, QString());
+    }
+    return jsStr(ctx, dstr(el.style().getPropertyValue(mk(name))));
+}
+
+static ::JSValue docGetComputedStyle(::JSContext *ctx, ::JSValueConst this_val,
+                                     int argc, ::JSValueConst *argv)
+{
+    NodeWrap *w = unwrapNode(ctx, argv[0]);
+    if (!w) {
+        return JS_NULL;
+    }
+    return wrapComputedStyle(ctx, w->node);
+}
+
+static void collectElements(const Node &parent, QVector<Node> &out)
+{
+    for (Node c = parent.firstChild(); !c.isNull(); c = c.nextSibling()) {
+        if (c.nodeType() == Node::ELEMENT_NODE) {
+            out.append(c);
+        }
+        collectElements(c, out);
+    }
+}
+
+static ::JSValue docGetElementsByTagName(::JSContext *ctx, ::JSValueConst this_val,
+                                         int argc, ::JSValueConst *argv)
+{
+    NodeWrap *w = unwrapNode(ctx, this_val);
+    if (!w) {
+        return JS_NULL;
+    }
+    Document doc(w->node);
+    QVector<Node> found;
+    collectElements(doc, found);
+    ::JSValue arr = JS_NewArray(ctx);
+    uint32_t i = 0;
+    for (const Node &n : found) {
+        JS_SetPropertyUint32(ctx, arr, i++, wrapNode(ctx, n));
+    }
+    return arr;
 }
 
 static qint64 qjsTraceMs()
@@ -717,6 +878,7 @@ static ::JSValue docGetProp(::JSContext *ctx, ::JSValueConst this_val, int magic
     case 0: return wrapNode(ctx, doc.documentElement());   // documentElement
     case 1: return wrapNode(ctx, doc.body());              // body
     case 2: return jsStr(ctx, dstr(doc.title()));          // title
+    case 3: return jsStr(ctx, QStringLiteral("complete"));  // readyState
     }
     return JS_UNDEFINED;
 }
@@ -1193,9 +1355,12 @@ struct QJsDomBridge::Impl
             defFunc("getElementById", docGetElementById, 1, proto);
             defFunc("querySelector", docQuerySelector, 1, proto);
             defFunc("createElement", docCreateElement, 1, proto);
+        defFunc("getComputedStyle", docGetComputedStyle, 1, proto);
+        defFunc("getElementsByTagName", docGetElementsByTagName, 1, proto);
             defCgetset("documentElement", docGetProp, nullptr, 0, proto);
             defCgetset("body", docGetProp, nullptr, 1, proto);
             defCgetset("title", docGetProp, docSetProp, 2, proto);
+        defCgetset("readyState", docGetProp, nullptr, 3, proto);
         }
         // JS_SetClassProto consumes proto (JSValue, not JSValueConst).
         JS_SetClassProto(ctx, nodeClassId, proto);
@@ -1214,6 +1379,14 @@ struct QJsDomBridge::Impl
         }
         JS_SetClassProto(ctx, styleClassId, sproto);
         qjslog("bp: styleproto");
+        JS_NewClassID(&compClassId);
+        JS_NewClass(rt, compClassId, &compClassDef);
+        ::JSValue cproto = JS_NewObject(ctx);
+        defFunc("getPropertyValue", compGetPropertyValueFn, 1, cproto);
+        for (size_t i = 0; i < _countof(kCompProps); ++i) {
+            defCgetset(kCompProps[i], compGetProp, nullptr, (int)i, cproto);
+        }
+        JS_SetClassProto(ctx, compClassId, cproto);
     }
 
     Impl()

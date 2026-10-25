@@ -1,0 +1,12 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>engine semantics 8 - css animations</title>
+<style>
+  html, body { margin: 0; padding: 0; background: #ffffff; }
+  @keyframes fade { from { opacity: 1 } to { opacity: 0.25 } }
+  @keyframes slide { from { transform: translateX(0px) } to { transform: translateX(80px) } }
+  @keyframes tint { from { background-color: #cc2222 } to { background-color: #2222cc } }
+  #fade { position: absolute; left: 20px; top: 20px; width: 120px; height: 80px; background-color: #33aa33; animation: fade 1s infinite alternate; }
+  #slide { position: absolute; left: 220px; top: 20px; width: 80px; height: 80px; background-color: #cc8822; animation: slide 1s infinite alternate; }
+  #tint { position: absolute; left: 420px; top: 20px; width: 120px; height: 80px; background-color: #cc2222; animation: tint 1s infinite alternate; }
+</style></head>
+<body><div id="fade"></div><div id="slide"></div><div id="tint"></div></body></html>

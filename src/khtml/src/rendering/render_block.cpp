@@ -33,8 +33,10 @@
 //#define PAGE_DEBUG
 
 #include "render_block.h"
+#include "../css/css_animations.h"
 #include <QPainter>
 #include <QtMath>
+#include <stdio.h>
 
 #include "khtml_debug.h"
 #include <limits.h>
@@ -1897,10 +1899,25 @@ void RenderBlock::paint(PaintInfo &pI, int _tx, int _ty)
         }
     }
 
-    const QString tf = style() ? style()->transform() : QString();
-    if (!tf.isEmpty()) {
+    QString tf = style() ? style()->transform() : QString();
+    float animOpacity = 1.0f;
+    QString animTransform;
+    QColor animBg;
+    const bool animActive = style() && !style()->animation().isEmpty()
+        && khtmlAnimationLookup(style()->animation(), &animOpacity, &animTransform, &animBg);
+    if (animActive && !animTransform.isEmpty()) {
+        tf = animTransform;
+    }
+    const bool hasTf = !tf.isEmpty();
+    const bool hasOpacity = animActive && animOpacity < 0.999f;
+    if (hasTf || hasOpacity) {
         pI.p->save();
-        pI.p->setWorldTransform(pI.p->worldTransform() * khtmlCssTransformMatrix(tf, _tx, _ty, width(), height()));
+        if (hasTf) {
+            pI.p->setWorldTransform(pI.p->worldTransform() * khtmlCssTransformMatrix(tf, _tx, _ty, width(), height()));
+        }
+        if (hasOpacity) {
+            pI.p->setOpacity(animOpacity);
+        }
         paintObject(pI, _tx, _ty);
         pI.p->restore();
         return;
@@ -1922,6 +1939,18 @@ void RenderBlock::paintObject(PaintInfo &pI, int _tx, int _ty, bool shouldPaintO
             (pI.phase == PaintActionElementBackground || pI.phase == PaintActionChildBackground) &&
             shouldPaintBackgroundOrBorder() && style()->visibility() == VISIBLE) {
         paintBoxDecorations(pI, _tx, _ty);
+    }
+    // CSS animation: paint the interpolated background colour (engine-native
+    // animation subset; opacity/transform are applied in paint()).
+    if (!inlineFlow && style()
+        && (pI.phase == PaintActionElementBackground || pI.phase == PaintActionChildBackground)
+        && style()->visibility() == VISIBLE && !style()->animation().isEmpty()) {
+        float aop = 1.0f;
+        QString atf;
+        QColor abg;
+        if (khtmlAnimationLookup(style()->animation(), &aop, &atf, &abg) && abg.isValid()) {
+            pI.p->fillRect(QRect(_tx, _ty, width(), height()), abg);
+        }
     }
 
     if (pI.phase == PaintActionElementBackground) {

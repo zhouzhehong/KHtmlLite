@@ -529,6 +529,18 @@ tests/renderer_solo.py（无浏览器直驱渲染进程+帧颜色断言）。
     c) 新夹具 page7（spacer+sticky 条+长内容）+ 探针滚动前后共 4 项断言，
        七页合计 38 项；未实现：containing-block 底部约束、left/right sticky、
        百分比 inset、z-index 提升；剩余：transition/animation。
+ 22. **2026-10-25 引擎渲染能力第十三批**（详见 HANDOVER §5x）：
+    a) `animation` 简写解析为 spec（name;dur;delay;iter;dir;timing;fill），
+       存 RenderStyle；`@keyframes` 由新 css_animations.h 在 parseString 前
+       提取注册（bison 无此 at-rule），不平衡输入安全跳过；
+    b) 绘制期插值：RenderBlock::paint 应用 opacity/transform/背景色；
+       KHTMLView::hasCssAnimations + 宿主 200ms 探测/33ms 动画帧定时器
+       （无动画自动停，空闲零帧）；
+    c) 宿主不再删 @keyframes/不再注入 JS polyfill，strip 列表移除
+       transform/aspect-ratio/grid* 等引擎已支持项；JS 桥补齐
+       style.backgroundColor/getComputedStyle/getElementsByTagName/readyState；
+       新夹具 page8 + 探针 6 项断言（八页合计 44 项）；未实现：transition、
+       timing-function 曲线、复合值插值、其他动画属性。
 
 ---
 

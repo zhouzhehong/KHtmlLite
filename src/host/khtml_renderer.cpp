@@ -426,6 +426,28 @@ public:
         }
         connect(m_frameTimer, &QTimer::timeout, this, &RendererHost::grabFrame);
 
+    // CSS animation: poll the engine for active specs and drive a 33 ms
+    // repaint tick while anything is animating (idle pages cost no frames).
+    m_animTick = new QTimer(this);
+    m_animTick->setInterval(33);
+    connect(m_animTick, &QTimer::timeout, this, [this]() {
+        invalidateFull();
+        scheduleFrame();
+    });
+    m_animProbe = new QTimer(this);
+    m_animProbe->setInterval(200);
+    connect(m_animProbe, &QTimer::timeout, this, [this]() {
+        const bool on = m_view && m_view->view() && m_view->view()->hasCssAnimations();
+        if (on) {
+            if (!m_animTick->isActive()) {
+                m_animTick->start();
+            }
+        } else if (m_animTick->isActive()) {
+            m_animTick->stop();
+        }
+    });
+    m_animProbe->start();
+
         // Engine damage → frame invalidation.  The KHTML view is offscreen
         // (WA_DontShowOnScreen), so QWidget::update() is a no-op and without
         // this hook every content repaint would be invisible: pages land
@@ -1659,6 +1681,8 @@ private:
     RendererView *m_view = nullptr;
     PageLoader *m_loader = nullptr;
     QTimer *m_stateTimer = nullptr;
+    QTimer *m_animProbe = nullptr;
+    QTimer *m_animTick = nullptr;
     QUrl m_pendingUrl;
     // Document title captured from the engine's native setWindowCaption
     // emission (JS-independent; see the completed handler).

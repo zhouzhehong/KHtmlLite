@@ -870,6 +870,39 @@ INCONCLUSIVE、或退出码 0 但输出里出现判定形 FAIL 令牌，都算�
   3) 探针存在偶发"整页白帧"（上个浏览器关窗的 DWM 竞态；曾让 page3 渐变假失败）——main 循环改为整页重试一次，修复后稳定通过。
   4) 未实现（如实）：containing-block 底部约束（sticky 不会在父容器结束处停止吸附）、left/right sticky、百分比 inset、z-index 提升（用绘制顺序代替）。
 
+## 5x. 引擎渲染能力第十三批（2026-10-25，CSS `@keyframes` 动画引擎原生子集）
+
+### 1) 属性解析
+- 新属性 id `animation`=195（cssproperties.h/parser.cpp added[]），`CSS_PROP_ANIMATION` 用多 token 手写解析（`parseAnimationSpec`），支持 `animation: <name> <duration>s <delay>s <iteration> <direction> <timing> <fill>`，输出 spec `"name;durMs;delayMs;iter;dir;timing;fill"` 存进 `RenderStyle`（`StyleCSS3NonInheritedData::animation`，copy/== 同步）。
+- `animation: none` 用空 spec 清除；`@-webkit-` 前缀经既有 vendor 前缀剥离路径进入同一属性。
+
+### 2) @keyframes 注册（新 `css/css_animations.h`）
+- 引擎**没有** @keyframes 的 bison 文法 → 在 `CSSStyleSheetImpl::parseString()` 于 parseSheet 之前调用 `khtmlExtractAndRegisterKeyframes(css)`：扫出 `@keyframes`/`@-webkit-keyframes` 块、解析 `from/to/N%` 每个关键帧的 `opacity`/`transform`/`background-color`，注册到进程级 registry；块从 CSS 文本中移除（不再让 bison 报错吃掉后续规则）。
+- 提取器对**大括号不平衡的输入**（例如宿主 strip 列表删掉关键帧里的 `transform:` 造成的 `from {;`）会跳过该 at-rule 而不是吞掉整个样式表（page8 空白 bug 的根因之一）。
+- 时钟：进程级 `QElapsedTimer`；方向 normal/reverse/alternate/alternate-reverse；无限/有限迭代；线性相位（ease 等暂时按线性）。
+- 变换插值：`khtmlLerpTransform` 按数值 token 逐项插值（形状不同则离散取近端）；颜色按 RGB 通道插值。
+
+### 3) 绘制与帧驱动
+- `RenderBlock::paint()`：有 animation spec 时计算当前 opacity/transform/背景色；opacity 用 `QPainter::setOpacity`，transform 复用既有 `khtmlCssTransformMatrix` 世界变换路径；`paintObject()` 内在 `paintBoxDecorations` 之后用插值颜色补画元素矩形（背景色动画）。
+- 新 `KHTMLView::hasCssAnimations()`（渲染树扫描 style()->animation()）。
+- 渲染宿主新增 200ms 探测定时器 + 33ms 动画帧定时器：有动画时 `invalidateFull()+scheduleFrame()`，无动画自动停止（空闲零帧）。
+- 宿主清理：不再删除 @keyframes、不再注入 JS 动画 polyfill（引擎接管）；strip 列表移除引擎已支持的 `transform`/`aspect-ratio`/`grid*`/`place-*` 等条目（此前它们会在 http 页面上删掉这些属性，也会把关键帧删坏）；保留 transition/filter/clip-path 等未支持项。
+- JS 桥顺手补齐：`el.style.backgroundColor`（kStyleProps 新条目）、`getComputedStyle()`（animation-* 从 RenderStyle spec 读回）、`document.getElementsByTagName`、`document.readyState`。
+- 未实现（如实）：transition、timing-function 曲线（ease 按线性）、逐帧 easing、关键帧百分比以外的复合值插值（只插值数值 token）、非 opacity/transform/background-color 属性、动画层/z-index 提升。
+
+### 4) 行为级验证
+- 新夹具 `tests/engine_semantics8.html`：`@keyframes fade/slide/tint` 三个 1s alternate 无限动画（透明度 1→0.25、translateX 0→80px、#cc2222→#2222cc）。
+- 探针 page8：静态三项（fade/tint 非白、slide 橙色像素 >500）+ 两次抓帧三项（透明度像素差 >12、slide 橙色 x0 右移超过 355（静态 341）、背景色像素差 >20）；八页合计 **44 项断言**。
+
+### 实测
+- 引擎探针 **44/44 PASS**：page8 六项全过——静态 fade/tint 非白、橙色像素 >500；两次抓帧：透明度 (202,233,202)→(174,221,174)、slide 橙色 x0 459→438（静态 341，确认右移）、背景色 (36,34,202)→(67,34,171)。
+- `tile_protocol_test` PASS；**全量回归 2026-10-25 18:20→19:12 `failed: none`**：14 项中 13 项 PASS（engine_semantics_probe 193s、bg_smoke 603s、scroll_smoke 603s、resize_probe 601.9s、tombstone_probe 623.5s、tile_protocol_test 160.6s）+ bing_ghost_check INCONCLUSIVE（本机 bing 无 #0078D4 蓝块，诚实结论）。
+- 调试记录（如实）：
+  1) `khtmlExtractAndRegisterKeyframes` 初版漏了跳过 `@keyframes` 关键字后的空白 → name 为空、块未移除，bison 丢弃后续规则 → 页面空白；补 `isSpace()` 跳过。
+  2) 宿主 strip 列表仍删 `transform:`，把 `@keyframes slide { from { transform: translateX(0px) } ... }` 删成 `from {;`（大括号失衡）→ 提取器一路吞到样式表末尾 → page8 空白；修法：strip 列表移除引擎已支持的 transform/aspect-ratio/grid*/place-*，且提取器对不平衡块改为跳过该 at-rule。
+  3) 探针 transform 断言初版比较两帧 x0 差值（alternate 动画可能对称而差小）；改为"任一帧 x0 > 355（静态 341）"。
+  4) JS 桥补齐了 `getComputedStyle`/`getElementsByTagName`/`readyState`/`style.backgroundColor`（即使引擎动画接管，站点脚本也常用）；宿主快速页面此前从不触发 finalizeSubresources → 最终重写缺失，已改为初始投递后若 pending==0 立即调度 + finalize 自重试。
+
 ## 6. 正在/马上要做的
 A. ~~拆那 1.1s~~ **已完成**（字体枚举缓存 + 图标懒加载，构造 1.1s→~0.35s，TTFF 2.0→1.1s）。
    下一步同部位残账：渲染进程镜像加载+socket 连接 ~500ms（每次新标签都付），

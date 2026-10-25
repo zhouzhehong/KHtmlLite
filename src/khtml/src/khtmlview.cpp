@@ -2333,6 +2333,33 @@ bool KHTMLView::widgetEvent(QEvent *e)
     return false;
 }
 
+static bool khtmlHasCssAnimations(khtml::RenderObject *r)
+{
+    for (; r; r = r->nextSibling()) {
+        if (r->style() && !r->style()->animation().isEmpty()) {
+            return true;
+        }
+        if (khtmlHasCssAnimations(r->firstChild())) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool KHTMLView::hasCssAnimations() const
+{
+    KHTMLPart *p = part();
+    if (!p) {
+        return false;
+    }
+    DOM::Document doc = p->document();
+    if (doc.isNull() || !doc.handle()) {
+        return false;
+    }
+    khtml::RenderObject *root = doc.handle()->renderer();
+    return root && khtmlHasCssAnimations(root);
+}
+
 bool KHTMLView::hasLayoutPending()
 {
     return d->layoutTimerId && !d->firstLayoutPending;

@@ -4724,6 +4724,12 @@ void CSSStyleSelector::applyRule(int id, DOM::CSSValueImpl *value)
         style->setTransform(DOMString(primitiveValue->getStringValue()).string());
         break;
     }
+    case CSS_PROP_ANIMATION: {
+        if (isInitial || isInherit) { style->setAnimation(QString()); return; }
+        if (!primitiveValue || primitiveValue->primitiveType() != CSSPrimitiveValue::CSS_STRING) return;
+        style->setAnimation(DOMString(primitiveValue->getStringValue()).string());
+        break;
+    }
     case CSS_PROP_FLEX_WRAP: {
         if (isInitial || isInherit) { style->setFlexWrap(false); return; }
         if (!primitiveValue) return;
