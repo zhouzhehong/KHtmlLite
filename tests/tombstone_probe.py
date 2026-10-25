@@ -168,11 +168,12 @@ def main():
         alive_renderers = len(renderer_pids())
         print(f"renderers alive after tombstone: {alive_renderers}")
 
-        # Resume: click the tombstoned tab in the tab bar (nav bar
-        # occupies y~6..42, the tab row sits at y~44..80; tab 0 x~8..150).
+        # Resume: click the tombstoned tab in the Safari-style tab strip
+        # (tab strip occupies y~0..42 physical; tab 0 starts after the
+        # traffic lights / sidebar, x~160..380).
         resumed = False
-        for y in (55, 48, 62, 70):
-            click(hwnd, 60, y)
+        for y in (25, 18, 32, 40):
+            click(hwnd, 200, y)
             time.sleep(3)
             if "resumeTab idx=0" in trace_text():
                 resumed = True

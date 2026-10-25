@@ -1004,6 +1004,13 @@ INCONCLUSIVE、或退出码 0 但输出里出现判定形 FAIL 令牌，都算�
 - 验证：引擎探针 **48/48 PASS**；`browser_click_probe` / `input_coord_probe` / `dpr_probe` / `title_probe` 均 PASS；红黄绿灯实测；`tile_protocol_test` PASS（源码不变量检查已适配 `blockPageTabSignals`）；`portable_smoke` PASS；全量回归结果见下方补记。
 - 文档截图：`docs/assets/safari15_ui.png`。
 
+### 实测
+- 引擎探针 **48/48 PASS**（9 个 fixture 页，页面原点仍为 (11,87)，仅 page3 饱和扫描起点改为 y=87）。
+- 全量回归 **`failed: none`**（2026-10-26 00:22→01:13，14 项中 13 PASS + `bing_ghost_check` INCONCLUSIVE）：engine_semantics_probe 198.6s、tombstone_probe 626s、bg_smoke 607s、scroll_smoke 605.7s、resize_probe 603.2s、tile_protocol_test 177.8s、click/dpr/input/title/resize_ghost/rg_diag4 全 PASS。
+- 首轮全量回归曾仅 `tombstone_probe` 失败：探针按旧布局在 y=48..70 点标签栏；新 UI 标签位于顶部 y≈10..40、x≈160..380，改为点击 (200,25) 后 PASS（探针修复已随本批提交）。
+- 红黄绿灯实测：绿灯最大化 1920x1008、再次点击还原 1805x927、红灯关闭进程；拖拽/双击最大化/`WM_NCHITTEST` 边框缩放按实现路径工作（拖拽未做自动化点击验证）。
+- `tile_protocol_test` PASS（源码不变量已适配 `blockPageTabSignals`）；`portable_smoke` PASS；便携包二进制已同步（SHA256 相等）。
+
 ## 6. 正在/马上要做的
 A. ~~拆那 1.1s~~ **已完成**（字体枚举缓存 + 图标懒加载，构造 1.1s→~0.35s，TTFF 2.0→1.1s）。
    下一步同部位残账：渲染进程镜像加载+socket 连接 ~500ms（每次新标签都付），
