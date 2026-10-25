@@ -1645,6 +1645,9 @@ int RenderBox::calcHeightUsing(const Length &h)
     if (!h.isAuto()) {
         if (h.isFixed()) {
             height = h.value();
+        } else if (h.isCalc()) {
+            RenderBlock *cb = containingBlock();
+            height = h.calcValue(cb ? cb->contentHeight() : 0);
         } else if (h.isPercent()) {
             height = calcPercentageHeight(h);
         }

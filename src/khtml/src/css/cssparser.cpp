@@ -532,6 +532,39 @@ bool CSSParser::parseValue(int propId, bool important)
     }
 
     bool valid_primitive = false;
+
+    // CSS calc(): percentage+px sums for the main box properties.
+    if (value->unit == Value::Function && value->function) {
+        QString fn = qString(value->function->name).toLower();
+        if (fn.endsWith(QLatin1Char('(')))
+            fn.chop(1);
+        if (fn == QLatin1String("calc")) {
+            switch (propId) {
+            case CSS_PROP_WIDTH: case CSS_PROP_HEIGHT:
+            case CSS_PROP_MIN_WIDTH: case CSS_PROP_MAX_WIDTH:
+            case CSS_PROP_MIN_HEIGHT: case CSS_PROP_MAX_HEIGHT:
+            case CSS_PROP_MARGIN_TOP: case CSS_PROP_MARGIN_RIGHT:
+            case CSS_PROP_MARGIN_BOTTOM: case CSS_PROP_MARGIN_LEFT:
+            case CSS_PROP_PADDING_TOP: case CSS_PROP_PADDING_RIGHT:
+            case CSS_PROP_PADDING_BOTTOM: case CSS_PROP_PADDING_LEFT: {
+                const QString spec = parseCalcSpec();
+                if (spec.isEmpty())
+                    return false;
+                valueList->next();
+                if (valueList->current())
+                    return false;
+                addProperty(propId,
+                            new CSSPrimitiveValueImpl(DOMString(QStringLiteral("khtml-calc:") + spec),
+                                                      CSSPrimitiveValue::CSS_STRING),
+                            important);
+                return true;
+            }
+            default:
+                break;
+            }
+        }
+    }
+
     CSSValueImpl *parsedValue = nullptr;
 
     switch (propId) {
@@ -2418,6 +2451,43 @@ bool CSSParser::parseAspectRatio(bool important)
                 new CSSPrimitiveValueImpl(DOMString(spec), CSSPrimitiveValue::CSS_STRING),
                 important);
     return true;
+}
+
+QString CSSParser::parseCalcSpec()
+{
+    // calc(): sum of percentage terms and px terms, e.g. "100% - 20px".
+    if (!valueList || !valueList->current())
+        return QString();
+    Value *fn = valueList->current();
+    if (fn->unit != Value::Function || !fn->function || !fn->function->args)
+        return QString();
+    QString fname = qString(fn->function->name).toLower();
+    if (fname.endsWith(QLatin1Char('(')))
+        fname.chop(1);
+    if (fname != QLatin1String("calc"))
+        return QString();
+    double pct = 0.0, px = 0.0;
+    int terms = 0;
+    ValueList *args = fn->function->args;
+    for (Value *v = args->current(); v; v = args->next()) {
+        if (v->unit == Value::Operator)
+            continue;
+        if (v->unit == CSSPrimitiveValue::CSS_PERCENTAGE) {
+            pct += v->fValue;
+            ++terms;
+        } else if (v->unit == CSSPrimitiveValue::CSS_PX) {
+            px += v->fValue;
+            ++terms;
+        } else if (v->unit == CSSPrimitiveValue::CSS_NUMBER) {
+            px += v->fValue;
+            ++terms;
+        } else {
+            return QString();
+        }
+    }
+    if (terms < 1 || (pct == 0.0 && px == 0.0))
+        return QString();
+    return QString::number(pct) + QLatin1Char(':') + QString::number(qRound(px));
 }
 
 bool CSSParser::parseGridTemplateColumns(bool important)

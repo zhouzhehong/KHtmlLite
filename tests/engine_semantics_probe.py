@@ -23,6 +23,7 @@ PAGE2 = "file:///" + ROOT.replace("\\", "/") + "/tests/engine_semantics2.html"
 PAGE3 = "file:///" + ROOT.replace("\\", "/") + "/tests/engine_semantics3.html"
 PAGE4 = "file:///" + ROOT.replace("\\", "/") + "/tests/engine_semantics4.html"
 PAGE5 = "file:///" + ROOT.replace("\\", "/") + "/tests/engine_semantics5.html"
+PAGE6 = "file:///" + ROOT.replace("\\", "/") + "/tests/engine_semantics6.html"
 OUT = os.path.join(ROOT, "tests", "engine_semantics.png")
 ERR = os.path.join(ROOT, "tests", "engine_semantics_err.txt")
 
@@ -421,6 +422,32 @@ def page5_checks(pixels, w, h):
     return out
 
 
+def page6_checks(pixels, w, h):
+    """Engine-side CSS calc(): percentage + px mixed expressions."""
+    out = []
+    def add(name, good, detail=""):
+        out.append((name, good, detail))
+
+    c1 = main_cluster_bbox(pixels, w, h, (51, 102, 204), tol=40)
+    c2 = main_cluster_bbox(pixels, w, h, (204, 102, 51), tol=40)
+    c3 = main_cluster_bbox(pixels, w, h, (51, 204, 102), tol=40)
+    if not (c1 and c2 and c3):
+        add("calc boxes render", False, "(c1=%s c2=%s c3=%s)" % (c1, c2, c3))
+        return out
+
+    cw1, ch1 = c1[2] - c1[0], c1[3] - c1[1]
+    add("calc width = 100% - 40px", 530 <= cw1 <= 550 and 70 <= ch1 <= 80,
+        "(c1 %dx%d)" % (cw1, ch1))
+
+    add("calc margin-left = 50% - 50px", 228 <= c2[0] <= 245,
+        "(c2 x0=%d)" % (c2[0],))
+
+    cw3, ch3 = c3[2] - c3[0], c3[3] - c3[1]
+    add("calc height = 100px + 20px", 170 <= ch3 <= 190 and 590 <= cw3 <= 610,
+        "(c3 %dx%d)" % (cw3, ch3))
+    return out
+
+
 def main():
     if not os.path.exists(EXE):
         print("FAIL: browser exe missing:", EXE)
@@ -430,7 +457,8 @@ def main():
                                  (PAGE2, "page2 (flex)", page2_checks, (255, 0, 0)),
                                  (PAGE3, "page3 (gradients)", page3_checks, (170, 0, 170)),
             (PAGE4, "page4 (transforms)", page4_checks, (136, 68, 204)),
-            (PAGE5, "page5 (grid)", page5_checks, (204, 20, 20))):
+            (PAGE5, "page5 (grid)", page5_checks, (204, 20, 20)),
+            (PAGE6, "page6 (calc)", page6_checks, (51, 102, 204))):
         print("\n=== %s ===" % name)
         started = launch(page, wait)
         if not started:

@@ -511,6 +511,15 @@ tests/renderer_solo.py（无浏览器直驱渲染进程+帧颜色断言）。
        RenderGrid；@supports (display:grid) 改为 true；
     c) 新夹具 page5（3×3 网格）+ 探针 4 项断言，五页合计 30 项；已知未支持：
        grid-template-rows、span、命名线/区域、grid-auto-flow、非 px minmax 下限。
+ 20. **2026-10-25 引擎渲染能力第十一批**（详见 HANDOVER §5v）：
+    a) `calc()` 实用子集：Length 增加 Calc 类型（percent + px 双分量），
+       width/minWidth/minWidthRounded 支持按基准解析；parseCalcSpec 支持
+       百分比与 px 的加减（输出 khtml-calc:pct:px），属性白名单为
+       width/height/min/max、margin-*、padding-*；
+    b) 布局：calcHeightUsing 增加 Calc 分支，padding 访问器把 isCalc 纳入
+       百分比基准判断；calcWidthUsing/外边距经 Length::width 自动生效；
+    c) 探针新增 page6 三项断言（六页合计 34 项）；未支持：calc 内乘除/嵌套/
+       em/vh 等单位、left/top 的 calc；剩余：sticky、transition/animation。
 
 ---
 

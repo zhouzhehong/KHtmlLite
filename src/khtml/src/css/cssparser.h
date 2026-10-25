@@ -216,6 +216,7 @@ public:
     bool parseAspectRatio(bool important);
     bool parseTransformSpec(bool important);
     bool parseGridTemplateColumns(bool important);
+    QString parseCalcSpec();
     CSSValueImpl *parseCounterContent(ValueList *args, bool counters);
 
     // CSS3 Parsing Routines (for properties specific to CSS3)

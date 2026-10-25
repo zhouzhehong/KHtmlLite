@@ -374,41 +374,7 @@ static QString simplifyUnsupportedCss(const QString &text)
     // border-radius / box-shadow / opacity / box-sizing / text-shadow are
     // supported by KHTML 5.116 and must be kept.
 
-    // CSS calc() -> approximate. Pure pixel arithmetic is evaluated;
-    // percentage+pixel mixes drop the pixel term.
-    {
-        const QRegularExpression reCalc(QStringLiteral("calc\\(([^)]+)\\)"), QRegularExpression::CaseInsensitiveOption);
-        auto it = reCalc.globalMatch(out);
-        QString calcOut;
-        int last = 0;
-        while (it.hasNext()) {
-            const QRegularExpressionMatch m = it.next();
-            calcOut.append(out.midRef(last, m.capturedStart() - last));
-            QString expr = m.captured(1).trimmed();
-            const QRegularExpression rePct(QStringLiteral("([0-9.]+%)"));
-            const QRegularExpressionMatch pm = rePct.match(expr);
-            if (pm.hasMatch()) { calcOut.append(pm.captured(1)); }
-            else {
-                const QRegularExpression rePx(QStringLiteral("([0-9.]+)px"));
-                QRegularExpressionMatchIterator pit = rePx.globalMatch(expr);
-                double total = 0; bool ok = true; int pos = 0;
-                while (pit.hasNext()) {
-                    const QRegularExpressionMatch pxm = pit.next();
-                    double val = pxm.captured(1).toDouble(&ok);
-                    if (!ok) break;
-                    int before = pxm.capturedStart() - 1;
-                    while (before >= 0 && expr.at(before).isSpace()) --before;
-                    if (before >= pos && expr.at(before) == QLatin1Char('-')) total -= val; else total += val;
-                    pos = pxm.capturedEnd();
-                }
-                if (ok && pos > 0) calcOut.append(QString::number(total) + QStringLiteral("px"));
-                else calcOut.append(m.captured(0));
-            }
-            last = m.capturedEnd();
-        }
-        calcOut.append(out.midRef(last));
-        out = calcOut;
-    }
+    // CSS calc() is parsed and resolved by the ENGINE now (parseCalcSpec).
     // Vendor-prefixed property names reach the engine now: getPropertyID()
     // strips -webkit-/-moz-/-ms-/-o-/-khtml- and retries, so e.g.
     // -webkit-border-radius applies and -webkit-transform is ignored

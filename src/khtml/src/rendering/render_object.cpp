@@ -2443,7 +2443,7 @@ int RenderObject::paddingTop() const
 {
     int w = 0;
     Length padding = m_style->paddingTop();
-    if (padding.isPercent()) {
+    if (padding.isPercent() || padding.isCalc()) {
         w = containingBlock()->contentWidth();
     }
     w = padding.minWidth(w);
@@ -2457,7 +2457,7 @@ int RenderObject::paddingBottom() const
 {
     int w = 0;
     Length padding = style()->paddingBottom();
-    if (padding.isPercent()) {
+    if (padding.isPercent() || padding.isCalc()) {
         w = containingBlock()->contentWidth();
     }
     w = padding.minWidth(w);
@@ -2471,7 +2471,7 @@ int RenderObject::paddingLeft() const
 {
     int w = 0;
     Length padding = style()->paddingLeft();
-    if (padding.isPercent()) {
+    if (padding.isPercent() || padding.isCalc()) {
         w = containingBlock()->contentWidth();
     }
     w = padding.minWidth(w);
@@ -2485,7 +2485,7 @@ int RenderObject::paddingRight() const
 {
     int w = 0;
     Length padding = style()->paddingRight();
-    if (padding.isPercent()) {
+    if (padding.isPercent() || padding.isCalc()) {
         w = containingBlock()->contentWidth();
     }
     w = padding.minWidth(w);

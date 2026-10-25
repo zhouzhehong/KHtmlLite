@@ -3671,7 +3671,16 @@ void CSSStyleSelector::applyRule(int id, DOM::CSSValueImpl *value)
 
         if (primitiveValue && !apply) {
             int type = primitiveValue->primitiveType();
-            if (type > CSSPrimitiveValue::CSS_PERCENTAGE && type < CSSPrimitiveValue::CSS_DEG)
+            if (type == CSSPrimitiveValue::CSS_STRING) {
+                const QString cs = DOMString(primitiveValue->getStringValue()).string();
+                if (cs.startsWith(QLatin1String("khtml-calc:"))) {
+                    const QStringList parts = cs.mid(11).split(QLatin1String(":"));
+                    if (parts.size() == 2) {
+                        l = Length::calc(parts[0].toDouble(), qRound(parts[1].toDouble()));
+                        apply = true;
+                    }
+                }
+            } else if (type > CSSPrimitiveValue::CSS_PERCENTAGE && type < CSSPrimitiveValue::CSS_DEG)
                 // Handle our quirky margin units if we have them.
                 l = Length(primitiveValue->computeLength(style, m_rootStyle, logicalDpiY), Fixed, primitiveValue->isQuirkValue());
             else if (type >= CSSPrimitiveValue::CSS_VH && type <= CSSPrimitiveValue::CSS_VMAX)
@@ -3752,7 +3761,16 @@ void CSSStyleSelector::applyRule(int id, DOM::CSSValueImpl *value)
 
         if (primitiveValue && !apply) {
             int type = primitiveValue->primitiveType();
-            if (type > CSSPrimitiveValue::CSS_PERCENTAGE && type < CSSPrimitiveValue::CSS_DEG) {
+            if (type == CSSPrimitiveValue::CSS_STRING) {
+                const QString cs = DOMString(primitiveValue->getStringValue()).string();
+                if (cs.startsWith(QLatin1String("khtml-calc:"))) {
+                    const QStringList parts = cs.mid(11).split(QLatin1String(":"));
+                    if (parts.size() == 2) {
+                        l = Length::calc(parts[0].toDouble(), qRound(parts[1].toDouble()));
+                        apply = true;
+                    }
+                }
+            } else if (type > CSSPrimitiveValue::CSS_PERCENTAGE && type < CSSPrimitiveValue::CSS_DEG) {
                 l = Length(primitiveValue->computeLength(style, m_rootStyle, logicalDpiY), Fixed);
             } else if (type >= CSSPrimitiveValue::CSS_VH && type <= CSSPrimitiveValue::CSS_VMAX) {
                 l = convertToLength(primitiveValue, style, m_rootStyle, logicalDpiY);

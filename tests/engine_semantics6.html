@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>engine semantics 6 - calc</title>
+<style>
+  html, body { margin: 0; padding: 0; }
+  #wrap { width: 400px; }
+  /* width = 100% of 400px minus 40px = 360 CSS px */
+  #calc1 { width: calc(100% - 40px); height: 50px; background-color: #3366cc; }
+  /* margin-left = 50% of 400px minus 50px = 150 CSS px */
+  #calc2 { margin-left: calc(50% - 50px); width: 100px; height: 50px;
+           background-color: #cc6633; }
+  /* pure px arithmetic: height = 120 CSS px, width fills the 400px wrap */
+  #calc3 { height: calc(100px + 20px); background-color: #33cc66; }
+</style></head>
+<body>
+  <div id="wrap">
+    <div id="calc1"></div>
+    <div id="calc2"></div>
+    <div id="calc3"></div>
+  </div>
+</body></html>

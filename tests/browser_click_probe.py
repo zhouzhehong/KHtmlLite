@@ -97,12 +97,37 @@ def find_page_top(data, w, h):
     return -1
 
 
+def force_foreground(hwnd):
+    """Bring the browser window to the foreground even when another app owns
+    the foreground (Windows focus-stealing protection).  AttachThreadInput to
+    the current foreground thread is the usual way around it."""
+    if USER32.GetForegroundWindow() == hwnd:
+        return True
+    fg = USER32.GetForegroundWindow()
+    tid_fg = USER32.GetWindowThreadProcessId(fg, None) if fg else 0
+    tid_me = USER32.GetWindowThreadProcessId(hwnd, None)
+    attached = False
+    if tid_fg and tid_me and tid_fg != tid_me:
+        attached = USER32.AttachThreadInput(tid_me, tid_fg, True) != 0
+    try:
+        USER32.ShowWindow(hwnd, 9)          # SW_RESTORE
+        USER32.BringWindowToTop(hwnd)
+    finally:
+        if attached:
+            USER32.AttachThreadInput(tid_me, tid_fg, False)
+    for _ in range(10):
+        if USER32.GetForegroundWindow() == hwnd:
+            return True
+        time.sleep(0.1)
+    return False
+
+
 def click(hwnd, x, y):
-    USER32.SetForegroundWindow(hwnd)
+    if not force_foreground(hwnd):
+        print("WARN: could not bring the browser window to the foreground")
     time.sleep(0.2)
     wr = ctypes.create_string_buffer(16)
     USER32.GetWindowRect(hwnd, wr)
-    wl, wt, wrr, wb = struct.unpack("4i", wr.raw)
     # client origin in screen coords
     pt = ctypes.create_string_buffer(8)
     struct.pack_into("2i", pt, 0, 0, 0)

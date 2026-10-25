@@ -813,6 +813,33 @@ INCONCLUSIVE、或退出码 0 但输出里出现判定形 FAIL 令牌，都算�
 - `tile_protocol_test` PASS；**全量回归 2026-10-25 05:46→06:32 `failed: none`**：14 项中 13 项 PASS（engine_semantics_probe 116.1s、bg_smoke 602s、scroll_smoke 602s、resize_probe 601.4s、tombstone_probe 623.2s、tile_protocol_test 127.4s）+ bing_ghost_check INCONCLUSIVE（本机 bing 无 #0078D4 蓝块，诚实结论）。**@supports (display:grid) 变真未引起回归**（bg_smoke 等探针页面无 grid 布局）。
 - 调试记录（如实）：CSS_VAL_GRID/INLINE_GRID 初选 342/343 与既有 space-between/space-around 冲突，改用 344/345；render_style.h 的访问器插入位置多了一个 `}` 导致类结构破坏（编译错误），已修复；探针新增"稳定帧等待"（连续两次抓图一致才返回）解决 page5 部分瓦片帧导致的假缺失。
 
+## 5v. 引擎渲染能力第十一批（2026-10-25，CSS `calc()` 实用子集）
+
+### 1) Length 扩展：百分比+像素两部分
+- `Length`（misc/khtmllayout.h）新增 `LengthType::Calc` 与 `int m_calcValue`（第二分量），对象尺寸从 4 字节变 8 字节；构造函数/拷贝比较/`value()` 等全部同步。
+- 新方法：`Length::calc(double percent, int px)`、`isCalc()`、`calcPx()`、`calcPercent()`、`calcValue(int basis)`（按基准解析百分比再加 px）。
+- `width()/minWidth()/minWidthRounded()` 增加 Calc 分支 → 所有通过 `Length::width(cw)` 消费长度的地方自动获得 calc 支持（`calcWidthUsing`、水平/垂直外边距等）。
+
+### 2) 解析
+- `CSSParser::parseCalcSpec()`：支持 `calc()` 内 **百分比与 px 的加减**（`100% - 20px`、`50% + 10px`、纯 px 运算；tokenizer 把减号折成负值），无视 `+`/`,` 分隔符；输出 `"khtml-calc:<percent>:<px>"` 字符串。
+- `parseValue()` 在进入属性校验 switch 之前处理 calc（属性白名单：width/height/min/max-width/min/max-height、margin-*、padding-*），以 CSS_STRING 值随属性进入样式层（多 token 值不再被单 token 校验拒绝）。
+
+### 3) 应用与布局
+- `applyProperty` 的长度分支识别 `khtml-calc:` 字符串 → `Length::calc(percent, px)`。
+- 高度：`RenderBox::calcHeightUsing()` 增加 Calc 分支（百分比按包含块内容高解析）。
+- 内边距：`RenderObject::paddingTop/Bottom/Left/Right()` 的百分比基准判断加入 `isCalc()`。
+- 未支持（如实记录）：calc 内的乘除、嵌套 calc、非 px 单位（em/rem/vh 等）、以及 left/top/right/bottom 的 calc。
+
+### 4) 行为级验证
+- 新夹具 `tests/engine_semantics6.html`：`#wrap` 宽 400px；`#calc1` 宽 `calc(100% - 40px)`、`#calc2` 左边距 `calc(50% - 50px)`、`#calc3` 高 `calc(100px + 20px)`。
+- 探针新增 page6 三项断言：calc1 宽 540±10 物理像素、calc2 x0=225±6、calc3 高 180±10 且宽 600±10；六页合计 **34 项断言**。
+
+### 实测
+- 引擎探针 **34/34 PASS**：page6 三项全过——calc1 宽 539 物理像素（= (400-40)×1.5）、calc2 x0=236（= body 11 + 150×1.5）、calc3 599×179（高 120 CSS×1.5）。
+- `tile_protocol_test` PASS；**全量回归 2026-10-25 12:23→13:13 `failed: none`**：14 项中 13 项 PASS（engine_semantics_probe 117.6s、bg_smoke 603.3s、scroll_smoke 602.6s、resize_probe 601.7s、tombstone_probe 623.4s、tile_protocol_test 148.8s）+ bing_ghost_check INCONCLUSIVE（本机 bing 无 #0078D4 蓝块，诚实结论）。
+- 过程中修复了**测试环境问题**：全量回归首跑时 `browser_click_probe` 失败（真实鼠标点击未送达页面），根因是用户前台被 Edge 占用、Windows 焦点保护使 `SetForegroundWindow` 返回 0，点击被前台窗口吞掉；已在探针中加入 `force_foreground()`（AttachThreadInput 到前台线程 + BringWindowToTop/SW_RESTORE，并轮询确认前台），重跑后点击探针稳定 PASS。
+- 调试记录：bison 表达式文法不支持 `+`/`-`（只有 `/`、`,`，负号靠一元负号），因此在样式表解析前把 `calc(A - B)` 重写为 `calc(A,-B)`（逗号分隔带符号项），再由 `parseCalcSpec()` 求和；height/width 的 applyProperty 各自有独立长度分支，已分别接入 calc 字符串解析；宿主原有的 calc 近似改写已移除（交给引擎）。
+
 ## 6. 正在/马上要做的
 A. ~~拆那 1.1s~~ **已完成**（字体枚举缓存 + 图标懒加载，构造 1.1s→~0.35s，TTFF 2.0→1.1s）。
    下一步同部位残账：渲染进程镜像加载+socket 连接 ~500ms（每次新标签都付），

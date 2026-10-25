@@ -589,6 +589,75 @@ bool CSSStyleSheetImpl::parseString(const DOMString &string, bool strict)
         css = out;
     }
 
+    // calc(): the bison expression grammar cannot parse '+'/'-' between terms,
+    // so rewrite "calc(A - B)" as "calc(A,-B)" (comma separated, signed).
+    // parseCalcSpec() then sums the signed terms.
+    {
+        QString out;
+        out.reserve(css.size());
+        const int n = css.size();
+        int i = 0;
+        while (i < n) {
+            if (i + 5 <= n
+                && css.midRef(i, 5).compare(QLatin1String("calc("), Qt::CaseInsensitive) == 0) {
+                int j = i + 4;
+                int depth = 0;
+                QChar quote = QChar::Null;
+                for (; j < n; ++j) {
+                    const QChar c = css.at(j);
+                    if (!quote.isNull()) {
+                        if (c == quote) quote = QChar::Null;
+                        continue;
+                    }
+                    if (c == QLatin1Char('"') || c == QLatin1Char('\'')) { quote = c; continue; }
+                    if (c == QLatin1Char('(')) { ++depth; continue; }
+                    if (c == QLatin1Char(')')) { if (--depth == 0) break; }
+                }
+                if (j < n) {
+                    const QString inner = css.mid(i + 5, j - i - 5).trimmed();
+                    QString rew;
+                    bool first = true;
+                    int k = 0;
+                    const int m = inner.size();
+                    while (k < m) {
+                        int sign = 1;
+                        if (inner.at(k) == QLatin1Char('+') || inner.at(k) == QLatin1Char('-')) {
+                            sign = inner.at(k) == QLatin1Char('-') ? -1 : 1;
+                            ++k;
+                            while (k < m && inner.at(k).isSpace()) ++k;
+                        }
+                        int e = k;
+                        int d2 = 0;
+                        while (e < m) {
+                            const QChar c = inner.at(e);
+                            if (c == QLatin1Char('(')) ++d2;
+                            else if (c == QLatin1Char(')')) --d2;
+                            else if (d2 == 0 && (c == QLatin1Char('+') || c == QLatin1Char('-')) && e > k)
+                                break;
+                            ++e;
+                        }
+                        QString term = inner.mid(k, e - k).trimmed();
+                        if (!term.isEmpty()) {
+                            if (!first)
+                                rew += QLatin1Char(',');
+                            if (sign < 0 && !term.startsWith(QLatin1Char('-')))
+                                rew += QLatin1Char('-');
+                            rew += term;
+                            first = false;
+                        }
+                        k = e;
+                    }
+                    out += QLatin1String("calc(") + rew + QLatin1Char(')');
+                    i = j + 1;
+                    continue;
+                }
+            }
+            out += css.at(i);
+            ++i;
+        }
+        css = out;
+    }
+
     strictParsing = strict;
     CSSParser p(strict);
     p.parseSheet(this, DOMString(css));
