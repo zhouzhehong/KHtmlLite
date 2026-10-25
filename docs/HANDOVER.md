@@ -930,6 +930,32 @@ INCONCLUSIVE、或退出码 0 但输出里出现判定形 FAIL 令牌，都算�
   1) 真实 hover 注入（SetCursorPos/PostMessage WM_MOUSEMOVE + 前台抢占）在无头探针环境里不可靠——即使无 transition 的静态 `:hover` 也不变色，故夹具改用 setInterval 切换 `className` 触发样式重算（className 写入已验证生效），过渡机制本身随后验证通过。
   2) 过渡触发点确认：`RenderObject::setStyle` 旧样式仍可用时登记 from/to；若样式变化不影响 opacity/transform/background-color 则不登记（不会误开帧）。
 
+## 5z. 路线图完成状态（收尾核验，2026-10-25）
+
+七类路线图能力全部落地：每批均有本地 fixture 行为验证、全量回归绿、文档记录、提交推送。当前 `HEAD` = `origin/main`。
+
+| # | 路线图能力 | 批次（提交） | 行为验证夹具 |
+|---|---|---|---|
+| 1 | `-webkit-` 前缀别名与宽容解析 | 批1 `e7e5ea5` | page1 |
+| 2 | HTML5 语义元素 UA 默认块级 + 基础元素 | 批1 `e7e5ea5` | page1 |
+| 3 | `@supports` 求值 | 批1（后续随 grid/sticky 支持态更新） | page1 |
+| 4 | flexbox 完整化 | 批2 `bf7bde8`、批3 `35cc886`、批4 `6a104dc`、批9 `076aaaf` | page1/page2 |
+| 5 | `var()` / 逻辑属性 / `calc()` | 批5 `9cb26b6`、批2（逻辑属性）、批11 `d7df94d` | page1/page6 |
+| 6 | grid / sticky / aspect-ratio | 批10 `4789b6b`、批7 `5a699fc`、批12 `6286845` | page5/page7/page2 |
+| 7 | 渐变 / transform / animation / transition | 批6 `7a74f56`、批8 `e60a24f`、批13 `3a9766c`、批14 `266d4ac` | page3/page4/page8/page9 |
+
+验证基线（最近一次）：
+- 引擎探针 **48/48 PASS**（9 个 fixture 页）；`tile_protocol_test` PASS；`portable_smoke` PASS（SHA256 相等）。
+- 全量回归 **`failed: none`**（2026-10-25 20:13→21:02，14 项中 13 PASS + `bing_ghost_check` INCONCLUSIVE——本机 bing 无 #0078D4 蓝块，诚实结论）。
+- 十四批提交全部已推送 `origin/main`；工作区干净。
+
+已如实记录的"够用即止"缺口（详见各 §5x 与 GAP 对应条目）：
+- grid：`grid-template-rows`、span、命名线/区域、`grid-auto-flow`、非 px `minmax` 下限；
+- sticky：containing-block 底部约束、left/right 方向、百分比 inset、z-index 提升；
+- calc：乘除、嵌套、em/rem/vh 等单位、left/top 的 calc；
+- animation/transition：timing-function 曲线（线性回退）、布局属性过渡、多属性 `transition-property`、复合值插值与合成层提升；
+- 外壳 EXE 替换：按用户指示后续再做，不在本目标范围。
+
 ## 6. 正在/马上要做的
 A. ~~拆那 1.1s~~ **已完成**（字体枚举缓存 + 图标懒加载，构造 1.1s→~0.35s，TTFF 2.0→1.1s）。
    下一步同部位残账：渲染进程镜像加载+socket 连接 ~500ms（每次新标签都付），
