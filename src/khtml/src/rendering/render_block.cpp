@@ -34,6 +34,7 @@
 
 #include "render_block.h"
 #include "../css/css_animations.h"
+#include "../css/css_transitions.h"
 #include <QPainter>
 #include <QtMath>
 #include <stdio.h>
@@ -1905,11 +1906,28 @@ void RenderBlock::paint(PaintInfo &pI, int _tx, int _ty)
     QColor animBg;
     const bool animActive = style() && !style()->animation().isEmpty()
         && khtmlAnimationLookup(style()->animation(), &animOpacity, &animTransform, &animBg);
-    if (animActive && !animTransform.isEmpty()) {
+    bool animatedOpacity = animActive;
+    bool animatedTransform = animActive && !animTransform.isEmpty();
+    if (animActive && animatedTransform) {
         tf = animTransform;
     }
+    if (!animActive) {
+        float trOpacity = 1.0f;
+        QString trTransform;
+        QColor trBg;
+        if (khtmlTransitionLookup(this, &trOpacity, &trTransform, &trBg)) {
+            animOpacity = trOpacity;
+            animatedOpacity = true;
+            animTransform = trTransform;
+            animatedTransform = !trTransform.isEmpty();
+            if (animatedTransform) {
+                tf = trTransform;
+            }
+            animBg = trBg;
+        }
+    }
     const bool hasTf = !tf.isEmpty();
-    const bool hasOpacity = animActive && animOpacity < 0.999f;
+    const bool hasOpacity = animatedOpacity && animOpacity < 0.999f;
     if (hasTf || hasOpacity) {
         pI.p->save();
         if (hasTf) {
@@ -1944,11 +1962,19 @@ void RenderBlock::paintObject(PaintInfo &pI, int _tx, int _ty, bool shouldPaintO
     // animation subset; opacity/transform are applied in paint()).
     if (!inlineFlow && style()
         && (pI.phase == PaintActionElementBackground || pI.phase == PaintActionChildBackground)
-        && style()->visibility() == VISIBLE && !style()->animation().isEmpty()) {
+        && style()->visibility() == VISIBLE) {
         float aop = 1.0f;
         QString atf;
         QColor abg;
-        if (khtmlAnimationLookup(style()->animation(), &aop, &atf, &abg) && abg.isValid()) {
+        bool have = false;
+        if (!style()->animation().isEmpty()
+            && khtmlAnimationLookup(style()->animation(), &aop, &atf, &abg)) {
+            have = true;
+        }
+        if (!have) {
+            have = khtmlTransitionLookup(this, &aop, &atf, &abg);
+        }
+        if (have && abg.isValid()) {
             pI.p->fillRect(QRect(_tx, _ty, width(), height()), abg);
         }
     }

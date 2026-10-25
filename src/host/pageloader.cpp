@@ -378,9 +378,7 @@ static QString simplifyUnsupportedCss(const QString &text)
 
     const QStringList props = {
         QStringLiteral("backdrop-filter"), QStringLiteral("filter"),
-        QStringLiteral("transition"), QStringLiteral("transition-property"),
-        QStringLiteral("transition-duration"), QStringLiteral("transition-timing-function"),
-        QStringLiteral("transition-delay"), QStringLiteral("clip-path"),
+        QStringLiteral("clip-path"),
         QStringLiteral("mask"), QStringLiteral("mask-image"), QStringLiteral("will-change"),
         QStringLiteral("contain"), QStringLiteral("scroll-behavior"),
         QStringLiteral("backface-visibility"), QStringLiteral("perspective"),

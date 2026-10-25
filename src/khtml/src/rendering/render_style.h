@@ -935,6 +935,7 @@ public:
     QString transform;     // CSS transform spec (engine-painted).
     QString gridTemplateColumns; // grid-template-columns spec ("px:100,fr:1,...")
     QString animation;    // CSS animation shorthand spec ("name;durMs;delayMs;iter;dir;timing;fill")
+    QString transition;   // CSS transition spec ("property;durationMs;delayMs;timing")
     DataRef<StyleFlexibleBoxData> flexibleBox; // Flexible box properties
     DataRef<StyleMarqueeData> marquee; // Marquee properties
     DataRef<BorderRadiusData> borderRadius;
@@ -1888,6 +1889,18 @@ public:
             css3NonInheritedData.access()->animation = s;
         }
     }
+    // CSS transition shorthand spec, built by CSSParser::parseTransitionSpec().
+    QString transition() const
+    {
+        return css3NonInheritedData->transition;
+    }
+    void setTransition(const QString &s)
+    {
+        if (css3NonInheritedData->transition != s) {
+            css3NonInheritedData.access()->transition = s;
+        }
+    }
+
     // --- minimal flexbox (RenderFlexBox) ---
     int flexDirection() const
     {

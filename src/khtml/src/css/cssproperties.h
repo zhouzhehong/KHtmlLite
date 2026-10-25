@@ -204,7 +204,8 @@ DOM::DOMString getPropertyName(unsigned short id) KHTML_NO_EXPORT;
 #define CSS_PROP_TRANSFORM 193
 #define CSS_PROP_GRID_TEMPLATE_COLUMNS 194
 #define CSS_PROP_ANIMATION 195
-#define CSS_PROP_TOTAL 196
+#define CSS_PROP_TRANSITION 196
+#define CSS_PROP_TOTAL 197
 const size_t maxCSSPropertyNameLength = 32;
 #endif
 

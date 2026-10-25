@@ -903,6 +903,33 @@ INCONCLUSIVE、或退出码 0 但输出里出现判定形 FAIL 令牌，都算�
   3) 探针 transform 断言初版比较两帧 x0 差值（alternate 动画可能对称而差小）；改为"任一帧 x0 > 355（静态 341）"。
   4) JS 桥补齐了 `getComputedStyle`/`getElementsByTagName`/`readyState`/`style.backgroundColor`（即使引擎动画接管，站点脚本也常用）；宿主快速页面此前从不触发 finalizeSubresources → 最终重写缺失，已改为初始投递后若 pending==0 立即调度 + finalize 自重试。
 
+## 5y. 引擎渲染能力第十四批（2026-10-25，CSS transition 引擎原生子集）
+
+### 1) 属性解析
+- 新属性 id `transition`=196（CSS_PROP_TOTAL 197），`parseTransitionSpec` 解析 `transition: <property> <duration>s [<timing>] [<delay>s]`，输出 spec `"property;durationMs;delayMs;timing"` 存入 `StyleCSS3NonInheritedData::transition`（copy/== 同步）；`transition: none` 用空 spec 清除。
+- property 支持 `all`/`opacity`/`transform`/`background-color`/`background`/`color`（后两者都映射到背景色）；timing 接受 linear/ease/ease-in/out/in-out（当前一律按线性计算）。
+
+### 2) 触发与登记（新 `css/css_transitions.h`）
+- `RenderObject::setStyle()` 在换上新样式前检查 `style->transition()`：若有 spec 且旧/新样式在 opacity、transform、background-color 上有差异，就调用 `khtmlStartTransition(this, old, new)` 把 from/to 值、起止时间、时长/延迟登记到按渲染对象索引的 registry。
+- 布局属性（width/height 等）不做过渡（每帧重排成本太高，如实记录为未支持）；`transition-property` 列表只有单属性（够用即止）。
+
+### 3) 绘制与帧驱动
+- `RenderBlock::paint()`：无 animation 时查询 `khtmlTransitionLookup(this, ...)`，按 `animationClockMs()` 线性插值 opacity/transform；背景色过渡在 `paintObject()` 的 `paintBoxDecorations` 之后用插值色补画矩形。
+- `KHTMLView::hasCssAnimations()` 同时报告 `khtmlTransitionsActive()`；既有 200ms 探测 + 33ms 动画帧定时器自动驱动过渡帧，结束后自动停止（空闲零帧）。
+- 宿主 strip 列表移除 transition/transition-property/duration/timing-function/delay（引擎接管）。
+- 未实现（如实）：布局属性过渡、timing-function 曲线（线性回退）、transition-property 多属性列表、过渡期间的合成层/z-index 提升。
+
+### 4) 行为级验证
+- 新夹具 `tests/engine_semantics9.html`：`#b` 背景色 `transition: background-color 1.5s`（红→蓝）、`#m` `transform: translateX(60px)` 过渡；脚本每 900ms 切换 `className`（真实 hover 注入在无头测试里不可靠）。
+- 探针 page9：三帧采样（间隔 0.6s）三项断言——过渡盒非白、背景色三帧最大差 >40、绿盒 x0=161（静态 71，确认右移）；九页合计 **48 项断言**。
+
+### 实测
+- 引擎探针 **48/48 PASS**：page9 三项全过——过渡盒在采样帧 (123,34,115)；三帧背景色 (113,34,125)/(107,34,131)/(153,34,85) 最大差 90；绿盒三帧 x0 均 161（静态 71，确认 transform 过渡已生效）。
+- `tile_protocol_test` PASS；**全量回归 2026-10-25 20:13→21:02 `failed: none`**：14 项中 13 项 PASS（engine_semantics_probe 168.5s、bg_smoke 602.7s、scroll_smoke 603.4s、resize_probe 602.4s、tombstone_probe 628.5s、tile_protocol_test 152.5s）+ bing_ghost_check INCONCLUSIVE（本机 bing 无 #0078D4 蓝块，诚实结论）。
+- 调试记录（如实）：
+  1) 真实 hover 注入（SetCursorPos/PostMessage WM_MOUSEMOVE + 前台抢占）在无头探针环境里不可靠——即使无 transition 的静态 `:hover` 也不变色，故夹具改用 setInterval 切换 `className` 触发样式重算（className 写入已验证生效），过渡机制本身随后验证通过。
+  2) 过渡触发点确认：`RenderObject::setStyle` 旧样式仍可用时登记 from/to；若样式变化不影响 opacity/transform/background-color 则不登记（不会误开帧）。
+
 ## 6. 正在/马上要做的
 A. ~~拆那 1.1s~~ **已完成**（字体枚举缓存 + 图标懒加载，构造 1.1s→~0.35s，TTFF 2.0→1.1s）。
    下一步同部位残账：渲染进程镜像加载+socket 连接 ~500ms（每次新标签都付），

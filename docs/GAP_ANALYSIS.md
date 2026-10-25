@@ -541,6 +541,15 @@ tests/renderer_solo.py（无浏览器直驱渲染进程+帧颜色断言）。
        style.backgroundColor/getComputedStyle/getElementsByTagName/readyState；
        新夹具 page8 + 探针 6 项断言（八页合计 44 项）；未实现：transition、
        timing-function 曲线、复合值插值、其他动画属性。
+ 23. **2026-10-25 引擎渲染能力第十四批**（详见 HANDOVER §5y）：
+    a) `transition` 简写解析为 spec（property;durMs;delay;timing）存 RenderStyle；
+       RenderObject::setStyle 检测旧/新样式在 opacity/transform/background-color
+       的差异并登记到 css_transitions.h registry；绘制期按时钟线性插值；
+    b) hasCssAnimations 同时报告过渡活动 → 复用 200ms 探测/33ms 帧驱动；
+       宿主 strip 列表移除 transition 系条目；
+    c) 新夹具 page9（setInterval 切 className 触发的背景色/transform 过渡）
+       + 探针三帧 3 项断言（九页合计 48 项）；未实现：布局属性过渡、
+       timing-function 曲线、多属性 transition-property、合成层提升。
 
 ---
 

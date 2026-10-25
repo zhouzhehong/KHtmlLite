@@ -602,6 +602,14 @@ bool CSSParser::parseValue(int propId, bool important)
         }
         break;
 
+    case CSS_PROP_TRANSITION: {          // <property> <duration> <delay> ... (multi-token)
+        if (valueList->size() == 1 && value->id == CSS_VAL_NONE) {
+            addProperty(propId, new CSSPrimitiveValueImpl(DOMString(), CSSPrimitiveValue::CSS_STRING), important);
+            return true;
+        }
+        return parseTransitionSpec(important);
+    }
+
     case CSS_PROP_ANIMATION: {          // <name> <duration> <delay> ... (multi-token)
         if (valueList->size() == 1 && value->id == CSS_VAL_NONE) {
             addProperty(propId, new CSSPrimitiveValueImpl(DOMString(), CSSPrimitiveValue::CSS_STRING), important);
@@ -2426,6 +2434,59 @@ bool CSSParser::parseFlexShorthand(bool important)
         any = true;
     }
     return any;
+}
+
+
+bool CSSParser::parseTransitionSpec(bool important)
+{
+    // transition: <property> <duration>s [<timing>] [<delay>s]
+    // Stored as "property;durationMs;delayMs;timing" on the style.
+    if (!valueList || !valueList->current())
+        return false;
+    QString property = QStringLiteral("all");
+    double duration = 0.0;
+    bool haveDuration = false;
+    double delay = 0.0;
+    QString timing = QStringLiteral("ease");
+    for (Value *v = valueList->current(); v; v = valueList->next()) {
+        if (v->unit == Value::Operator)
+            continue;
+        if (v->unit == CSSPrimitiveValue::CSS_S || v->unit == CSSPrimitiveValue::CSS_MS) {
+            const double sec = (v->unit == CSSPrimitiveValue::CSS_MS) ? v->fValue / 1000.0 : v->fValue;
+            if (!haveDuration) {
+                duration = sec;
+                haveDuration = true;
+            } else {
+                delay = sec;
+            }
+            continue;
+        }
+        if (v->unit == CSSPrimitiveValue::CSS_IDENT) {
+            const QString tok = qString(v->string).toLower();
+            if (tok == QLatin1String("linear") || tok == QLatin1String("ease")
+                || tok == QLatin1String("ease-in") || tok == QLatin1String("ease-out")
+                || tok == QLatin1String("ease-in-out")) {
+                timing = tok;
+            } else {
+                property = tok;
+            }
+            continue;
+        }
+        return false;
+    }
+    if (!haveDuration)
+        return false;
+    QString spec = property;
+    spec += QLatin1Char(';');
+    spec += QString::number(qRound(duration * 1000.0));
+    spec += QLatin1Char(';');
+    spec += QString::number(qRound(delay * 1000.0));
+    spec += QLatin1Char(';');
+    spec += timing;
+    addProperty(CSS_PROP_TRANSITION,
+                new CSSPrimitiveValueImpl(DOMString(spec), CSSPrimitiveValue::CSS_STRING),
+                important);
+    return true;
 }
 
 bool CSSParser::parseAnimationSpec(bool important)

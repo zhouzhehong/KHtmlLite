@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>engine semantics 9 - css transitions</title>
+<style>
+  html, body { margin: 0; padding: 0; background: #ffffff; }
+  /* The script toggles .on every 900ms; the 1.5s transitions keep both boxes
+     moving, so the probe can sample them at arbitrary times. */
+  #b { position: absolute; left: 40px; top: 40px; width: 200px; height: 120px; background-color: #cc2222; transition: background-color 1.5s; }
+  #b.on { background-color: #2222cc; }
+  #m { position: absolute; left: 40px; top: 220px; width: 120px; height: 80px; background-color: #22aa22; transition: transform 1.5s; }
+  #m.on { transform: translateX(60px); }
+</style></head>
+<body><div id="b"></div><div id="m"></div>
+<script>
+  var __on = false;
+  setInterval(function () {
+    __on = !__on;
+    var b = document.getElementById('b');
+    var m = document.getElementById('m');
+    if (b) b.className = __on ? 'on' : '';
+    if (m) m.className = __on ? 'on' : '';
+  }, 900);
+</script>
+</body></html>

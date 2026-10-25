@@ -217,6 +217,7 @@ public:
     bool parseTransformSpec(bool important);
     bool parseGridTemplateColumns(bool important);
     bool parseAnimationSpec(bool important);
+    bool parseTransitionSpec(bool important);
     QString parseCalcSpec();
     CSSValueImpl *parseCounterContent(ValueList *args, bool counters);
 

@@ -49,6 +49,7 @@
 #include "editing/editor.h"
 #include "rendering/render_arena.h"
 #include "rendering/render_canvas.h"
+#include "../css/css_transitions.h"
 #include "rendering/render_frames.h"
 #include "rendering/render_replaced.h"
 #include "rendering/render_form.h"
@@ -2348,6 +2349,9 @@ static bool khtmlHasCssAnimations(khtml::RenderObject *r)
 
 bool KHTMLView::hasCssAnimations() const
 {
+    if (khtml::khtmlTransitionsActive()) {
+        return true;
+    }
     KHTMLPart *p = part();
     if (!p) {
         return false;

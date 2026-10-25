@@ -470,6 +470,7 @@ StyleCSS3NonInheritedData::StyleCSS3NonInheritedData(const StyleCSS3NonInherited
       transform(o.transform),
       gridTemplateColumns(o.gridTemplateColumns),
       animation(o.animation),
+      transition(o.transition),
       flexibleBox(o.flexibleBox),
       marquee(o.marquee),
       borderRadius(o.borderRadius)
@@ -485,6 +486,7 @@ bool StyleCSS3NonInheritedData::operator==(const StyleCSS3NonInheritedData &o) c
         transform == o.transform &&
         gridTemplateColumns == o.gridTemplateColumns &&
         animation == o.animation &&
+        transition == o.transition &&
         opacity == o.opacity &&
         flexibleBox == o.flexibleBox &&
         marquee == o.marquee &&

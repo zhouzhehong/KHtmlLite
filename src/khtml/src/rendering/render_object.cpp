@@ -40,6 +40,7 @@
 #include "rendering/render_replaced.h"
 #include "rendering/render_generated.h"
 #include "rendering/counter_tree.h"
+#include "../css/css_transitions.h"
 
 #include "xml/dom_elementimpl.h"
 #include "dom/dom_doc.h"
@@ -2261,8 +2262,12 @@ void RenderObject::setStyle(RenderStyle *style)
     }
 
     RenderStyle *oldStyle = m_style;
+    // CSS transitions: capture the animatable value changes before adopting
+    // the new style (the paint callback interpolates them over time).
+    if (m_style && style && !style->transition().isEmpty()) {
+        khtml::khtmlStartTransition(this, m_style, style);
+    }
     m_style = style;
-
     updateBackgroundImages(oldStyle);
 
     m_style->ref();

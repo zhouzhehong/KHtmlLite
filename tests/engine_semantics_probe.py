@@ -31,6 +31,7 @@ PAGE6 = "file:///" + ROOT.replace("\\", "/") + "/tests/engine_semantics6.html"
 PAGE7 = "file:///" + ROOT.replace("\\", "/") + "/tests/engine_semantics7.html"
 PORT8 = 8234
 PAGE8 = "file:///" + ROOT.replace("\\", "/") + "/tests/engine_semantics8.html"
+PAGE9 = "file:///" + ROOT.replace("\\", "/") + "/tests/engine_semantics9.html"
 OUT = os.path.join(ROOT, "tests", "engine_semantics.png")
 ERR = os.path.join(ROOT, "tests", "engine_semantics_err.txt")
 
@@ -542,6 +543,16 @@ def _run_page(page, fn, wait):
             size2, pixels2 = load_pixels(OUT)
             w2, h2 = size2
             checks = checks + page8_after_checks(pixels, w, h, pixels2)
+        if page == PAGE9:
+            grab(hwnd, OUT)
+            _sz, pix_a = load_pixels(OUT)
+            time.sleep(0.6)
+            grab(hwnd, OUT)
+            _sz, pix_b = load_pixels(OUT)
+            time.sleep(0.6)
+            grab(hwnd, OUT)
+            _sz, pix_c = load_pixels(OUT)
+            checks = checks + page9_after_checks(pix_a, pix_b, pix_c, w, h)
     finally:
         finish(proc, errf)
     return checks
@@ -601,6 +612,85 @@ def page8_after_checks(pixels, w, h, pixels2):
     return out
 
 
+
+def force_foreground(hwnd):
+    """Bring the browser window to the foreground (Windows focus protection)."""
+    import ctypes
+    USER32 = ctypes.windll.user32
+    if USER32.GetForegroundWindow() == hwnd:
+        return True
+    fg = USER32.GetForegroundWindow()
+    tid_fg = USER32.GetWindowThreadProcessId(fg, None) if fg else 0
+    tid_me = USER32.GetWindowThreadProcessId(hwnd, None)
+    attached = False
+    if tid_fg and tid_me and tid_fg != tid_me:
+        attached = USER32.AttachThreadInput(tid_me, tid_fg, True) != 0
+    try:
+        USER32.ShowWindow(hwnd, 9)
+        USER32.BringWindowToTop(hwnd)
+        USER32.SetForegroundWindow(hwnd)
+    finally:
+        if attached:
+            USER32.AttachThreadInput(tid_me, tid_fg, False)
+    for _ in range(10):
+        if USER32.GetForegroundWindow() == hwnd:
+            return True
+        time.sleep(0.1)
+    return False
+
+
+def hover(hwnd, x, y):
+    """Move the real cursor to CLIENT pixel (x,y) and post a mouse move."""
+    import ctypes
+    USER32 = ctypes.windll.user32
+    pt = ctypes.create_string_buffer(8)
+    struct.pack_into("2i", pt, 0, 0, 0)
+    USER32.ClientToScreen(hwnd, pt)
+    ox, oy = struct.unpack("2i", pt.raw)
+    USER32.SetCursorPos(ox + x, oy + y)
+    USER32.PostMessageW(hwnd, 0x0200, 0, (y << 16) | x)   # WM_MOUSEMOVE
+
+
+def page9_checks(pixels, w, h):
+    out = []
+    def add(name, good, detail=""):
+        out.append((name, good, detail))
+    p = pixels[221, 237]     # centre of the transitioning red/blue box
+    add("transition box rendered", p != (255, 255, 255), "(%s @221,237)" % (p,))
+    return out
+
+
+def page9_after_checks(pix_a, pix_b, pix_c, w, h):
+    out = []
+    def add(name, good, detail=""):
+        out.append((name, good, detail))
+    def dist(a, b):
+        return sum(abs(a[i] - b[i]) for i in range(3))
+
+    ca = pix_a[221, 237]
+    cb = pix_b[221, 237]
+    cc = pix_c[221, 237]
+    add("background transition changes colour over time",
+        max(dist(ca, cb), dist(cb, cc), dist(ca, cc)) > 40,
+        "(%s / %s / %s)" % (ca, cb, cc))
+
+    def green_x0(px):
+        xs = []
+        for y in range(430, 560):
+            for x in range(0, w):
+                if near(px[x, y], (34, 170, 34), 40):
+                    xs.append(x)
+        return min(xs) if xs else None
+
+    xs = [green_x0(pix_a), green_x0(pix_b), green_x0(pix_c)]
+    valid = [x for x in xs if x is not None]
+    span = (max(valid) - min(valid)) if len(valid) >= 2 else 0
+    add("transform transition shifts the box over time",
+        bool(valid) and (max(valid) > 110 or span > 20),
+        "(x0 %s, static ~71)" % (xs,))
+    return out
+
+
 def main():
     if not os.path.exists(EXE):
         print("FAIL: browser exe missing:", EXE)
@@ -616,7 +706,8 @@ def main():
                                  (PAGE5, "page5 (grid)", page5_checks, (204, 20, 20)),
                                  (PAGE6, "page6 (calc)", page6_checks, (51, 102, 204)),
                                  (PAGE7, "page7 (sticky)", page7_checks, (204, 34, 34)),
-                                 (PAGE8, "page8 (animations)", page8_checks, (51, 170, 51))):
+                                 (PAGE8, "page8 (animations)", page8_checks, (51, 170, 51)),
+                                 (PAGE9, "page9 (transitions)", page9_checks, (204, 34, 34))):
         print("\n=== %s ===" % name)
         checks = _run_page(page, fn, wait)
         if checks is None:
