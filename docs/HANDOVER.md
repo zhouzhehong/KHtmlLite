@@ -981,6 +981,29 @@ INCONCLUSIVE、或退出码 0 但输出里出现判定形 FAIL 令牌，都算�
 - 普通启动：预置 junk 保留（无自动清空），页面正常渲染（绿色盒子）。
 - `tile_protocol_test` PASS、引擎探针 48/48 PASS、`portable_smoke` PASS；全量回归结果见下方补记。
 
+## 5ab. Safari 15 UI 整体重写（2026-10-25，参照 naxl/Firefox-Safari-15-Theme）
+
+### 需求与仓库实情（如实）
+- 用户指定 https://github.com/naxl/Firefox-Safari-15-Theme 作为 UI 来源，要求"整个 UI 换成该仓库的，旧 UI 全部舍弃，尽量复用其内容"。
+- 实际核查：该仓库是 **Firefox 的 userChrome.css 主题**（"A Firefox theme that emulates the Safari 15 interface and new tab page"），仓库内容只有 `Readme.md` + `Resources/*.png` 预览图；`Readme.md` 指向的 CSS 下载（denizjcan/Firefox-Safari-15-Theme releases）已 404，naxl 仓库本身无 release。**其"代码"是 Firefox XUL DOM 专属 CSS，无法直接嵌入 Qt EXE**。
+- 因此按预览图（`docs/assets/safari15_ui.png` 为本实现截图；参照 `Resources/safari*.png`）把 Safari 15 外观**移植重写**到 Qt：复用其视觉设计（圆角标签、红黄绿灯、圆角地址胶囊、灰底工具栏），不复用其 Firefox 选择器。
+
+### 旧 UI → 新 UI
+- **删除**：旧 `buildChrome()`（顶部工具条+下方 `QTabWidget` 原生标签、旧 QSS、主页/前往按钮等）整体移除；`QTabWidget *m_tabs` 成员删除。
+- **新结构**（`src/host/khtml_browser.cpp`）：
+  - 无边框窗口（`Qt::FramelessWindowHint`）+ 自绘 macOS 风格红黄绿灯（关闭/最小化/最大化，实测 1920x1008 最大化与还原、红灯关闭进程）；
+  - 顶部标签条（28 logical px）：红黄绿灯、侧边栏占位按钮、Safari 圆角标签栏（`QTabBar`，可拖拽换序、关闭、Ctrl+W、右键菜单关闭/新建）、"+“ 新标签；
+  - 工具条（30 logical px）：圆角返回/前进/刷新按钮、**圆角地址胶囊**（focus 高亮）、共享占位按钮；
+  - 页面区改为 `QStackedWidget`，由 `addPageTab/insertPageTab/removePageTab/selectPageTab/setPageTabTitle/pageTabTitle/blockPageTabSignals` 助手维护（替换原 `QTabWidget` 调用点；崩溃恢复/挂起/恢复路径同步）；
+  - 拖拽：标签条/工具条空白处 `QWindow::startSystemMove()` 移动窗口，双击最大化；无边框缩放经 `WM_NCHITTEST` 边框命中；Win11 调 `DwmSetWindowAttribute(DWMWA_WINDOW_CORNER_PREFERENCE=ROUND)` 圆角。
+- **页面内容原点保持 (11,87) 物理像素**（7 logical 左右边距、28+30 logical 行高、4 logical 下边距，dpr 1.5），因此全部既有回归坐标无需更改（仅 page3 的"饱和像素行"扫描需限定 y≥87，避开新 chrome 的彩色圆点/文字彩边）。
+
+### 交互与回归
+- 保留：地址栏导航、F11 全屏、Ctrl+Shift+Del 清缓存接口（UI 调用 `PageLoader::clearCache()`）、标签挂起/恢复、崩溃恢复、tombstone 快照、页面尺寸同步。
+- 占位（如实）：侧边栏按钮与共享按钮无功能；标签关闭的悬停 × 图标未用 QSS 渲染（改用 Ctrl+W/右键菜单关闭）。
+- 验证：引擎探针 **48/48 PASS**；`browser_click_probe` / `input_coord_probe` / `dpr_probe` / `title_probe` 均 PASS；红黄绿灯实测；`tile_protocol_test` PASS（源码不变量检查已适配 `blockPageTabSignals`）；`portable_smoke` PASS；全量回归结果见下方补记。
+- 文档截图：`docs/assets/safari15_ui.png`。
+
 ## 6. 正在/马上要做的
 A. ~~拆那 1.1s~~ **已完成**（字体枚举缓存 + 图标懒加载，构造 1.1s→~0.35s，TTFF 2.0→1.1s）。
    下一步同部位残账：渲染进程镜像加载+socket 连接 ~500ms（每次新标签都付），

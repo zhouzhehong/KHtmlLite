@@ -16,6 +16,10 @@
 #include <QToolButton>
 #include <QTabWidget>
 #include <QTabBar>
+#include <QMenu>
+#include <QStackedWidget>
+#include <QWindow>
+#include <QMouseEvent>
 #include <QHBoxLayout>
 #include <QVBoxLayout>
 #include <QWidget>
@@ -1181,6 +1185,38 @@ private:
     QString m_title;
 };
 
+// Frameless-window drag area for the Safari-style chrome: dragging the tab
+// strip / toolbar background moves the window; double-click toggles maximize.
+class DragStrip : public QWidget
+{
+public:
+    explicit DragStrip(QWidget *parent = nullptr) : QWidget(parent) {}
+protected:
+    void mousePressEvent(QMouseEvent *e) override
+    {
+        if (e->button() == Qt::LeftButton) {
+            if (QWindow *w = window() ? window()->windowHandle() : nullptr)
+                w->startSystemMove();
+            e->accept();
+            return;
+        }
+        QWidget::mousePressEvent(e);
+    }
+    void mouseDoubleClickEvent(QMouseEvent *e) override
+    {
+        if (e->button() == Qt::LeftButton) {
+            QMainWindow *mw = qobject_cast<QMainWindow *>(window());
+            if (mw) {
+                if (mw->isMaximized()) mw->showNormal();
+                else mw->showMaximized();
+            }
+            e->accept();
+            return;
+        }
+        QWidget::mouseDoubleClickEvent(e);
+    }
+};
+
 class KHtmlLiteWindow : public QMainWindow
 {
     Q_OBJECT
@@ -1189,6 +1225,8 @@ public:
         : QMainWindow(parent)
     {
         setWindowTitle(QStringLiteral("KHtmlLite"));
+        // Safari-15-style chrome: frameless window drawn by buildChrome().
+        setWindowFlag(Qt::FramelessWindowHint, true);
         // Default window size — LOGICAL (Qt/CSS) pixels.  Sizing follows the
         // desktop-browser convention: a fraction of the work area, capped at
         // a sane default DIP size (Chrome/Edge open ~1200x650 outer on this
@@ -1243,6 +1281,15 @@ public:
         });
         addAction(fsAct);
 
+        // Safari tabs close via the red × on hover; QSS cannot draw that icon
+        // reliably, so expose the same action on Ctrl+W and the tab context menu.
+        QAction *closeTabAct = new QAction(this);
+        closeTabAct->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_W));
+        connect(closeTabAct, &QAction::triggered, this, [this] {
+            closeTab(currentPageTabIndex());
+        });
+        addAction(closeTabAct);
+
         // Cache policy is UI-owned: the kernel exposes PageLoader::clearCache()
         // and this built-in action is the browser UI hook for it (Ctrl+Shift+
         // Del, the browser convention for "clear browsing data").
@@ -1257,6 +1304,7 @@ public:
         connect(m_resizeTimer, &QTimer::timeout, this, &KHtmlLiteWindow::applyPendingResize);
         addTab(start.isEmpty() ? QUrl(QStringLiteral("https://cn.bing.com")) : start);
         STARTUP_MARK("first tab added");
+        QTimer::singleShot(0, this, [this] { applyRoundedCorners(); });
         syncChrome();
     }
 
@@ -1268,50 +1316,192 @@ public:
         PageLoader::clearCache();
     }
 
+    // Windows 11: give the frameless Safari window the system rounded corners.
+    void applyRoundedCorners()
+    {
+        HMODULE dwm = LoadLibraryW(L"dwmapi.dll");
+        if (!dwm)
+            return;
+        typedef HRESULT (WINAPI *SetWindowAttr)(HWND, DWORD, LPCVOID, DWORD);
+        SetWindowAttr fn = reinterpret_cast<SetWindowAttr>(
+            GetProcAddress(dwm, "DwmSetWindowAttribute"));
+        if (fn) {
+            const int round = 2;   // DWMWCP_ROUND
+            fn((HWND)winId(), 33   // DWMWA_WINDOW_CORNER_PREFERENCE
+               , &round, sizeof(round));
+        }
+    }
+
+    static QPushButton *mkRoundBtn(QStyle::StandardPixmap sp, QWidget *parent)
+    {
+        QPushButton *b = new QPushButton(parent);
+        b->setObjectName(QStringLiteral("roundBtn"));
+        b->setIcon(parent->style()->standardIcon(sp));
+        b->setFixedSize(22, 22);
+        b->setFlat(true);
+        b->setCursor(Qt::ArrowCursor);
+        return b;
+    }
+
+    static QToolButton *mkLight(QWidget *parent, const QString &name, const QColor &c)
+    {
+        QToolButton *b = new QToolButton(parent);
+        b->setObjectName(name);
+        b->setFixedSize(11, 11);
+        b->setAutoRaise(true);
+        b->setCursor(Qt::ArrowCursor);
+        b->setStyleSheet(QStringLiteral(
+            "QToolButton{background:%1;border-radius:6px;border:1px solid rgba(0,0,0,0.12);}"
+            "QToolButton:hover{border-color:rgba(0,0,0,0.30);}")
+            .arg(c.name()));
+        return b;
+    }
+
+    static const QString &safariStyleSheet()
+    {
+        static const QString qss = QStringLiteral(
+            "QWidget#central { background: #e7e7e9; }"
+            "QWidget#tabStrip { background: #e7e7e9; }"
+            "QWidget#toolbar { background: #f7f7f7; border-bottom: 1px solid #dcdcdc; }"
+            "QStackedWidget#pageStack { background: #ffffff; }"
+            "QTabBar#safariTabs { background: transparent; }"
+            "QTabBar#safariTabs::tab {"
+            "  background: rgba(0,0,0,0.065); border: 1px solid rgba(0,0,0,0.10);"
+            "  border-radius: 7px; margin: 1px 2px; min-width: 120px; max-width: 200px;"
+            "  height: 22px; padding: 0 8px; color: #2b2b2b; font-size: 12px; }"
+            "QTabBar#safariTabs::tab:selected { background: #fbfbfb; border-color: #c7c7c9; }"
+            "QTabBar#safariTabs::tab:hover:!selected { background: rgba(0,0,0,0.10); }"
+            "QPushButton#roundBtn, QToolButton#sidebarBtn, QToolButton#plusBtn, QPushButton#shareBtn {"
+            "  border: none; background: transparent; color: #3a3a3a; font-size: 15px;"
+            "  border-radius: 7px; padding: 0; }"
+            "QPushButton#roundBtn:hover, QToolButton#sidebarBtn:hover,"
+            "QToolButton#plusBtn:hover, QPushButton#shareBtn:hover {"
+            "  background: rgba(0,0,0,0.08); }"
+            "QToolButton#plusBtn { font-size: 19px; color: #555; }"
+            "QLineEdit#address {"
+            "  background: #ffffff; border: 1px solid #d5d5d7; border-radius: 8px;"
+            "  padding: 2px 8px; color: #222; selection-background-color: #b3d7ff;"
+            "  font-size: 12px; margin: 0 5px; }"
+            "QLineEdit#address:focus { border: 1px solid #4a90e2; }");
+        return qss;
+    }
+
     void buildChrome()
     {
+        // Safari 15 themed chrome: tab strip with traffic lights, sidebar
+        // toggle, rounded tabs and a plus button; below it a toolbar with
+        // round back/forward/reload, a rounded address pill and a share button.
         QWidget *central = new QWidget(this);
+        central->setObjectName(QStringLiteral("central"));
         QVBoxLayout *root = new QVBoxLayout(central);
-        root->setContentsMargins(6, 6, 6, 6);
-        root->setSpacing(4);
-        QHBoxLayout *bar = new QHBoxLayout();
-        m_back = mkBtn(QStyle::SP_ArrowBack);
-        m_fwd  = mkBtn(QStyle::SP_ArrowForward);
-        m_reload = mkBtn(QStyle::SP_BrowserReload);
-        for (QPushButton *b : {m_back, m_fwd, m_reload}) {
-            b->setFixedWidth(34);
-            bar->addWidget(b);
+        root->setContentsMargins(7, 0, 7, 4);
+        root->setSpacing(0);
+
+        DragStrip *strip = new DragStrip(central);
+        strip->setObjectName(QStringLiteral("tabStrip"));
+        strip->setFixedHeight(28);
+        m_tabStrip = strip;
+        QHBoxLayout *ts = new QHBoxLayout(strip);
+        ts->setContentsMargins(8, 2, 8, 2);
+        ts->setSpacing(6);
+        m_lightClose = mkLight(strip, QStringLiteral("lightClose"), QColor(255, 95, 86));
+        m_lightMin = mkLight(strip, QStringLiteral("lightMin"), QColor(255, 189, 46));
+        m_lightMax = mkLight(strip, QStringLiteral("lightMax"), QColor(39, 201, 63));
+        ts->addWidget(m_lightClose);
+        ts->addWidget(m_lightMin);
+        ts->addWidget(m_lightMax);
+        ts->addSpacing(6);
+
+        m_sidebarBtn = new QToolButton(strip);
+        m_sidebarBtn->setObjectName(QStringLiteral("sidebarBtn"));
+        m_sidebarBtn->setText(QStringLiteral("◧"));
+        m_sidebarBtn->setToolTip(QStringLiteral("侧边栏"));
+        m_sidebarBtn->setFixedSize(22, 22);
+        ts->addWidget(m_sidebarBtn);
+
+        m_tabBar = new QTabBar(strip);
+        m_tabBar->setObjectName(QStringLiteral("safariTabs"));
+        m_tabBar->setTabsClosable(true);
+        m_tabBar->setMovable(true);
+        m_tabBar->setExpanding(false);
+        m_tabBar->setDrawBase(false);
+        m_tabBar->setUsesScrollButtons(true);
+        m_tabBar->setElideMode(Qt::ElideRight);
+        m_tabBar->setContextMenuPolicy(Qt::CustomContextMenu);
+        ts->addWidget(m_tabBar, 1);
+
+        m_newTabBtn = new QToolButton(strip);
+        m_newTabBtn->setObjectName(QStringLiteral("plusBtn"));
+        m_newTabBtn->setText(QStringLiteral("+"));
+        m_newTabBtn->setToolTip(QStringLiteral("新标签页"));
+        m_newTabBtn->setFixedSize(22, 22);
+        ts->addWidget(m_newTabBtn);
+        root->addWidget(strip);
+
+        DragStrip *bar = new DragStrip(central);
+        bar->setObjectName(QStringLiteral("toolbar"));
+        bar->setFixedHeight(30);
+        QHBoxLayout *tb = new QHBoxLayout(bar);
+        tb->setContentsMargins(8, 4, 8, 4);
+        tb->setSpacing(6);
+        m_back = mkRoundBtn(QStyle::SP_ArrowBack, bar);
+        m_fwd = mkRoundBtn(QStyle::SP_ArrowForward, bar);
+        tb->addWidget(m_back);
+        tb->addWidget(m_fwd);
+        m_addr = new QLineEdit(bar);
+        m_addr->setObjectName(QStringLiteral("address"));
+        m_addr->setPlaceholderText(QStringLiteral("搜索或输入网站名称"));
+        m_addr->setClearButtonEnabled(false);
+        m_addr->setMinimumHeight(22);
+        tb->addWidget(m_addr, 1);
+        m_reload = mkRoundBtn(QStyle::SP_BrowserReload, bar);
+        tb->addWidget(m_reload);
+        m_shareBtn = new QPushButton(QStringLiteral("↑"), bar);
+        m_shareBtn->setObjectName(QStringLiteral("shareBtn"));
+        m_shareBtn->setFixedSize(22, 22);
+        m_shareBtn->setToolTip(QStringLiteral("共享"));
+        tb->addWidget(m_shareBtn);
+        root->addWidget(bar);
+
+        // 9 px gap below the toolbar keeps the page content origin at the
+        // Page origin on physical pixels stays (11, 87): 7 logical margin,
+        QWidget *gap = new QWidget(central);
+        gap->setFixedHeight(0);
+        root->addWidget(gap);
+
+        m_stack = new QStackedWidget(central);
+        m_stack->setObjectName(QStringLiteral("pageStack"));
+        root->addWidget(m_stack, 1);
+
+        // Qt's default tab close button renders as a coloured square inside
+        // the Safari tab pill; draw a subtle grey × and use it instead.
+        const QString closeIcon = QDir::tempPath() + QStringLiteral("/khtml_tab_close.png");
+        const QString closeIconUrl = QString(closeIcon).replace(QLatin1Char('\\'), QLatin1Char('/'));
+        {
+            QImage img(16, 16, QImage::Format_ARGB32);
+            img.fill(Qt::transparent);
+            QPainter p(&img);
+            p.setRenderHint(QPainter::Antialiasing);
+            p.setPen(QPen(QColor(95, 95, 95), 1.6));
+            p.drawLine(4, 4, 12, 12);
+            p.drawLine(12, 4, 4, 12);
+            p.end();
+            img.save(closeIcon, "PNG");
         }
-        m_home = new QPushButton(QStringLiteral("主页"), this);
-        m_home->setFixedWidth(44);
-        bar->addWidget(m_home);
-        m_addr = new QLineEdit(central);
-        m_addr->setPlaceholderText(QStringLiteral("输入网址或关键词，回车访问 / 搜索（!y 前缀用 Yandex）"));
-        m_addr->setClearButtonEnabled(true);
-        bar->addWidget(m_addr, 1);
-        QPushButton *go = new QPushButton(QStringLiteral("前往"), central);
-        go->setFixedWidth(56);
-        bar->addWidget(go);
-        root->addLayout(bar);
-        m_tabs = new QTabWidget(central);
-        m_tabs->setTabsClosable(true);
-        m_tabs->setMovable(true);
-        m_tabs->setStyleSheet(QStringLiteral(
-            "QTabWidget::pane { border: 1px solid #c8c8c8; background: #fff; }"
-            "QTabBar::tab { background: #e6e6e6; border: 1px solid #c0c0c0;"
-            "  border-bottom: none; padding: 3px 12px; min-width: 90px; }"
-            "QTabBar::tab:selected { background: #ffffff; }"
-            "QTabBar::tab:hover:!selected { background: #efefef; }"));
-        QPushButton *newTab = new QPushButton(QStringLiteral("+"));
-        newTab->setFixedSize(28, 26);
-        newTab->setToolTip(QStringLiteral("新标签页"));
-        QHBoxLayout *tabrow = new QHBoxLayout();
-        tabrow->setContentsMargins(0, 0, 0, 0);
-        tabrow->setSpacing(0);
-        tabrow->addWidget(m_tabs, 1);
-        tabrow->addWidget(newTab, 0, Qt::AlignTop);
-        root->addLayout(tabrow);
         setCentralWidget(central);
+        QString style = safariStyleSheet();
+        style += QStringLiteral("QTabBar#safariTabs::close-button { image: url(%1); background: transparent; subcontrol-position: right; width: 12px; height: 12px; }").arg(closeIconUrl);
+        setStyleSheet(style);
+
+        connect(m_lightClose, &QToolButton::clicked, this, &QWidget::close);
+        connect(m_lightMin, &QToolButton::clicked, this, &QWidget::showMinimized);
+        connect(m_lightMax, &QToolButton::clicked, this, [this]() {
+            if (isMaximized()) showNormal(); else showMaximized();
+        });
+        connect(m_sidebarBtn, &QToolButton::clicked, this, []() {});
+        connect(m_shareBtn, &QPushButton::clicked, this, []() {});
+        connect(m_newTabBtn, &QToolButton::clicked, this,
+                [this] { addTab(QUrl(QStringLiteral("https://cn.bing.com"))); });
         connect(m_back, &QPushButton::clicked, this, &KHtmlLiteWindow::goBack);
         connect(m_fwd, &QPushButton::clicked, this, &KHtmlLiteWindow::goForward);
         connect(m_reload, &QPushButton::clicked, this, [this] {
@@ -1319,20 +1509,23 @@ public:
             if (pg && pg->render && pg->render->isRunning()) pg->render->reload();
             else if (pg && pg->suspended) resumeTab(pg);
         });
-        connect(m_home, &QPushButton::clicked, this, [this] {
-            navigate(currentPage(), QUrl(QStringLiteral("https://cn.bing.com")), true);
-        });
-        connect(go, &QPushButton::clicked, this, &KHtmlLiteWindow::onAddressEntered);
         connect(m_addr, &QLineEdit::returnPressed, this, &KHtmlLiteWindow::onAddressEntered);
-        connect(newTab, &QToolButton::clicked, this, [this] { addTab(QUrl(QStringLiteral("https://cn.bing.com"))); });
-        connect(m_tabs, &QTabWidget::tabCloseRequested, this, &KHtmlLiteWindow::closeTab);
-        connect(m_tabs, &QTabWidget::currentChanged, this, [this](int idx) {
+        connect(m_tabBar, &QTabBar::tabCloseRequested, this, &KHtmlLiteWindow::closeTab);
+        connect(m_tabBar, &QTabBar::customContextMenuRequested, this, [this](const QPoint &pos) {
+            QMenu menu(this);
+            const int idx = m_tabBar->tabAt(pos);
+            QAction *closeOne = menu.addAction(QStringLiteral("关闭标签页"));
+            QAction *newOne = menu.addAction(QStringLiteral("新标签页"));
+            QAction *chosen = menu.exec(m_tabBar->mapToGlobal(pos));
+            if (chosen == closeOne) closeTab(idx >= 0 ? idx : currentPageTabIndex());
+            else if (chosen == newOne) addTab(QUrl(QStringLiteral("https://cn.bing.com")));
+        });
+        connect(m_tabBar, &QTabBar::currentChanged, this, [this](int idx) {
             fprintf(stderr, "[tomb] currentChanged idx=%d\n", idx);
-            // With software frames, each tab's PageSurface is already a child
-            // of the QTabWidget stack — no show/hide of renderer windows needed.
+            if (m_stack && idx >= 0 && idx < m_stack->count())
+                m_stack->setCurrentIndex(idx);
             TabPage *pg = (idx >= 0 && idx < m_pages.size()) ? m_pages.at(idx) : nullptr;
             if (pg) pg->lastActive = QDateTime::currentMSecsSinceEpoch();
-            // Throttle frame clocks of background tabs (and wake the new one).
             for (TabPage *p2 : m_pages)
                 if (p2->render) p2->render->setVisible(p2 == pg);
             if (pg && pg->suspended) resumeTab(pg);
@@ -1341,14 +1534,77 @@ public:
                 QTimer::singleShot(0, this, &KHtmlLiteWindow::applyPendingResize);
             }
         });
+        connect(m_tabBar, &QTabBar::tabMoved, this, [this](int from, int to) {
+            if (from == to || from < 0 || to < 0 || from >= m_pages.size() || to >= m_pages.size())
+                return;
+            TabPage *pg = m_pages.takeAt(from);
+            m_pages.insert(to, pg);
+            QWidget *w = m_stack->widget(from);
+            if (w) {
+                m_stack->removeWidget(w);
+                m_stack->insertWidget(to, w);
+            }
+        });
     }
+
+    // ---- page stack <-> Safari tab bar helpers ----
+    int currentPageTabIndex() const
+    {
+        return m_tabBar ? m_tabBar->currentIndex() : -1;
+    }
+
+    void addPageTab(QWidget *w, const QString &title)
+    {
+        m_stack->addWidget(w);
+        m_tabBar->addTab(title);
+    }
+
+    void insertPageTab(int idx, QWidget *w, const QString &title)
+    {
+        m_stack->insertWidget(idx, w);
+        m_tabBar->insertTab(idx, title);
+    }
+
+    void removePageTab(int idx)
+    {
+        if (!m_stack || idx < 0 || idx >= m_stack->count())
+            return;
+        QWidget *w = m_stack->widget(idx);
+        m_stack->removeWidget(w);
+        m_tabBar->removeTab(idx);
+    }
+
+    void selectPageTab(int idx)
+    {
+        m_tabBar->setCurrentIndex(idx);
+        if (m_stack && idx >= 0 && idx < m_stack->count())
+            m_stack->setCurrentIndex(idx);
+    }
+
+    void setPageTabTitle(int idx, const QString &t)
+    {
+        if (m_tabBar && idx >= 0 && idx < m_tabBar->count())
+            m_tabBar->setTabText(idx, t);
+    }
+
+    QString pageTabTitle(int idx) const
+    {
+        return (m_tabBar && idx >= 0 && idx < m_tabBar->count()) ? m_tabBar->tabText(idx) : QString();
+    }
+
+    void blockPageTabSignals(bool b)
+    {
+        if (m_tabBar) m_tabBar->blockSignals(b);
+        if (m_stack) m_stack->blockSignals(b);
+    }
+
 
     QPushButton *mkBtn(QStyle::StandardPixmap sp) {
         return new QPushButton(style()->standardIcon(sp), QString(), this);
     }
 
     TabPage *currentPage() const {
-        const int idx = m_tabs->currentIndex();
+        const int idx = currentPageTabIndex();
         return (idx >= 0 && idx < m_pages.size()) ? m_pages.at(idx) : nullptr;
     }
 
@@ -1376,10 +1632,10 @@ public:
         pg->current = url;
         pg->lastActive = QDateTime::currentMSecsSinceEpoch();
         startRenderer(pg, url);
-        m_tabs->addTab(pg->render ? pg->render->container() : new QWidget,
+        addPageTab(pg->render ? pg->render->container() : new QWidget,
                        url.isEmpty() ? QStringLiteral("新标签页") : url.host());
         m_pages.append(pg);
-        m_tabs->setCurrentIndex(m_pages.size() - 1);
+        selectPageTab(m_pages.size() - 1);
         QTimer::singleShot(0, this, [this, pg]() {
             if (!pg || !pg->render || !pg->render->isRunning())
                 return;
@@ -1398,7 +1654,7 @@ public:
             fprintf(stderr, "[tomb] titleChanged title=%s cur=%d\n",
                     t.toUtf8().constData(), pg == currentPage());
             const int idx = m_pages.indexOf(pg);
-            if (idx >= 0 && !t.isEmpty()) m_tabs->setTabText(idx, t.left(30));
+            if (idx >= 0 && !t.isEmpty()) setPageTabTitle(idx, t.left(30));
             if (pg == currentPage())
                 setWindowTitle(t.isEmpty() ? QStringLiteral("KHtmlLite")
                                            : QStringLiteral("%1 - KHtmlLite").arg(t));
@@ -1429,16 +1685,16 @@ public:
                 pg->jsDisabled = true;
                 if (pg->render) { delete pg->render; pg->render = nullptr; }
                 startRenderer(pg, pg->current);
-                m_tabs->removeTab(idx);
-                m_tabs->insertTab(idx, pg->render->container(), pg->savedTitle);
-                m_tabs->setCurrentIndex(idx);
+                removePageTab(idx);
+                insertPageTab(idx, pg->render->container(), pg->savedTitle);
+                selectPageTab(idx);
                 return;
             }
             if (pg->crashWidget) delete pg->crashWidget;
             pg->crashWidget = makeCrashWidget(pg);
-            m_tabs->removeTab(idx);
-            m_tabs->insertTab(idx, pg->crashWidget, pg->render ? pg->render->title() : QStringLiteral("已崩溃"));
-            m_tabs->setTabText(idx, QStringLiteral("已崩溃"));
+            removePageTab(idx);
+            insertPageTab(idx, pg->crashWidget, pg->render ? pg->render->title() : QStringLiteral("已崩溃"));
+            setPageTabTitle(idx, QStringLiteral("已崩溃"));
         });
         connect(pg->render, &RenderTab::openNewTab, this, [this](const QUrl &u) { addTab(u); });
         // A page surface was resized: coalesce through the existing single-shot
@@ -1457,7 +1713,7 @@ public:
     void closeTab(int idx) {
         if (idx < 0 || idx >= m_pages.size()) return;
         TabPage *pg = m_pages.takeAt(idx);
-        m_tabs->removeTab(idx);
+        removePageTab(idx);
         if (pg->render) pg->render->terminate();
         if (pg->crashWidget) delete pg->crashWidget;
         if (pg->tombstoneWidget) delete pg->tombstoneWidget;
@@ -1538,6 +1794,27 @@ protected:
                 break;
             case WM_EXITSIZEMOVE:
                 endLiveResize();
+            case WM_NCHITTEST: {
+                // Frameless Safari chrome: resize through the window borders.
+                const int border = 6;
+                RECT r;
+                GetWindowRect((HWND)winId(), &r);
+                const int x = (int)(short)LOWORD(msg->lParam);
+                const int y = (int)(short)HIWORD(msg->lParam);
+                const bool left = x < r.left + border;
+                const bool right = x >= r.right - border;
+                const bool top = y < r.top + border;
+                const bool bottom = y >= r.bottom - border;
+                if (top && left) { *result = HTTOPLEFT; return true; }
+                if (top && right) { *result = HTTOPRIGHT; return true; }
+                if (bottom && left) { *result = HTBOTTOMLEFT; return true; }
+                if (bottom && right) { *result = HTBOTTOMRIGHT; return true; }
+                if (left) { *result = HTLEFT; return true; }
+                if (right) { *result = HTRIGHT; return true; }
+                if (top) { *result = HTTOP; return true; }
+                if (bottom) { *result = HTBOTTOM; return true; }
+                break;
+            }
                 break;
             default:
                 break;
@@ -1643,7 +1920,7 @@ protected:
     void suspendTab(TabPage *pg) {
         if (!pg || pg->suspended) return;
         fprintf(stderr, "[tomb] suspendTab idx=%d\n", m_pages.indexOf(pg));
-        pg->savedTitle = m_tabs->tabText(m_pages.indexOf(pg));
+        pg->savedTitle = pageTabTitle(m_pages.indexOf(pg));
         if (pg->savedTitle.isEmpty()) pg->savedTitle = pg->current.host();
         // Snapshot BEFORE killing the renderer: keep the page's last pixels.
         if (pg->render) pg->snapshot = pg->render->canvasImage();
@@ -1664,12 +1941,12 @@ protected:
             // The current TAB never actually changes here, only its index
             // churns (1 -> 0 -> 1), so suppressing the signal across the
             // surgery is exactly right.
-            m_tabs->blockSignals(true);
-            m_tabs->removeTab(idx);
+            blockPageTabSignals(true);
+            removePageTab(idx);
             pg->tombstoneWidget = new TombstoneWidget(pg->snapshot, pg->savedTitle);
-            m_tabs->insertTab(idx, pg->tombstoneWidget,
+            insertPageTab(idx, pg->tombstoneWidget,
                               pg->savedTitle + QStringLiteral(" [挂起]"));
-            m_tabs->blockSignals(false);
+            blockPageTabSignals(false);
         }
     }
 
@@ -1699,12 +1976,12 @@ protected:
             // re-route currentChanged onto the half-resumed tab.  The
             // deliberate setCurrentIndex afterwards fires the handler
             // exactly once with the final, consistent state.
-            m_tabs->blockSignals(true);
-            m_tabs->removeTab(idx);
+            blockPageTabSignals(true);
+            removePageTab(idx);
             if (pg->tombstoneWidget) { delete pg->tombstoneWidget; pg->tombstoneWidget = nullptr; }
-            m_tabs->insertTab(idx, pg->render->container() ? pg->render->container() : new QWidget, pg->savedTitle);
-            m_tabs->blockSignals(false);
-            m_tabs->setCurrentIndex(idx);
+            insertPageTab(idx, pg->render->container() ? pg->render->container() : new QWidget, pg->savedTitle);
+            blockPageTabSignals(false);
+            selectPageTab(idx);
         }
     }
 
@@ -2038,10 +2315,15 @@ protected:
     bool m_gpuUnavailable = false;
     int m_lastGpuPct = 0;
     qint64 m_lastIdleTime = -1, m_lastKernelTime = 0, m_lastUserTime = 0;
-    QTabWidget *m_tabs = nullptr;
+    QTabBar *m_tabBar = nullptr;
+    QStackedWidget *m_stack = nullptr;
+    QWidget *m_tabStrip = nullptr;
+    QToolButton *m_lightClose = nullptr, *m_lightMin = nullptr, *m_lightMax = nullptr;
+    QToolButton *m_sidebarBtn = nullptr, *m_newTabBtn = nullptr;
+    QPushButton *m_shareBtn = nullptr;
     QList<TabPage *> m_pages;
     QLineEdit *m_addr = nullptr;
-    QPushButton *m_back = nullptr, *m_fwd = nullptr, *m_reload = nullptr, *m_home = nullptr;
+    QPushButton *m_back = nullptr, *m_fwd = nullptr, *m_reload = nullptr;
 };
 
 int main(int argc, char **argv)

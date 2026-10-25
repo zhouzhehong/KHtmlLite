@@ -316,8 +316,11 @@ def page3_checks(pixels, w, h):
     # A gradient row spans the 450px-wide box; browser-chrome accent rows are
     # either much wider (spread over the whole window) or much narrower, so
     # keep only rows whose saturated-pixel span is ~450px.
+    # Only the page area: the Safari chrome (traffic lights, tab text
+    # subpixel fringes) has saturated pixels too.  Page origin is (11, 87).
+    CONTENT_TOP = 87
     rows = []
-    for y in range(h):
+    for y in range(CONTENT_TOP, h):
         row = [x for x in range(w)
                if max(pixels[x, y]) - min(pixels[x, y]) > 40 and max(pixels[x, y]) > 60]
         if not row:

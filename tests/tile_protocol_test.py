@@ -214,7 +214,8 @@ def test_static_consistency():
         "CPU-adaptive idle timeout missing"
     m = re.search(r"void suspendTab\(TabPage \*pg\) \{(.*?)\n    \}", brow, re.S)
     assert m, "suspendTab not found"
-    assert "blockSignals(true)" in m.group(1), \
+    assert ("blockSignals(true)" in m.group(1)
+            or "blockPageTabSignals(true)" in m.group(1)), \
         "suspendTab tab surgery without currentChanged suppression"
     assert "GetSystemTimes" in brow, "system CPU sampling missing"
     print("  tombstone: 4 memory tiers, kernel event watcher, "
