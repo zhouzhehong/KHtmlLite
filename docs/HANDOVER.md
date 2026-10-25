@@ -956,6 +956,31 @@ INCONCLUSIVE、或退出码 0 但输出里出现判定形 FAIL 令牌，都算�
 - animation/transition：timing-function 曲线（线性回退）、布局属性过渡、多属性 `transition-property`、复合值插值与合成层提升；
 - 外壳 EXE 替换：按用户指示后续再做，不在本目标范围。
 
+## 5aa. 缓存清理接口（内核提供、UI 决定时机）（2026-10-25）
+
+### 背景与实测结论
+- 原 EXE **没有**"启动清空/退出清空缓存"的设定：`PageLoader` 只写镜像（同一 URL 每次重新下载并重写 `index.html`，资源按下载结果写入）。
+- 实测（同 URL 连续两次启动、服务端改色）：两次各发起 3 个请求，第二次显示服务端**新内容**（蓝盒），证明页面内容**不会复用缓存**。残留风险只在"同一 URL 目录里旧资源文件"（例如某次图片下载失败会留下旧文件），以及缓存目录持续累积占用磁盘。
+- 需求按用户最新指示调整：**不做自动清空**；改为在内核里提供清空缓存接口，由 UI/设置决定何时调用（对标 Safari/WebKit 的数据清理 API 模型）。
+
+### 接口（UI 可调用）
+1. **内核层**：`PageLoader::clearCache()`（`src/host/pageloader.h`，静态方法）——清理 `PageLoader::cacheRoot()` 的全部候选根：
+   - `%TEMP%/khtml_cache`
+   - `%TEMP%/khtmllite/khtml_cache`
+   - `applicationDirPath()/khtml_cache`（便携版实际落点）
+   - `AppDataLocation/khtml_cache`
+2. **浏览器 UI 层**：`KHtmlLiteWindow::clearPageCacheNow()` 直接转调上者；已注册内置动作 **Ctrl+Shift+Delete**（浏览器"清除数据"的惯例快捷键），设置页/菜单可直接 `trigger()` 该 QAction 或调用此方法。
+3. **命令行/便携启动器**：`khtml_browser.exe --clear-cache` 清空缓存后立即退出（返回码 0），便于设置脚本或启动器调用。
+
+### 行为说明
+- 内核自身**不在**启动/每次加载/退出时清除缓存（自动清空已按新指示撤销）。
+- 页面加载仍然每次重新下载主文档（缓存镜像不会作为页面内容复用）；UI 调一次 `clearCache()` 可把磁盘镜像彻底释放。
+
+### 验证
+- 预置 junk 目录后执行 `khtml_browser.exe --clear-cache`：返回码 0、缓存根被删除。
+- 普通启动：预置 junk 保留（无自动清空），页面正常渲染（绿色盒子）。
+- `tile_protocol_test` PASS、引擎探针 48/48 PASS、`portable_smoke` PASS；全量回归结果见下方补记。
+
 ## 6. 正在/马上要做的
 A. ~~拆那 1.1s~~ **已完成**（字体枚举缓存 + 图标懒加载，构造 1.1s→~0.35s，TTFF 2.0→1.1s）。
    下一步同部位残账：渲染进程镜像加载+socket 连接 ~500ms（每次新标签都付），

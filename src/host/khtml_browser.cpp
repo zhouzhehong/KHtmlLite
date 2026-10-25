@@ -22,6 +22,8 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QDir>
+#include <QKeySequence>
+#include "pageloader.h"
 #include <QUrl>
 #include <QLabel>
 #include <QTimer>
@@ -1240,6 +1242,14 @@ public:
                 showFullScreen();
         });
         addAction(fsAct);
+
+        // Cache policy is UI-owned: the kernel exposes PageLoader::clearCache()
+        // and this built-in action is the browser UI hook for it (Ctrl+Shift+
+        // Del, the browser convention for "clear browsing data").
+        QAction *clearAct = new QAction(this);
+        clearAct->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_Delete));
+        connect(clearAct, &QAction::triggered, this, &KHtmlLiteWindow::clearPageCacheNow);
+        addAction(clearAct);
         m_memTimer->start(10000);
         startMemoryPressureWatch();
         m_resizeTimer = new QTimer(this);
@@ -1248,6 +1258,14 @@ public:
         addTab(start.isEmpty() ? QUrl(QStringLiteral("https://cn.bing.com")) : start);
         STARTUP_MARK("first tab added");
         syncChrome();
+    }
+
+    // Clear the engine's page-cache mirror on demand.  Settings UIs should call
+    // this (or PageLoader::clearCache() directly); the engine does not decide
+    // the moment.
+    void clearPageCacheNow()
+    {
+        PageLoader::clearCache();
     }
 
     void buildChrome()
@@ -2056,6 +2074,13 @@ int main(int argc, char **argv)
                            + QStringLiteral("/ssl-ca-bundle.crt");
     if (QFile::exists(caPath))
         qputenv("SSL_CERT_FILE", QDir::toNativeSeparators(caPath).toUtf8());
+    // Engine cache-clearing interface for UI callers.  The kernel never
+    // clears the page cache on its own (Safari/WebKit model: the UI owns the
+    // policy).  Programmatic API: PageLoader::clearCache().
+    if (QCoreApplication::arguments().contains(QStringLiteral("--clear-cache"))) {
+        PageLoader::clearCache();
+        return 0;
+    }
     QUrl start;
     if (argc > 1) start = QUrl(QString::fromLocal8Bit(argv[1]));
     KHtmlLiteWindow w(start);

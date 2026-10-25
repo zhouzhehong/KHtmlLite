@@ -35,6 +35,8 @@ public:
 
     // Where downloaded pages/resources are cached.
     static QString cacheRoot();
+    // Clear the page-cache mirror on demand (UI-owned policy).
+    static void clearCache();
 
     // Reverse-mapping for cross-process URL handoff: href/src in the served
     // (rewritten) document point at LOCAL prefetch copies (file:// URLs

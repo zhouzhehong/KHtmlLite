@@ -576,6 +576,30 @@ QString PageLoader::cacheRoot()
     return base;
 }
 
+
+// Kernel-side cache-clearing interface for the UI layer.
+//
+// The engine owns the page-cache mirror (PageLoader::cacheRoot()/<sha1>/), but
+// it never clears it on its own: the UI decides WHEN to clear (Safari/WebKit
+// model, where the app calls the engine's data-store removal API).  UI code in
+// the browser process can call this directly (see
+// KHtmlLiteWindow::clearPageCacheNow() and the --clear-cache CLI switch).
+void PageLoader::clearCache()
+{
+    QStringList roots;
+    roots << QDir::tempPath() + QStringLiteral("/khtml_cache");
+    roots << QDir::tempPath() + QStringLiteral("/khtmllite/khtml_cache");
+    roots << QCoreApplication::applicationDirPath() + QStringLiteral("/khtml_cache");
+    const QString appData = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    if (!appData.isEmpty())
+        roots << appData + QStringLiteral("/khtml_cache");
+    for (const QString &r : roots) {
+        QDir d(r);
+        if (d.exists())
+            d.removeRecursively();
+    }
+}
+
 QString PageLoader::hashName(const QUrl &u) const
 {
     const QString s = u.toString(QUrl::FullyEncoded);
