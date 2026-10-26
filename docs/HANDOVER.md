@@ -1080,6 +1080,30 @@ INCONCLUSIVE、或退出码 0 但输出里出现判定形 FAIL 令牌，都算�
 - 关键项：`dwm_canvas_probe 22.7s PASS`（硬件 / 强制 WARP / 模拟 GPU 失败 + resize）、`tombstone_probe 624.2s PASS`（resume True）、`tile_protocol_test 189.2s PASS`、`engine_semantics_probe 276.1s PASS`、`resize_probe 601.9s PASS`、`scroll_smoke 602.9s PASS`、`bg_smoke 602.9s PASS`。
 - 便携包重新同步（`khtml_browser.exe` / `khtml_renderer.exe` / `libKF5KHtml.dll` SHA256 相等），`portable_smoke` PASS。
 
+## 5ae. localStorage/matches/fetch polyfill 修复 + 注入时机（2026-10-26）
+
+用户报告的 `src/host/pageloader.cpp` `kJsPolyfill` 问题及同批修复：
+
+### 修复内容
+1. **key() 多余分号**（原始 bug）：`"...||null;};};}"` → `"...||null;}};}"`。之前整个 polyfill `<script>` 是 SyntaxError，被第 1254 行 `window.onerror` 守卫吞掉，所有 shim 不执行。
+2. **matches 真正匹配选择器**：旧实现遍历全部元素直接返回 true。现用引擎自己的 `document.querySelector`：给元素临时加唯一属性 `data-khtml-m="m<token>"`，查询 `selector + '[data-khtml-m="token"]'`，命中即匹配（逗号分组逐个查）；结束恢复/删除属性。
+   - 为恢复属性，在 `qjs_dom_bridge.cpp` 增加 `Element.removeAttribute` JS 绑定。
+   - 修复 wrapper 身份：引擎每次 `querySelector` 返回**新的 JS wrapper**，`=== this` 永远 false；改为判断查询结果非空。
+   - 该引擎没有 `Element`/`Node`/`HTMLElement` 全局（实测 `typeof Element === 'undefined'`），polyfill 原在 `Element.prototype.matches` 处整段中断。改为用 `_ep = Element.prototype || Object.getPrototypeOf(document.documentElement)`，并给所有 `Element.prototype.*` 块加守卫。
+3. **localStorage 语义**：`_ls = Object.create(null)`（`clear()` 同样重置为 null 原型）；`getItem` 用 `hasOwnProperty` 区分“不存在 → null”和“空字符串”；`key(i)` 正规化索引；`setItem/removeItem` 统一 `String()`。`getItem('toString')` 等原型键不再命中。
+4. **fetch**：引擎没有 XMLHttpRequest（全树无实现）。fetch polyfill 现在在 `typeof XMLHttpRequest !== 'function'` 时明确 `reject(new TypeError('fetch is not available: XMLHttpRequest is not implemented in this engine'))`，不再抛 ReferenceError。未补 XHR（工程量大，按“明确报错”方案处理）。
+5. **polyfill 全局目标**：该引擎的 `window` 是 document wrapper，**不是 globalThis**（实测 `window !== globalThis`）；旧 polyfill 把 console/localStorage/fetch 定义在 `window` 上，裸全局名全部 undefined。改为定义到 `globalThis`（旧环境回退 window）。
+6. **注入时机**：抽出 `injectPolyfillBundle()`，**初始文档 `deliverInitialDocument()` 与最终 `rewriteAndSave()` 都注入**。此前只有最终文档有 polyfill，页面脚本先跑在无 shim 的初始文档上。
+
+### 验证
+- `node --check`：从 C 字符串拼出的完整 JS 11,669 字节，exit 0。
+- Node 语义执行（强制使用本 polyfill，提供 document stub）：console/fetch/localStorage 类型正确；empty/缺失/原型键/key/clear 全部通过；`fetch` reject 消息含 `XMLHttpRequest`。
+- 引擎内联执行（同一份 JS，同步报告写入 document.title）：
+  `console=object|fetch=function|ls=object|empty=true|missing=true|proto=true|key=true|cleared=true|ma=true|mb=false|mtag=true|mid=true|mattr=true|thenable=true`。
+  （引擎 Promise 微任务不驱动，fetch 的异步 reject 由 Node 阶段覆盖；引擎侧验证返回 thenable。）
+- 新探针 `tests/polyfill_probe.py` 已加入 `run_regression.ps1`。
+- 回归：`engine_semantics_probe` 48/48 PASS、`tile_protocol_test` PASS、`portable_smoke` PASS（便携包已同步）。
+
 ## 6. 正在/马上要做的
 A. ~~拆那 1.1s~~ **已完成**（字体枚举缓存 + 图标懒加载，构造 1.1s→~0.35s，TTFF 2.0→1.1s）。
    下一步同部位残账：渲染进程镜像加载+socket 连接 ~500ms（每次新标签都付），

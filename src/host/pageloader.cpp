@@ -18,7 +18,7 @@
 static const char *kJsPolyfill =
 "(function(){"
 "try{"
-"var w=window;"
+"var w=(typeof globalThis!=='undefined'&&globalThis)?globalThis:window;"
 "if(!w.console)w.console={log:function(){},warn:function(){},error:function(){},info:function(){},debug:function(){}};"
 "if(!w.performance)w.performance={now:function(){return new Date().getTime();}};"
 "if(!w.requestAnimationFrame)w.requestAnimationFrame=function(cb){return setTimeout(function(){cb(new Date().getTime());},16);};"
@@ -36,11 +36,14 @@ static const char *kJsPolyfill =
 "if(!String.prototype.trim)String.prototype.trim=function(){return this.replace(/^\\s+|\\s+$/g,'');};"
 "if(!Number.isNaN)Number.isNaN=function(v){return typeof v==='number'&&isNaN(v);};"
 "if(!Number.isFinite)Number.isFinite=function(v){return typeof v==='number'&&isFinite(v);};"
-"if(window.NodeList&&!NodeList.prototype.forEach)NodeList.prototype.forEach=Array.prototype.forEach;"
-"if(!Element.prototype.matches)Element.prototype.matches=function(s){var m=(this.document||this.ownerDocument).getElementsByTagName('*');for(var i=0;i<m.length;i++){if(m[i]===this)return true;}return false;};"
-"if(!Element.prototype.closest)Element.prototype.closest=function(s){var el=this;while(el){if(el.matches&&el.matches(s))return el;el=el.parentElement;}return null;};"
-"if(!Element.prototype.remove)Element.prototype.remove=function(){if(this.parentElement)this.parentElement.removeChild(this);};"
-"if(!w.localStorage){var _ls={};w.localStorage={getItem:function(k){return _ls[k]||null;},setItem:function(k,v){_ls[k]=String(v);},removeItem:function(k){delete _ls[k];},clear:function(){_ls={};},key:function(i){return Object.keys(_ls)[i]||null;};};}"
+"if(w.NodeList&&!w.NodeList.prototype.forEach)w.NodeList.prototype.forEach=Array.prototype.forEach;"
+"var _ep=(typeof Element!=='undefined'&&Element.prototype)?Element.prototype:(document.documentElement?Object.getPrototypeOf(document.documentElement):(document.body?Object.getPrototypeOf(document.body):null));"
+"if(_ep){"
+"if(!_ep.matches){_ep.matches=function(s){var doc=w.document;if(!doc||!doc.querySelector)return false;var a='data-khtml-m',t='m'+Math.random().toString(36).slice(2);var had=this.getAttribute(a);this.setAttribute(a,t);try{var parts=String(s).split(',');for(var i=0;i<parts.length;i++){var sel=parts[i].replace(/^\\s+|\\s+$/g,'');if(!sel)continue;if(doc.querySelector(sel+'['+a+'=\"'+t+'\"]'))return true;}return false;}finally{if(had===null||had===undefined)this.removeAttribute(a);else this.setAttribute(a,had);}};}"
+"if(!_ep.closest)_ep.closest=function(s){var el=this;while(el){if(el.matches&&el.matches(s))return el;el=el.parentElement;}return null;};"
+"if(!_ep.remove)_ep.remove=function(){if(this.parentElement)this.parentElement.removeChild(this);};"
+"}"
+"if(!w.localStorage){var _ls=Object.create(null);w.localStorage={getItem:function(k){k=String(k);return Object.prototype.hasOwnProperty.call(_ls,k)?_ls[k]:null;},setItem:function(k,v){_ls[String(k)]=String(v);},removeItem:function(k){delete _ls[String(k)];},clear:function(){_ls=Object.create(null);},key:function(i){var ks=Object.keys(_ls);i=Number(i);return (i>=0&&i<ks.length)?ks[i]:null;}};}"
 "if(!w.sessionStorage)w.sessionStorage=w.localStorage;"
 "if(!w.Map){w.Map=function(){this._d={};};w.Map.prototype.set=function(k,v){this._d[k]=v;return this;};w.Map.prototype.get=function(k){return this._d[k];};w.Map.prototype.has=function(k){return k in this._d;};w.Map.prototype.delete=function(k){delete this._d[k];};w.Map.prototype.clear=function(){this._d={};};w.Map.prototype.forEach=function(fn){for(var k in this._d)fn(this._d[k],k,this);};}"
 "if(!w.Set){w.Set=function(){this._d={};};w.Set.prototype.add=function(v){this._d[v]=v;return this;};w.Set.prototype.has=function(v){return v in this._d;};w.Set.prototype.delete=function(v){delete this._d[v];};w.Set.prototype.clear=function(){this._d={};};w.Set.prototype.forEach=function(fn){for(var k in this._d)fn(this._d[k],k,this);};}"
@@ -59,7 +62,7 @@ static const char *kJsPolyfill =
 "if(!Array.prototype.every)Array.prototype.every=function(fn){for(var i=0;i<this.length;i++)if(!fn(this[i],i,this))return false;return true;};"
 "if(!Array.prototype.indexOf)Array.prototype.indexOf=function(v,s){s=s||0;for(var i=s;i<this.length;i++)if(this[i]===v)return i;return -1;};"
 "if(!w.Promise){(function(){function P(exec){var self=this;self._state=0;self._value=null;self._cbs=[];function resolve(v){if(self._state!==0)return;self._state=1;self._value=v;for(var i=0;i<self._cbs.length;i++)self._cbs[i](v);}function reject(e){if(self._state!==0)return;self._state=2;self._value=e;}try{exec(resolve,reject);}catch(e){reject(e);}}P.prototype.then=function(onF,onR){var self=this;return new P(function(res,rej){function run(v){try{var r=(self._state===1)?(onF?onF(v):v):(onR?onR(v):v);if(r&&typeof r.then==='function')r.then(res,rej);else res(r);}catch(e){rej(e);}}if(self._state===0){self._cbs.push(function(v){self._state=1;self._value=v;run(v);});}else{setTimeout(function(){run(self._value);},0);}});};P.prototype.catch=function(onR){return this.then(null,onR);};P.resolve=function(v){return new P(function(r){r(v);});};P.reject=function(e){return new P(function(_,r){r(e);});};P.all=function(arr){return new P(function(res,rej){var results=[],done=0;if(arr.length===0){res(results);return;}for(var i=0;i<arr.length;i++){(function(idx){arr[idx].then(function(v){results[idx]=v;done++;if(done===arr.length)res(results);},rej);})(i);}});};P.race=function(arr){return new P(function(res,rej){for(var i=0;i<arr.length;i++)arr[i].then(res,rej);});};w.Promise=P;})();}"
-"if(!w.fetch){w.fetch=function(url,opts){opts=opts||{};return new Promise(function(res,rej){var xhr=new XMLHttpRequest();xhr.open(opts.method||'GET',url);xhr.onload=function(){res({ok:xhr.status>=200&&xhr.status<300,status:xhr.status,statusText:xhr.statusText,json:function(){return Promise.resolve(JSON.parse(xhr.responseText));},text:function(){return Promise.resolve(xhr.responseText);}});};xhr.onerror=function(){rej(new TypeError('Network error'));};if(opts.headers){for(var k in opts.headers)xhr.setRequestHeader(k,opts.headers[k]);}xhr.send(opts.body||null);});};}"
+"if(!w.fetch){w.fetch=function(url,opts){opts=opts||{};return new Promise(function(res,rej){if(typeof w.XMLHttpRequest!=='function'){rej(new TypeError('fetch is not available: XMLHttpRequest is not implemented in this engine'));return;}var xhr=new XMLHttpRequest();xhr.open(opts.method||'GET',url);xhr.onload=function(){res({ok:xhr.status>=200&&xhr.status<300,status:xhr.status,statusText:xhr.statusText,json:function(){return Promise.resolve(JSON.parse(xhr.responseText));},text:function(){return Promise.resolve(xhr.responseText);}});};xhr.onerror=function(){rej(new TypeError('Network error'));};if(opts.headers){for(var k in opts.headers)xhr.setRequestHeader(k,opts.headers[k]);}xhr.send(opts.body||null);});};}"
 "if(!w.atob)w.atob=function(s){var b='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';var r='',i=0;s=s.replace(/[^A-Za-z0-9+/=]/g,'');while(i<s.length){var c1=b.indexOf(s.charAt(i++)),c2=b.indexOf(s.charAt(i++)),c3=b.indexOf(s.charAt(i++)),c4=b.indexOf(s.charAt(i++));var o1=(c1<<2)|(c2>>4),o2=((c2&15)<<4)|(c3>>2),o3=((c3&3)<<6)|c4;r+=String.fromCharCode(o1);if(c3!==64)r+=String.fromCharCode(o2);if(c4!==64)r+=String.fromCharCode(o3);}return r;};"
 "if(!w.btoa)w.btoa=function(s){var b='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';var r='',i=0;while(i<s.length){var c1=s.charCodeAt(i++),c2=s.charCodeAt(i++),c3=s.charCodeAt(i++);var o1=c1>>2,o2=((c1&3)<<4)|(c2>>4),o3=((c2&15)<<2)|(c3>>6),o4=c3&63;if(isNaN(c2))o3=o4=64;else if(isNaN(c3))o4=64;r+=b.charAt(o1)+b.charAt(o2)+b.charAt(o3)+b.charAt(o4);}return r;};"
 "if(!w.IntersectionObserver)w.IntersectionObserver=function(){this.observe=function(){};this.unobserve=function(){};this.disconnect=function(){};};"
@@ -77,14 +80,48 @@ static const char *kJsPolyfill =
 "if(!Array.prototype.fill)Array.prototype.fill=function(v,s,e){s=s||0;e=e||this.length;for(var i=s;i<e;i++)this[i]=v;return this;};"
 "if(!String.prototype.padStart)String.prototype.padStart=function(l,c){c=c||' ';var s=this;while(s.length<l)s=c+s;return s;};"
 "if(!String.prototype.padEnd)String.prototype.padEnd=function(l,c){c=c||' ';var s=this;while(s.length<l)s=s+c;return s;};"
-"if(!Element.prototype.append)Element.prototype.append=function(){for(var i=0;i<arguments.length;i++)this.appendChild(arguments[i]);};"
-"if(!Element.prototype.prepend)Element.prototype.prepend=function(){for(var i=0;i<arguments.length;i++)this.insertBefore(arguments[i],this.firstChild);};"
-"if(!Element.prototype.before)Element.prototype.before=function(){var p=this.parentElement;if(p)for(var i=0;i<arguments.length;i++)p.insertBefore(arguments[i],this);};"
-"if(!Element.prototype.after)Element.prototype.after=function(){var p=this.parentElement;if(p)for(var i=0;i<arguments.length;i++)p.insertBefore(arguments[i],this.nextSibling);};"
+"if(_ep){"
+"if(!_ep.append)_ep.append=function(){for(var i=0;i<arguments.length;i++)this.appendChild(arguments[i]);};"
+"if(!_ep.prepend)_ep.prepend=function(){for(var i=0;i<arguments.length;i++)this.insertBefore(arguments[i],this.firstChild);};"
+"if(!_ep.before)_ep.before=function(){var p=this.parentElement;if(p)for(var i=0;i<arguments.length;i++)p.insertBefore(arguments[i],this);};"
+"if(!_ep.after)_ep.after=function(){var p=this.parentElement;if(p)for(var i=0;i<arguments.length;i++)p.insertBefore(arguments[i],this.nextSibling);};"
+"}"
 "if(!document.head)document.head=document.getElementsByTagName('head')[0];"
 "if(!document.activeElement)document.activeElement=document.body;"
 "}catch(e){}"
 "})();";
+
+// Prepend the error guard + ES5+ polyfill bundle to an HTML document, after
+// <head> / <body> when present so it runs before any page script.  Used for
+// BOTH the initial document and the final rewrite: a page script must never
+// observe a document without the Promise/fetch/localStorage shims.
+static QString injectPolyfillBundle(QString html)
+{
+    const QString guard = QStringLiteral(
+        "<script>window.onerror=function(){return true;};"
+        "if(window.addEventListener){window.addEventListener('error',function(e){e.preventDefault&&e.preventDefault();return true;},true);}"
+        "</script>");
+    const QString polyfill = guard + QStringLiteral("<script>")
+        + QString::fromLatin1(kJsPolyfill) + QStringLiteral("</script>");
+    const QRegularExpression reHead(QStringLiteral("<head[^>]*>"),
+                                    QRegularExpression::CaseInsensitiveOption);
+    const int headPos = html.indexOf(reHead, 0);
+    if (headPos >= 0) {
+        const int headEnd = html.indexOf(QLatin1Char('>'), headPos) + 1;
+        html.insert(headEnd, polyfill);
+        return html;
+    }
+    const QRegularExpression reBody(QStringLiteral("<body[^>]*>"),
+                                    QRegularExpression::CaseInsensitiveOption);
+    const int bodyPos = html.indexOf(reBody, 0);
+    if (bodyPos >= 0) {
+        const int bodyEnd = html.indexOf(QLatin1Char('>'), bodyPos) + 1;
+        html.insert(bodyEnd, polyfill);
+        return html;
+    }
+    html.prepend(polyfill);
+    return html;
+}
 
 // Parse a CSS color token (#rgb, #rrggbb, rgb(), rgba(), or named color) into
 // QColor. Returns an invalid QColor if the token is not a color.
@@ -1246,28 +1283,8 @@ void PageLoader::rewriteAndSave()
         html = out;
     }
 
-    // Inject the ES5+ polyfill bundle before any page script so modern APIs
-    // (Promise, fetch, Array.from, etc.) are available when site code runs.
-    // Global error guard: prevents an uncaught JS exception from tearing
-    // down subsequent script blocks on the page.
-    const QString kErrorGuard = QStringLiteral(
-        "<script>window.onerror=function(){return true;};"
-        "if(window.addEventListener){window.addEventListener('error',function(e){e.preventDefault&&e.preventDefault();return true;},true);}"
-        "</script>");
-    const QString polyfill = kErrorGuard + QStringLiteral("<script>") + QString::fromLatin1(kJsPolyfill) + QStringLiteral("</script>");
-    int headPos = html.indexOf(QRegularExpression(QStringLiteral("<head[^>]*>"), QRegularExpression::CaseInsensitiveOption), 0);
-    if (headPos >= 0) {
-        int headEnd = html.indexOf(QLatin1Char('>'), headPos) + 1;
-        html.insert(headEnd, polyfill);
-    } else {
-        int bodyPos = html.indexOf(QRegularExpression(QStringLiteral("<body[^>]*>"), QRegularExpression::CaseInsensitiveOption), 0);
-        if (bodyPos >= 0) {
-            int bodyEnd = html.indexOf(QLatin1Char('>'), bodyPos) + 1;
-            html.insert(bodyEnd, polyfill);
-        } else {
-            html.prepend(polyfill);
-        }
-    }
+    // Error guard + ES5+ polyfill bundle before any page script.
+    html = injectPolyfillBundle(html);
 
     // (Removed 2026-10-24: this block used to inject a stylesheet hardcoding
     // cn.bing.com's DOM ids — .sbox / #sb_form / #sb_form_q / #sb_form_go plus
@@ -1423,6 +1440,10 @@ void PageLoader::deliverInitialDocument()
     // Navigation attributes must keep real URLs (see restoreNavigationTargets):
     // the same literal can be both an asset and a click target.
     html = restoreNavigationTargets(html);
+
+    // The initial document is what page scripts run against first, so it
+    // must carry the polyfill bundle too (the final rewrite re-injects it).
+    html = injectPolyfillBundle(html);
 
     // Write the initial document.
     QDir().mkpath(m_cacheDir);

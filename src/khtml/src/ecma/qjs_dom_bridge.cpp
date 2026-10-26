@@ -425,6 +425,18 @@ static ::JSValue elGetAttribute(::JSContext *ctx, ::JSValueConst this_val,
     return v.isNull() ? JS_NULL : jsStr(ctx, dstr(v));
 }
 
+static ::JSValue elRemoveAttribute(::JSContext *ctx, ::JSValueConst this_val,
+                                    int argc, ::JSValueConst *argv)
+{
+    NodeWrap *w = unwrapNode(ctx, this_val);
+    if (!w) {
+        return JS_UNDEFINED;
+    }
+    Element el(w->node);
+    el.removeAttribute(mk(jsValStr(ctx, argv[0])));
+    return JS_UNDEFINED;
+}
+
 static ::JSValue elAppendChild(::JSContext *ctx, ::JSValueConst this_val,
                                int argc, ::JSValueConst *argv)
 {
@@ -1344,6 +1356,7 @@ struct QJsDomBridge::Impl
         defCgetset("innerHTML", elGetProp, elSetProp, 105, proto);
         defFunc("setAttribute", elSetAttribute, 2, proto);
         defFunc("getAttribute", elGetAttribute, 1, proto);
+        defFunc("removeAttribute", elRemoveAttribute, 1, proto);
         defFunc("appendChild", elAppendChild, 1, proto);
         }
         if (enableEvent) {

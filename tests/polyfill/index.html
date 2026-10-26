@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="style.css">
+<title>polyfill-pending</title>
+</head>
+<body>
+<div id="m1" class="a" data-x="1">matches target</div>
+<script>
+var out = [];
+function add(k, v) { out.push(k + "=" + (v ? "1" : "0")); }
+try {
+  out.push("console=" + typeof console);
+  out.push("fetch=" + typeof fetch);
+  out.push("ls=" + typeof localStorage);
+
+  localStorage.clear();
+  localStorage.setItem("empty", "");
+  add("empty", localStorage.getItem("empty") === "");
+  add("missing", localStorage.getItem("missing") === null);
+  add("proto", localStorage.getItem("toString") === null);
+  localStorage.clear();
+  localStorage.setItem("k", "v");
+  add("key", localStorage.key(0) === "k");
+  localStorage.clear();
+  add("cleared", localStorage.getItem("k") === null);
+
+  var m = document.getElementById("m1");
+  add("ma", m.matches(".a"));
+  add("mb", m.matches(".b"));
+  add("mtag", m.matches("div.a"));
+  add("mid", m.matches("#m1"));
+  add("mattr", m.matches("[data-x=\"1\"]"));
+} catch (e) {
+  out.push("err=" + e);
+}
+function finish() { document.title = "POLYFILL|" + out.join("|"); }
+try {
+  fetch("data.txt").then(
+    function () { add("fetchrej", false); finish(); },
+    function (e) { add("fetchrej", String(e).indexOf("XMLHttpRequest") >= 0); finish(); });
+} catch (e) {
+  add("fetchrej", false);
+  finish();
+}
+setTimeout(finish, 2000);
+</script>
+</body>
+</html>
