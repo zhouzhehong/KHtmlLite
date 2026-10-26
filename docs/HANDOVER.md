@@ -1075,6 +1075,11 @@ INCONCLUSIVE、或退出码 0 但输出里出现判定形 FAIL 令牌，都算�
   - resume 点击从 (200,25) 移到 x=170 的标签文字区——WhiteSur 风格标签的关闭 "×" 热区在标签右缘，旧坐标命中了关闭按钮，浏览器 trace 显示 `currentChanged idx=0 tabs=1 pages=1`（标签被关掉）而不是 `resumeTab`。
 - 复测：`tile_protocol_test` PASS、`dwm_canvas_probe` PASS（三后端+resize）、`tombstone_probe` PASS（resume True）、引擎探针 48/48 PASS。
 
+### 全量回归（DWM 画布之后，2026-10-26 15:56→16:47）
+- **`failed: none`**：15 项中 14 PASS + `bing_ghost_check` INCONCLUSIVE（本机 cn.bing.com 无 #0078D4 元素，探测器按设计报不确定）。
+- 关键项：`dwm_canvas_probe 22.7s PASS`（硬件 / 强制 WARP / 模拟 GPU 失败 + resize）、`tombstone_probe 624.2s PASS`（resume True）、`tile_protocol_test 189.2s PASS`、`engine_semantics_probe 276.1s PASS`、`resize_probe 601.9s PASS`、`scroll_smoke 602.9s PASS`、`bg_smoke 602.9s PASS`。
+- 便携包重新同步（`khtml_browser.exe` / `khtml_renderer.exe` / `libKF5KHtml.dll` SHA256 相等），`portable_smoke` PASS。
+
 ## 6. 正在/马上要做的
 A. ~~拆那 1.1s~~ **已完成**（字体枚举缓存 + 图标懒加载，构造 1.1s→~0.35s，TTFF 2.0→1.1s）。
    下一步同部位残账：渲染进程镜像加载+socket 连接 ~500ms（每次新标签都付），
