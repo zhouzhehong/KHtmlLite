@@ -1011,6 +1011,33 @@ INCONCLUSIVE、或退出码 0 但输出里出现判定形 FAIL 令牌，都算�
 - 红黄绿灯实测：绿灯最大化 1920x1008、再次点击还原 1805x927、红灯关闭进程；拖拽/双击最大化/`WM_NCHITTEST` 边框缩放按实现路径工作（拖拽未做自动化点击验证）。
 - `tile_protocol_test` PASS（源码不变量已适配 `blockPageTabSignals`）；`portable_smoke` PASS；便携包二进制已同步（SHA256 相等）。
 
+## 5ac. Safari UI 按参考主题 CSS 数值重做（2026-10-26）
+
+用户反馈 §5ab 的首版"做的很差"，并要求按 Claude 的建议：**不要整份复制参考主题（选择器是 Firefox 专属），而是抄 CSS 里的具体数值**。据此重做：
+
+### 参考与取数
+- `denizjcan/Firefox-Safari-15-Theme`：GitHub API 404（仓库已不可访问），Wayback 同样不可用；`naxl` 仓库仅 README + 预览图，README 指向的 release 已失效。无法取到其 userChrome.css。
+- `vinceliuice/WhiteSur-gtk-theme` → `other/firefox/Monterey/`（用户说两者可互证）：从其 `colors/light.css`、`parts/tabsbar.css`、`parts/toolbox.css`、`parts/headerbar-urlbar.css` 抄录数值：
+  - 工具栏背景 `#ffffff`；加载前背景 `#f5f5f5`；toolbox `max-height: 42px`。
+  - 标签：`--tab-min-height: 32px`、`height: 32px`、`border-radius: 8px`、`margin: 0 3px`；非活动 `#f5f5f5`、文字 `rgb(141,144,145)`；hover `#f0f0f0`、文字 `rgb(93,98,99)`；活动 `#e8e8e8`、文字 `rgb(46,52,54)`。
+  - 地址栏：`--urlbar-height: 32px`、`border-radius: 8px`、背景 `#e8e8e8`、边框 `#b6b6b6`、文字 `#020202`、focus `#5683da`、hover 边框 `#dddddd`；输入内边距 `0 28px 0 0`。
+  - 按钮 hover `rgba(0,0,0,0.08)`、active `rgba(0,0,0,0.14)`（`--gnome-headerbar-button-*`）。
+
+### 实现变化（相对 §5ab）
+- 新 `SafariTabBar`（自绘 `QTabBar`）：8px 圆角标签、活动 `#e8e8e8`/非活动 `#f5f5f5`/hover `#f0f0f0`、文字用参考色、活动或悬停时在右侧画 `×`（点击关闭，替换此前无法渲染的 QSS close-button 图标）；保留拖拽换序、右键菜单、Ctrl+W。
+- 头部布局：标签条 26 logical px（`#f5f5f5`，底部 1px `#dcdcdc`）+ 工具条 32 logical px（`#ffffff`，底部 1px `#e2e2e2`），总 58 logical = 87 physical px → 页面内容原点仍是 **(11, 87)**，全部回归坐标不变。
+- 工具条图标改为自绘线性图标（返回/前进/刷新/共享/侧边栏/加号），不再用 Qt 标准图标；地址栏 `#e8e8e8` + `#b6b6b6` 边框 + 8px 圆角 + focus `#5683da`；按钮 hover `rgba(0,0,0,0.08)`；红黄绿灯用 Safari 标准色 `#ff5f57/#febc2e/#28c840`、12 logical px。
+- 文档截图更新为 `docs/assets/safari15_ui.png`（本版实拍）。
+
+### backdrop-filter（Claude 提到的模糊效果）如实说明
+- WhiteSur 的 Firefox CSS **没有使用 backdrop-filter**（grep 全部文件 0 命中），它用实色 `#ffffff/#f5f5f5` 模拟 Safari 的半透明外观；本实现照抄实色。
+- 我们的 chrome 是 Qt 原生控件，页面内容从工具条下方开始（不延伸到 chrome 下面），因此没有"透出页面再模糊"的场景；内核目前也**未实现 `backdrop-filter` CSS 属性**（GAP 有记录）。若要做真正的半透明模糊标题栏，需要把页面绘制延伸到 chrome 下并加合成模糊，属于后续独立工程。
+
+### 验证
+- 引擎探针 **48/48 PASS**（page3 饱和扫描限定 y≥87 的适配仍有效）。
+- `browser_click_probe` / `input_coord_probe` / `dpr_probe` PASS；`tile_protocol_test` PASS；`portable_smoke` PASS（便携包二进制已同步，SHA256 相等）。
+- 全量回归结果见下方补记。
+
 ## 6. 正在/马上要做的
 A. ~~拆那 1.1s~~ **已完成**（字体枚举缓存 + 图标懒加载，构造 1.1s→~0.35s，TTFF 2.0→1.1s）。
    下一步同部位残账：渲染进程镜像加载+socket 连接 ~500ms（每次新标签都付），

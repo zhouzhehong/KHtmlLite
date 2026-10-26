@@ -17,6 +17,9 @@
 #include <QTabWidget>
 #include <QTabBar>
 #include <QMenu>
+#include <QIcon>
+#include <QPolygonF>
+#include <functional>
 #include <QStackedWidget>
 #include <QWindow>
 #include <QMouseEvent>
@@ -1217,6 +1220,108 @@ protected:
     }
 };
 
+// Safari-style tab bar: rounded tabs in WhiteSur-Monterey colours
+// (#f5f5f5 inactive / #f0f0f0 hover / #e8e8e8 selected, 8 px radius,
+// 32 px tab height in the reference; 22 logical px here to keep the page
+// content origin at the historical (11, 87) physical px).  Draws its own
+// close "x" on the active/hovered tab; no Qt default close buttons.
+class SafariTabBar : public QTabBar
+{
+public:
+    explicit SafariTabBar(QWidget *parent = nullptr) : QTabBar(parent)
+    {
+        setMouseTracking(true);
+        setElideMode(Qt::ElideRight);
+        setUsesScrollButtons(true);
+        setDrawBase(false);
+        setExpanding(false);
+        setMovable(true);
+        setTabsClosable(false);
+        setContextMenuPolicy(Qt::CustomContextMenu);
+    }
+
+    std::function<void(int)> onCloseTab;
+
+protected:
+    QSize tabSizeHint(int index) const override
+    {
+        QSize s = QTabBar::tabSizeHint(index);
+        s.setHeight(22);
+        s.setWidth(qBound(112, s.width() + 10, 220));
+        return s;
+    }
+
+    void paintEvent(QPaintEvent *) override
+    {
+        QPainter p(this);
+        p.setRenderHint(QPainter::Antialiasing, true);
+        for (int i = 0; i < count(); ++i) {
+            const bool sel = (i == currentIndex());
+            const bool hov = (i == m_hover);
+            QRectF r = QRectF(tabRect(i)).adjusted(2.0, 2.0, -2.0, -2.0);
+            const QColor fill = sel ? QColor(0xE8, 0xE8, 0xE8)
+                                    : (hov ? QColor(0xF0, 0xF0, 0xF0) : QColor(0xF5, 0xF5, 0xF5));
+            p.setPen(QPen(sel ? QColor(0, 0, 0, 42) : QColor(0, 0, 0, 16), 1.0));
+            p.setBrush(fill);
+            p.drawRoundedRect(r.adjusted(0.5, 0.5, -0.5, -0.5), 8, 8);
+
+            QFont f = font();
+            f.setPixelSize(11);
+            p.setFont(f);
+            p.setPen(sel ? QColor(46, 52, 54) : QColor(141, 144, 145));
+            const int closeW = (sel || hov) ? 18 : 7;
+            QRectF textR = r.adjusted(9, 0, -closeW, 0);
+            p.drawText(textR, Qt::AlignVCenter | Qt::AlignLeft,
+                       fontMetrics().elidedText(tabText(i), Qt::ElideRight,
+                                                int(textR.width())));
+
+            if (sel || hov) {
+                const QPointF c(r.right() - 12, r.center().y());
+                p.setPen(QPen(QColor(110, 114, 116), 1.4, Qt::SolidLine, Qt::RoundCap));
+                p.drawLine(c + QPointF(-3.0, -3.0), c + QPointF(3.0, 3.0));
+                p.drawLine(c + QPointF(3.0, -3.0), c + QPointF(-3.0, 3.0));
+            }
+        }
+    }
+
+    void mouseMoveEvent(QMouseEvent *e) override
+    {
+        const int idx = tabAt(e->pos());
+        if (idx != m_hover) {
+            m_hover = idx;
+            update();
+        }
+        QTabBar::mouseMoveEvent(e);
+    }
+
+    void leaveEvent(QEvent *e) override
+    {
+        m_hover = -1;
+        update();
+        QTabBar::leaveEvent(e);
+    }
+
+    void mousePressEvent(QMouseEvent *e) override
+    {
+        const int idx = tabAt(e->pos());
+        if (idx >= 0 && e->button() == Qt::LeftButton) {
+            const QRect r = tabRect(idx);
+            const QRect closeRect(r.right() - 20, r.center().y() - 7, 16, 14);
+            if (closeRect.contains(e->pos())) {
+                if (onCloseTab) {
+                    onCloseTab(idx);
+                }
+                e->accept();
+                return;
+            }
+        }
+        QTabBar::mousePressEvent(e);
+    }
+
+private:
+    int m_hover = -1;
+};
+
 class KHtmlLiteWindow : public QMainWindow
 {
     Q_OBJECT
@@ -1332,65 +1437,120 @@ public:
         }
     }
 
-    static QPushButton *mkRoundBtn(QStyle::StandardPixmap sp, QWidget *parent)
+    enum ChromeGlyph { GlyphBack, GlyphForward, GlyphReload, GlyphShare,
+                       GlyphSidebar, GlyphPlus };
+
+    static QIcon chromeGlyph(ChromeGlyph g, const QColor &col = QColor(70, 74, 76))
+    {
+        QPixmap pm(36, 36);
+        pm.fill(Qt::transparent);
+        QPainter p(&pm);
+        p.setRenderHint(QPainter::Antialiasing);
+        p.scale(2.0, 2.0);
+        p.setPen(QPen(col, 1.6, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        switch (g) {
+        case GlyphBack:
+            p.drawPolyline(QPolygonF() << QPointF(11.5, 4.5) << QPointF(5.5, 9)
+                                       << QPointF(11.5, 13.5));
+            break;
+        case GlyphForward:
+            p.drawPolyline(QPolygonF() << QPointF(6.5, 4.5) << QPointF(12.5, 9)
+                                       << QPointF(6.5, 13.5));
+            break;
+        case GlyphReload:
+            p.drawArc(QRectF(4.5, 4.5, 9.0, 9.0), 45 * 16, 285 * 16);
+            p.drawLine(QPointF(12.0, 3.2), QPointF(14.0, 5.2));
+            p.drawLine(QPointF(14.0, 5.2), QPointF(12.0, 7.2));
+            break;
+        case GlyphShare:
+            p.drawLine(QPointF(9.0, 11.5), QPointF(9.0, 3.5));
+            p.drawPolyline(QPolygonF() << QPointF(5.5, 6.8) << QPointF(9.0, 3.3)
+                                       << QPointF(12.5, 6.8));
+            p.drawRoundedRect(QRectF(4.5, 11.0, 9.0, 4.0), 1.2, 1.2);
+            break;
+        case GlyphSidebar:
+            p.drawRoundedRect(QRectF(3.5, 3.5, 11.0, 11.0), 2.0, 2.0);
+            p.drawLine(QPointF(8.3, 3.8), QPointF(8.3, 14.2));
+            break;
+        case GlyphPlus:
+            p.drawLine(QPointF(4.5, 9.0), QPointF(13.5, 9.0));
+            p.drawLine(QPointF(9.0, 4.5), QPointF(9.0, 13.5));
+            break;
+        }
+        return QIcon(pm);
+    }
+
+    static QPushButton *mkToolButton(QWidget *parent, ChromeGlyph g)
     {
         QPushButton *b = new QPushButton(parent);
-        b->setObjectName(QStringLiteral("roundBtn"));
-        b->setIcon(parent->style()->standardIcon(sp));
-        b->setFixedSize(22, 22);
+        b->setObjectName(QStringLiteral("toolBtn"));
+        b->setIcon(chromeGlyph(g));
+        b->setIconSize(QSize(16, 16));
+        b->setFixedSize(24, 24);
         b->setFlat(true);
         b->setCursor(Qt::ArrowCursor);
         return b;
     }
 
-    static QToolButton *mkLight(QWidget *parent, const QString &name, const QColor &c)
+    static QToolButton *mkGlyphButton(QWidget *parent, ChromeGlyph g)
     {
         QToolButton *b = new QToolButton(parent);
-        b->setObjectName(name);
-        b->setFixedSize(11, 11);
+        b->setObjectName(QStringLiteral("glyphBtn"));
+        b->setIcon(chromeGlyph(g));
+        b->setIconSize(QSize(16, 16));
+        b->setFixedSize(22, 22);
+        b->setAutoRaise(true);
+        b->setCursor(Qt::ArrowCursor);
+        return b;
+    }
+
+    static QToolButton *mkLight(QWidget *parent, const QColor &c)
+    {
+        QToolButton *b = new QToolButton(parent);
+        b->setObjectName(QStringLiteral("titleLight"));
+        b->setFixedSize(12, 12);
         b->setAutoRaise(true);
         b->setCursor(Qt::ArrowCursor);
         b->setStyleSheet(QStringLiteral(
-            "QToolButton{background:%1;border-radius:6px;border:1px solid rgba(0,0,0,0.12);}"
-            "QToolButton:hover{border-color:rgba(0,0,0,0.30);}")
+            "QToolButton{background:%1;border-radius:6px;border:1px solid rgba(0,0,0,0.14);}"
+            "QToolButton:hover{border-color:rgba(0,0,0,0.38);}")
             .arg(c.name()));
         return b;
     }
 
     static const QString &safariStyleSheet()
     {
+        // Values cross-checked from WhiteSur-gtk-theme's Firefox/Monterey CSS
+        // (light): toolbar #ffffff, inactive tab #f5f5f5, hover #f0f0f0,
+        // selected #e8e8e8, urlbar #e8e8e8 / border #b6b6b6 / text #020202,
+        // focus border #5683da, button hover rgba(0,0,0,0.08).
         static const QString qss = QStringLiteral(
-            "QWidget#central { background: #e7e7e9; }"
-            "QWidget#tabStrip { background: #e7e7e9; }"
-            "QWidget#toolbar { background: #f7f7f7; border-bottom: 1px solid #dcdcdc; }"
+            "QWidget#central { background: #ffffff; }"
+            "QWidget#tabStrip { background: #f5f5f5; border-bottom: 1px solid #dcdcdc; }"
+            "QWidget#toolbar { background: #ffffff; border-bottom: 1px solid #e2e2e2; }"
             "QStackedWidget#pageStack { background: #ffffff; }"
-            "QTabBar#safariTabs { background: transparent; }"
-            "QTabBar#safariTabs::tab {"
-            "  background: rgba(0,0,0,0.065); border: 1px solid rgba(0,0,0,0.10);"
-            "  border-radius: 7px; margin: 1px 2px; min-width: 120px; max-width: 200px;"
-            "  height: 22px; padding: 0 8px; color: #2b2b2b; font-size: 12px; }"
-            "QTabBar#safariTabs::tab:selected { background: #fbfbfb; border-color: #c7c7c9; }"
-            "QTabBar#safariTabs::tab:hover:!selected { background: rgba(0,0,0,0.10); }"
-            "QPushButton#roundBtn, QToolButton#sidebarBtn, QToolButton#plusBtn, QPushButton#shareBtn {"
-            "  border: none; background: transparent; color: #3a3a3a; font-size: 15px;"
-            "  border-radius: 7px; padding: 0; }"
-            "QPushButton#roundBtn:hover, QToolButton#sidebarBtn:hover,"
-            "QToolButton#plusBtn:hover, QPushButton#shareBtn:hover {"
-            "  background: rgba(0,0,0,0.08); }"
-            "QToolButton#plusBtn { font-size: 19px; color: #555; }"
-            "QLineEdit#address {"
-            "  background: #ffffff; border: 1px solid #d5d5d7; border-radius: 8px;"
-            "  padding: 2px 8px; color: #222; selection-background-color: #b3d7ff;"
-            "  font-size: 12px; margin: 0 5px; }"
-            "QLineEdit#address:focus { border: 1px solid #4a90e2; }");
+            "QPushButton#toolBtn { border: none; background: transparent;"
+            "  border-radius: 6px; padding: 0; }"
+            "QPushButton#toolBtn:hover { background: rgba(0, 0, 0, 0.08); }"
+            "QPushButton#toolBtn:pressed { background: rgba(0, 0, 0, 0.14); }"
+            "QToolButton#glyphBtn { border: none; background: transparent;"
+            "  border-radius: 6px; padding: 0; }"
+            "QToolButton#glyphBtn:hover { background: rgba(0, 0, 0, 0.08); }"
+            "QLineEdit#address { background: #e8e8e8; border: 1px solid #b6b6b6;"
+            "  border-radius: 8px; padding: 2px 10px; color: #020202;"
+            "  font-size: 12px; margin: 0 6px; selection-background-color: #b3d7ff; }"
+            "QLineEdit#address:focus { border: 1px solid #5683da; background: #ffffff; }");
         return qss;
     }
 
     void buildChrome()
     {
-        // Safari 15 themed chrome: tab strip with traffic lights, sidebar
-        // toggle, rounded tabs and a plus button; below it a toolbar with
-        // round back/forward/reload, a rounded address pill and a share button.
+        // Safari-15-like chrome with the WhiteSur-Monterey values:
+        //   tab strip 26 logical px: traffic lights, sidebar, rounded tabs, plus
+        //   toolbar  32 logical px: back/forward, rounded address pill,
+        //                           reload, share
+        // 26 + 32 = 58 logical = 87 physical px, so the page content origin
+        // stays (11, 87) and every existing regression coordinate is valid.
         QWidget *central = new QWidget(this);
         central->setObjectName(QStringLiteral("central"));
         QVBoxLayout *root = new QVBoxLayout(central);
@@ -1399,99 +1559,68 @@ public:
 
         DragStrip *strip = new DragStrip(central);
         strip->setObjectName(QStringLiteral("tabStrip"));
-        strip->setFixedHeight(28);
+        strip->setFixedHeight(26);
         m_tabStrip = strip;
         QHBoxLayout *ts = new QHBoxLayout(strip);
         ts->setContentsMargins(8, 2, 8, 2);
         ts->setSpacing(6);
-        m_lightClose = mkLight(strip, QStringLiteral("lightClose"), QColor(255, 95, 86));
-        m_lightMin = mkLight(strip, QStringLiteral("lightMin"), QColor(255, 189, 46));
-        m_lightMax = mkLight(strip, QStringLiteral("lightMax"), QColor(39, 201, 63));
+        m_lightClose = mkLight(strip, QColor(0xFF, 0x5F, 0x57));
+        m_lightMin = mkLight(strip, QColor(0xFE, 0xBC, 0x2E));
+        m_lightMax = mkLight(strip, QColor(0x28, 0xC8, 0x40));
         ts->addWidget(m_lightClose);
         ts->addWidget(m_lightMin);
         ts->addWidget(m_lightMax);
-        ts->addSpacing(6);
+        ts->addSpacing(7);
 
-        m_sidebarBtn = new QToolButton(strip);
-        m_sidebarBtn->setObjectName(QStringLiteral("sidebarBtn"));
-        m_sidebarBtn->setText(QStringLiteral("◧"));
+        m_sidebarBtn = mkGlyphButton(strip, GlyphSidebar);
         m_sidebarBtn->setToolTip(QStringLiteral("侧边栏"));
-        m_sidebarBtn->setFixedSize(22, 22);
         ts->addWidget(m_sidebarBtn);
 
-        m_tabBar = new QTabBar(strip);
-        m_tabBar->setObjectName(QStringLiteral("safariTabs"));
-        m_tabBar->setTabsClosable(true);
-        m_tabBar->setMovable(true);
-        m_tabBar->setExpanding(false);
-        m_tabBar->setDrawBase(false);
-        m_tabBar->setUsesScrollButtons(true);
-        m_tabBar->setElideMode(Qt::ElideRight);
-        m_tabBar->setContextMenuPolicy(Qt::CustomContextMenu);
-        ts->addWidget(m_tabBar, 1);
+        SafariTabBar *bar = new SafariTabBar(strip);
+        bar->setObjectName(QStringLiteral("safariTabs"));
+        bar->onCloseTab = [this](int idx) { closeTab(idx); };
+        m_tabBar = bar;
+        ts->addWidget(bar, 1);
 
-        m_newTabBtn = new QToolButton(strip);
-        m_newTabBtn->setObjectName(QStringLiteral("plusBtn"));
-        m_newTabBtn->setText(QStringLiteral("+"));
+        m_newTabBtn = mkGlyphButton(strip, GlyphPlus);
         m_newTabBtn->setToolTip(QStringLiteral("新标签页"));
-        m_newTabBtn->setFixedSize(22, 22);
         ts->addWidget(m_newTabBtn);
         root->addWidget(strip);
 
-        DragStrip *bar = new DragStrip(central);
-        bar->setObjectName(QStringLiteral("toolbar"));
-        bar->setFixedHeight(30);
-        QHBoxLayout *tb = new QHBoxLayout(bar);
+        DragStrip *nav = new DragStrip(central);
+        nav->setObjectName(QStringLiteral("toolbar"));
+        nav->setFixedHeight(32);
+        QHBoxLayout *tb = new QHBoxLayout(nav);
         tb->setContentsMargins(8, 4, 8, 4);
         tb->setSpacing(6);
-        m_back = mkRoundBtn(QStyle::SP_ArrowBack, bar);
-        m_fwd = mkRoundBtn(QStyle::SP_ArrowForward, bar);
+        m_back = mkToolButton(nav, GlyphBack);
+        m_fwd = mkToolButton(nav, GlyphForward);
         tb->addWidget(m_back);
         tb->addWidget(m_fwd);
-        m_addr = new QLineEdit(bar);
+        m_addr = new QLineEdit(nav);
         m_addr->setObjectName(QStringLiteral("address"));
         m_addr->setPlaceholderText(QStringLiteral("搜索或输入网站名称"));
         m_addr->setClearButtonEnabled(false);
-        m_addr->setMinimumHeight(22);
+        m_addr->setMinimumHeight(24);
         tb->addWidget(m_addr, 1);
-        m_reload = mkRoundBtn(QStyle::SP_BrowserReload, bar);
+        m_reload = mkToolButton(nav, GlyphReload);
         tb->addWidget(m_reload);
-        m_shareBtn = new QPushButton(QStringLiteral("↑"), bar);
-        m_shareBtn->setObjectName(QStringLiteral("shareBtn"));
-        m_shareBtn->setFixedSize(22, 22);
+        m_shareBtn = new QPushButton(nav);
+        m_shareBtn->setObjectName(QStringLiteral("toolBtn"));
+        m_shareBtn->setIcon(chromeGlyph(GlyphShare));
+        m_shareBtn->setIconSize(QSize(16, 16));
+        m_shareBtn->setFixedSize(24, 24);
+        m_shareBtn->setFlat(true);
         m_shareBtn->setToolTip(QStringLiteral("共享"));
         tb->addWidget(m_shareBtn);
-        root->addWidget(bar);
-
-        // 9 px gap below the toolbar keeps the page content origin at the
-        // Page origin on physical pixels stays (11, 87): 7 logical margin,
-        QWidget *gap = new QWidget(central);
-        gap->setFixedHeight(0);
-        root->addWidget(gap);
+        root->addWidget(nav);
 
         m_stack = new QStackedWidget(central);
         m_stack->setObjectName(QStringLiteral("pageStack"));
         root->addWidget(m_stack, 1);
 
-        // Qt's default tab close button renders as a coloured square inside
-        // the Safari tab pill; draw a subtle grey × and use it instead.
-        const QString closeIcon = QDir::tempPath() + QStringLiteral("/khtml_tab_close.png");
-        const QString closeIconUrl = QString(closeIcon).replace(QLatin1Char('\\'), QLatin1Char('/'));
-        {
-            QImage img(16, 16, QImage::Format_ARGB32);
-            img.fill(Qt::transparent);
-            QPainter p(&img);
-            p.setRenderHint(QPainter::Antialiasing);
-            p.setPen(QPen(QColor(95, 95, 95), 1.6));
-            p.drawLine(4, 4, 12, 12);
-            p.drawLine(12, 4, 4, 12);
-            p.end();
-            img.save(closeIcon, "PNG");
-        }
         setCentralWidget(central);
-        QString style = safariStyleSheet();
-        style += QStringLiteral("QTabBar#safariTabs::close-button { image: url(%1); background: transparent; subcontrol-position: right; width: 12px; height: 12px; }").arg(closeIconUrl);
-        setStyleSheet(style);
+        setStyleSheet(safariStyleSheet());
 
         connect(m_lightClose, &QToolButton::clicked, this, &QWidget::close);
         connect(m_lightMin, &QToolButton::clicked, this, &QWidget::showMinimized);
@@ -1510,16 +1639,6 @@ public:
             else if (pg && pg->suspended) resumeTab(pg);
         });
         connect(m_addr, &QLineEdit::returnPressed, this, &KHtmlLiteWindow::onAddressEntered);
-        connect(m_tabBar, &QTabBar::tabCloseRequested, this, &KHtmlLiteWindow::closeTab);
-        connect(m_tabBar, &QTabBar::customContextMenuRequested, this, [this](const QPoint &pos) {
-            QMenu menu(this);
-            const int idx = m_tabBar->tabAt(pos);
-            QAction *closeOne = menu.addAction(QStringLiteral("关闭标签页"));
-            QAction *newOne = menu.addAction(QStringLiteral("新标签页"));
-            QAction *chosen = menu.exec(m_tabBar->mapToGlobal(pos));
-            if (chosen == closeOne) closeTab(idx >= 0 ? idx : currentPageTabIndex());
-            else if (chosen == newOne) addTab(QUrl(QStringLiteral("https://cn.bing.com")));
-        });
         connect(m_tabBar, &QTabBar::currentChanged, this, [this](int idx) {
             fprintf(stderr, "[tomb] currentChanged idx=%d\n", idx);
             if (m_stack && idx >= 0 && idx < m_stack->count())
@@ -1533,6 +1652,15 @@ public:
                 syncChrome();
                 QTimer::singleShot(0, this, &KHtmlLiteWindow::applyPendingResize);
             }
+        });
+        connect(m_tabBar, &QTabBar::customContextMenuRequested, this, [this](const QPoint &pos) {
+            QMenu menu(this);
+            const int idx = m_tabBar->tabAt(pos);
+            QAction *closeOne = menu.addAction(QStringLiteral("关闭标签页"));
+            QAction *newOne = menu.addAction(QStringLiteral("新标签页"));
+            QAction *chosen = menu.exec(m_tabBar->mapToGlobal(pos));
+            if (chosen == closeOne) closeTab(idx >= 0 ? idx : currentPageTabIndex());
+            else if (chosen == newOne) addTab(QUrl(QStringLiteral("https://cn.bing.com")));
         });
         connect(m_tabBar, &QTabBar::tabMoved, this, [this](int from, int to) {
             if (from == to || from < 0 || to < 0 || from >= m_pages.size() || to >= m_pages.size())
