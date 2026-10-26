@@ -7,6 +7,13 @@ import subprocess
 import sys
 import time
 
+# DWM-composited page content is not in the window's GDI surface: capture
+# from the desktop DC at the client origin (screen capture) instead.
+# KHTML_SCREEN_CAPTURE
+try:
+    from win_shot import force_foreground as _force_foreground
+except Exception:
+    _force_foreground = None
 USER32 = ctypes.windll.user32
 GDI32 = ctypes.windll.gdi32
 ROOT = r"C:\Users\zhouzhehong\Desktop\KHtmlLite"
@@ -33,11 +40,18 @@ def dump(hwnd, out):
     rect = ctypes.create_string_buffer(16)
     USER32.GetClientRect(hwnd, rect)
     _, _, w, h = struct.unpack("4i", rect.raw)
-    hdc = USER32.GetDC(hwnd)
+    if _force_foreground:
+        _force_foreground(hwnd)
+    time.sleep(0.04)
+    _pt = ctypes.create_string_buffer(8)
+    struct.pack_into("2i", _pt, 0, 0, 0)
+    USER32.ClientToScreen(hwnd, _pt)
+    ox, oy = struct.unpack("2i", _pt.raw)
+    hdc = USER32.GetDC(0)
     mem = GDI32.CreateCompatibleDC(hdc)
     bmp = GDI32.CreateCompatibleBitmap(hdc, w, h)
     GDI32.SelectObject(mem, bmp)
-    GDI32.BitBlt(mem, 0, 0, w, h, hdc, 0, 0, 0x00CC0020)
+    GDI32.BitBlt(mem, 0, 0, w, h, hdc, ox, oy, 0x00CC0020)
 
     class BIH(ctypes.Structure):
         _fields_ = [("biSize", ctypes.c_uint32), ("biWidth", ctypes.c_int32),
@@ -59,7 +73,7 @@ def dump(hwnd, out):
     img.save(out)
     GDI32.DeleteObject(bmp)
     GDI32.DeleteDC(mem)
-    USER32.ReleaseDC(hwnd, hdc)
+    USER32.ReleaseDC(0, hdc)
     from collections import Counter
     rgb = img.convert("RGB")
     c = Counter(rgb.getdata())

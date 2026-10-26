@@ -1,13 +1,17 @@
-# win_shot.py — DPI-aware client-area capture of an ALREADY RUNNING
-# khtml_browser window.  Separate from shot_tool.py so the browser can be
-# launched detached (no inherited stdio pipes, which keep the caller's
-# pipeline open when a renderer outlives the browser).
+# win_shot.py — DPI-aware capture of an ALREADY RUNNING khtml_browser window.
+#
+# Since the page canvas is presented through Windows DWM (DirectComposition),
+# the composed pixels are NOT part of the window's GDI redirection surface:
+# a BitBlt from the window DC would come back blank.  Capture therefore reads
+# the desktop DC at the client-area origin (the same pixels DWM shows on
+# screen), after bringing the window to the foreground so nothing occludes it.
 #
 # Usage: python tests\win_shot.py <out.png> [browser_pid]
 import ctypes
 import os
 import struct
 import sys
+import time
 
 try:
     ctypes.windll.shcore.SetProcessDpiAwareness(2)   # PER_MONITOR_AWARE
@@ -35,16 +39,52 @@ def find_window(pid):
     return found[0] if found else None
 
 
+def force_foreground(hwnd):
+    """Raise the browser above other windows (DWM screen capture needs it)."""
+    if USER32.IsIconic(hwnd):
+        USER32.ShowWindow(hwnd, 9)      # SW_RESTORE
+    if USER32.GetForegroundWindow() == hwnd:
+        return True
+    fg = USER32.GetForegroundWindow()
+    tid_fg = USER32.GetWindowThreadProcessId(fg, None) if fg else 0
+    tid_me = USER32.GetWindowThreadProcessId(hwnd, None)
+    attached = False
+    if tid_fg and tid_me and tid_fg != tid_me:
+        attached = USER32.AttachThreadInput(tid_me, tid_fg, True) != 0
+    try:
+        USER32.ShowWindow(hwnd, 9)
+        USER32.BringWindowToTop(hwnd)
+        USER32.SetForegroundWindow(hwnd)
+    finally:
+        if attached:
+            USER32.AttachThreadInput(tid_me, tid_fg, False)
+    for _ in range(20):
+        if USER32.GetForegroundWindow() == hwnd:
+            return True
+        time.sleep(0.01)
+    return False
+
+
 def grab(hwnd, out_path):
+    force_foreground(hwnd)
+    time.sleep(0.04)                    # let DWM present the raised window
+
     buf = ctypes.create_string_buffer(16)
     USER32.GetClientRect(hwnd, buf)
     l, t, r, b = struct.unpack("4i", buf.raw)
     w, h = r - l, b - t
-    hdc = USER32.GetDC(hwnd)
+
+    pt = ctypes.create_string_buffer(8)
+    struct.pack_into("2i", pt, 0, 0, 0)
+    USER32.ClientToScreen(hwnd, pt)
+    ox, oy = struct.unpack("2i", pt.raw)
+
+    # Desktop DC: contains the DWM-composited window content.
+    hdc = USER32.GetDC(0)
     mem = GDI32.CreateCompatibleDC(hdc)
     bmp = GDI32.CreateCompatibleBitmap(hdc, w, h)
     GDI32.SelectObject(mem, bmp)
-    GDI32.BitBlt(mem, 0, 0, w, h, hdc, 0, 0, 0x00CC0020)
+    GDI32.BitBlt(mem, 0, 0, w, h, hdc, ox, oy, 0x00CC0020)
 
     class BIH(ctypes.Structure):
         _fields_ = [("biSize", ctypes.c_uint32), ("biWidth", ctypes.c_int32),
@@ -60,7 +100,7 @@ def grab(hwnd, out_path):
     GDI32.GetDIBits(mem, bmp, 0, h, raw, ctypes.byref(bih), 0)
     GDI32.DeleteObject(bmp)
     GDI32.DeleteDC(mem)
-    USER32.ReleaseDC(hwnd, hdc)
+    USER32.ReleaseDC(0, hdc)
 
     from PIL import Image
     img = Image.frombuffer("RGBA", (w, h), raw.raw, "raw", "BGRA", 0, 1)

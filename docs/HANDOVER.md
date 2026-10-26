@@ -1038,6 +1038,35 @@ INCONCLUSIVE、或退出码 0 但输出里出现判定形 FAIL 令牌，都算�
 - `browser_click_probe` / `input_coord_probe` / `dpr_probe` PASS；`tile_protocol_test` PASS；`portable_smoke` PASS（便携包二进制已同步，SHA256 相等）。
 - 全量回归结果见下方补记。
 
+## 5ad. 内核侧 DWM 呈现适配层 + WARP 回退（2026-10-26）
+
+### 定位（用户明确要求）
+- DWM/DirectComposition、D3D11、WARP 都是 **Windows 自带的系统能力**；内核只做"识别并调用"的适配层，不实现合成器，也不实现软件光栅器。
+- 因此适配层代码归内核：`src/khtml/src/rendering/khtml_compositor.{h,cpp}`，编译进 **KF5KHtml.dll**，通过 `khtml::KHTMLCompositor` 导出；浏览器宿主（`khtml_browser.cpp` 的 PageSurface）只负责传窗口 HWND、物理几何、帧数据和可见性。
+
+### 数据路径
+1. renderer 进程里的 KHTML 引擎渲染页面，经共享内存 256px tile 传给浏览器；
+2. 宿主 PageSurface 把脏 tile 合成到持久 canvas（QImage RGB32）；
+3. 调用内核 `KHTMLCompositor::present(BGRA)`：`D3D11CreateDevice(HARDWARE)` → 失败则 `D3D11CreateDevice(WARP)`；纹理 `UpdateSubresource` → `CopyResource` 到 DXGI composition swap chain → `Present`；
+4. swap chain 内容经 `IDCompositionVisual` 挂到宿主窗口 HWND 的 `IDCompositionTarget`，由 **DWM** 合成上屏。
+- 窗口归属说明（与 WebKit/Chromium 同理）：DWM 目标绑定 HWND，窗口由浏览器进程拥有，renderer 无窗口；因此呈现调用发生在有窗口的进程，但**代码与接口属于内核**。
+- 合成画布是 `WS_EX_NOREDIRECTIONBITMAP | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE` 子窗口 + `WM_NCHITTEST=HTTRANSPARENT`，输入穿透到 Qt PageSurface；点击/坐标探针验证通过。
+
+### 回退策略（按用户要求只保留两级）
+- 硬件 D3D11 → **WARP**（`D3D_DRIVER_TYPE_WARP`，Windows 自带软件光栅器）。
+- **没有 QPainter/GDI 兜底**：若 WARP 也不可用/呈现失败，记录 `[canvas] backend=none …` 并视为系统图形栈故障。
+- 设备移除/重置（`DXGI_ERROR_DEVICE_REMOVED/RESET`）：自动重建为 WARP 合成一次；仍失败才 log none。
+- 测试钩子：`KHTML_FORCE_WARP=1`（强制 WARP）、`KHTML_FORCE_D3D_FAIL=1`（模拟 GPU 不可用，走 WARP）。
+
+### 测试捕获适配
+- DWM 合成内容不在窗口 GDI 重定向表面里，原有 client BitBlt 截图会全白：`tests/win_shot.py` 改为**桌面 DC 屏幕捕获**（先提升窗口到前台，按 ClientToScreen 取区域）；`bg_smoke / browser_click_probe / resize_probe / scroll_smoke / quick_shot / shot_tool` 里的本地 BitBlt 同步改为屏幕捕获。
+- 新增 `tests/dwm_canvas_probe.py`：默认硬件、强制 WARP、模拟 GPU 失败三种模式各验证"页面像素上屏 + 后端日志 + resize 后仍正常"，并加入 `run_regression.ps1`。
+
+### 验证（本批实测）
+- `dwm_canvas_probe` **PASS**：三种模式截图采样均为页面色 (34,102,204)，日志分别为 `backend=d3d11-hw` / `backend=warp` / `backend=warp`，resize 后仍正确。
+- 引擎探针 **48/48 PASS**（DWM 画布 + 屏幕捕获）；`browser_click_probe`、`input_coord_probe`、`dpr_probe`、`portable_smoke` PASS；便携包二进制已同步（含新 KF5KHtml.dll）。
+- 全量回归结果见下方补记。
+
 ## 6. 正在/马上要做的
 A. ~~拆那 1.1s~~ **已完成**（字体枚举缓存 + 图标懒加载，构造 1.1s→~0.35s，TTFF 2.0→1.1s）。
    下一步同部位残账：渲染进程镜像加载+socket 连接 ~500ms（每次新标签都付），

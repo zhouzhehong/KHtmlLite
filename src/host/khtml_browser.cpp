@@ -45,6 +45,10 @@
 #include <QJsonObject>
 #include <QTextStream>
 #include <QSharedMemory>
+#include <QShowEvent>
+#include <QHideEvent>
+#include <QMoveEvent>
+#include <rendering/khtml_compositor.h>
 #include <QImage>
 #include <QPainter>
 #include <QTransform>
@@ -72,8 +76,9 @@
 #include <windows.h>
 #include <psapi.h>
 
-// PageSurface — browser-side widget that paints the latest software frame
-// received from the renderer process via shared memory.  The browser owns
+// PageSurface — browser-side widget that presents the latest frame received
+// from the renderer process via shared memory through a DWM composition
+// canvas (D3D11 hardware -> WARP; no GDI/QPainter fallback by policy).  The browser owns
 // this widget (and its native HWND); the renderer never owns a visible
 // window, so dragging the browser window never touches the renderer.
 //
@@ -112,10 +117,14 @@ public:
         const bool frameMatchesWidget =
                 qAbs(img.width() - qRound(width() * dpr)) <= 1
                 && qAbs(img.height() - qRound(height() * dpr)) <= 1;
+        if (!m_dwmReady) {
+            ensureCanvas();
+        }
         if (sizeChanged || dirty.isNull() || !dirty.isValid()
                 || !frameMatchesWidget
                 || m_previewDX != 0 || m_previewDY != 0) {
             update();
+            presentFrame();
         } else {
             // `dirty` is in PHYSICAL frame coordinates; update() takes this
             // widget's LOGICAL coordinates.  Map through QRectF and round
@@ -128,6 +137,7 @@ public:
                                  .mapRect(QRectF(dirty));
             update(QRect(QPoint(qFloor(f.left()), qFloor(f.top())),
                          QPoint(qCeil(f.right()), qCeil(f.bottom()))));
+            presentFrame();
         }
     }
     // Map a widget-relative point to the coordinates the renderer's input
@@ -155,6 +165,7 @@ public:
         m_previewDX += dx;
         m_previewDY += dy;
         update();
+        presentFrame();
     }
     void resetScrollPreview()
     {
@@ -162,6 +173,7 @@ public:
         m_previewDX = 0;
         m_previewDY = 0;
         update();
+        presentFrame();
     }
 
     // Callback set by RenderTab: fires with this surface's real size every time
@@ -177,6 +189,7 @@ public:
         if (m_liveResize == on) return;
         m_liveResize = on;
         update();
+        presentFrame();
     }
 
     // Apply the webpage-determined cursor (Qt::CursorShape as an int) reported
@@ -187,6 +200,36 @@ public:
     }
 
 protected:
+    void showEvent(QShowEvent *e) override
+    {
+        QWidget::showEvent(e);
+        if (!m_dwmReady) {
+            ensureCanvas();
+        }
+        if (m_dwm) {
+            m_dwm->setVisible(true);
+            presentFrame();
+        }
+    }
+
+    void hideEvent(QHideEvent *e) override
+    {
+        if (m_dwm) {
+            m_dwm->setVisible(false);
+        }
+        QWidget::hideEvent(e);
+    }
+
+    void moveEvent(QMoveEvent *e) override
+    {
+        QWidget::moveEvent(e);
+        if (m_dwm) {
+            m_dwm->setGeometry(0, 0, qRound(width() * devicePixelRatioF()),
+                               qRound(height() * devicePixelRatioF()));
+            presentFrame();
+        }
+    }
+
     // When the pointer leaves the page surface, drop the webpage cursor and
     // fall back to the platform default. The renderer only reports cursors
     // while the pointer is over the page.
@@ -211,45 +254,23 @@ protected:
         if (m_resizeCb) {
             m_resizeCb(int(width()), int(height()));
         }
+        if (!m_dwmReady) {
+            ensureCanvas();
+        }
+        if (m_dwm) {
+            m_dwm->setGeometry(0, 0, qRound(width() * devicePixelRatioF()),
+                               qRound(height() * devicePixelRatioF()));
+            presentFrame();
+        }
     }
 
     void paintEvent(QPaintEvent *) override {
+        // The DirectComposition overlay owns the page pixels.  This widget only
+        // paints the background colour; there is deliberately NO QPainter/GDI
+        // fallback: the canvas is hardware D3D11 -> WARP, and if WARP is also
+        // unavailable the graphics stack is considered broken (policy).
         QPainter p(this);
-        if (m_frame.isNull()) {
-            p.fillRect(rect(), Qt::white);
-            return;
-        }
-        const qreal dpr = devicePixelRatioF();
-        // Steady state at ANY device pixel ratio: the frame is PHYSICAL
-        // pixels by design and now matches this widget's real device
-        // footprint.  Undo the logical→device scale on the painter so the
-        // image blits source-pixel-to-backing-pixel (1:1, no resampling,
-        // exact colours — Safari's deviceScaleFactor presentation).  The
-        // untagged draw below would resample twice on a 150% display
-        // (down to logical, then DWM back up), visibly softening the page.
-        // A ±1 px tolerance absorbs the int()/qRound() split between this
-        // widget and the renderer's frame allocation without ever
-        // stretching a stale frame by a whole pixel row.
-        const int physW = qRound(width() * dpr);
-        const int physH = qRound(height() * dpr);
-        if (qAbs(m_frame.width() - physW) <= 1 && qAbs(m_frame.height() - physH) <= 1) {
-            if (dpr != 1.0) {
-                p.scale(1.0 / dpr, 1.0 / dpr);
-                p.drawImage(QPoint(qRound(-m_previewDX * dpr),
-                                   qRound(-m_previewDY * dpr)), m_frame);
-            } else {
-                p.drawImage(QPoint(-m_previewDX, -m_previewDY), m_frame);
-            }
-            return;
-        }
-        // Frame size does not match: the renderer has not caught up with a
-        // viewport change — the WebKit2 UI-process continuity stretch
-        // (Safari resize presentation): the old frame fills the widget
-        // until the first true-size frame silently replaces it.  Live
-        // drags repaint at WM_SIZE rate, where full-surface smooth
-        // interpolation is pure CPU burn.
-        p.setRenderHint(QPainter::SmoothPixmapTransform, !m_liveResize);
-        p.drawImage(QRect(QPoint(-m_previewDX, -m_previewDY), size()), m_frame);
+        p.fillRect(rect(), Qt::white);
     }
 
     void mousePressEvent(QMouseEvent *e) override {
@@ -358,6 +379,80 @@ private:
     QTimer *m_wheelTimer = nullptr;
     std::function<void(int, int)> m_resizeCb;
     bool m_liveResize = false;
+
+    // ---- DWM composition canvas (GPU hardware -> WARP -> GDI fallback) ----
+    void ensureCanvas()
+    {
+        if (m_dwmReady) {
+            return;
+        }
+        m_dwmReady = true;
+        if (!isVisible() || width() <= 0 || height() <= 0) {
+            // The overlay is created on the first show/resize instead.
+            m_dwmReady = false;
+            return;
+        }
+        const qreal dpr = devicePixelRatioF();
+        m_dwm = new khtml::KHTMLCompositor;
+        const bool forceWarp = qEnvironmentVariableIsSet("KHTML_FORCE_WARP");
+        const bool forceFail = qEnvironmentVariableIsSet("KHTML_FORCE_D3D_FAIL");
+        if (!m_dwm->create((void *)winId(), 0, 0,
+                         qRound(width() * dpr), qRound(height() * dpr),
+                         forceWarp, forceFail)) {
+            delete m_dwm;
+            m_dwm = nullptr;
+            // No GDI fallback by policy: hardware D3D11 -> WARP.  If even
+            // WARP composition is unavailable, the graphics stack itself is
+            // broken and a software QPainter path would not be meaningful.
+            fprintf(stderr, "[canvas] backend=none — D3D11/WARP composition "
+                            "unavailable (no fallback by policy)\n");
+            fflush(stderr);
+            update();
+        }
+    }
+
+    void presentFrame()
+    {
+        if (!m_dwm || !m_dwm->isActive() || m_frame.isNull()) {
+            return;
+        }
+        const qreal dpr = devicePixelRatioF();
+        const int pw = qRound(width() * dpr);
+        const int ph = qRound(height() * dpr);
+        if (pw <= 0 || ph <= 0) {
+            return;
+        }
+        const bool matches = qAbs(m_frame.width() - pw) <= 1
+                             && qAbs(m_frame.height() - ph) <= 1;
+        QImage composed;
+        const bool needsCompose = !matches || m_previewDX != 0 || m_previewDY != 0;
+        if (needsCompose) {
+            composed = QImage(pw, ph, QImage::Format_RGB32);
+            composed.fill(Qt::white);
+            QPainter cp(&composed);
+            if (matches) {
+                cp.drawImage(QPoint(qRound(-m_previewDX * dpr),
+                                    qRound(-m_previewDY * dpr)), m_frame);
+            } else {
+                cp.setRenderHint(QPainter::SmoothPixmapTransform, !m_liveResize);
+                cp.drawImage(QRect(0, 0, pw, ph), m_frame);
+            }
+            cp.end();
+        }
+        const QImage &src = needsCompose ? composed : m_frame;
+        if (!m_dwm->present(src.constBits(), src.width(), src.height(),
+                            src.bytesPerLine())) {
+            delete m_dwm;
+            m_dwm = nullptr;
+            fprintf(stderr, "[canvas] backend=none — DWM/WARP presentation "
+                            "failed (no fallback by policy)\n");
+            fflush(stderr);
+            update();
+        }
+    }
+
+    khtml::KHTMLCompositor *m_dwm = nullptr;
+    bool m_dwmReady = false;
 };
 
 class RenderTab : public QObject

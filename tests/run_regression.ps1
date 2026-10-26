@@ -119,10 +119,11 @@ $probes = @(
     "resize_probe.py",
     "scroll_smoke.py",
     "tile_protocol_test.py",
-    "title_probe.py",
+# The standing probes, the DWM presentation probe, plus the two diagnostics
     "tombstone_probe.py",
     "resize_ghost_probe.py",
     "engine_semantics_probe.py",
+    "dwm_canvas_probe.py",
     "rg_diag4.py",
     "bing_ghost_check.py"
 )

@@ -314,6 +314,7 @@ set(khtmlrender_STAT_SRCS
   rendering/render_block.cpp
   rendering/render_flexbox.cpp
   rendering/render_grid.cpp
+  rendering/khtml_compositor.cpp
   rendering/render_inline.cpp
   rendering/render_style.cpp
   rendering/render_object.cpp
@@ -600,6 +601,10 @@ endif()
 
 if(TARGET KF5::GlobalAccel)
   target_link_libraries(KF5KHtml PRIVATE KF5::GlobalAccel)
+endif()
+
+if(WIN32)
+  target_link_libraries(KF5KHtml PRIVATE d3d11 dxgi dcomp dwmapi)
 endif()
 
 set_target_properties(KF5KHtml PROPERTIES VERSION ${KHTML_VERSION}
