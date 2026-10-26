@@ -70,8 +70,35 @@ def find_window(pid):
     return found[0] if found else None
 
 
+def force_foreground(hwnd):
+    """Activate the browser before synthetic clicks.
+
+    Qt ignores posted mouse presses while the window is not active, and the
+    DWM canvas work exposed that: clicking the tombstoned tab without focus
+    did nothing (the window was behind the regression console).  A real user
+    clicks an active window; the probe now reproduces that precondition.
+    """
+    if USER32.GetForegroundWindow() == hwnd:
+        return True
+    fg = USER32.GetForegroundWindow()
+    tid_fg = USER32.GetWindowThreadProcessId(fg, None) if fg else 0
+    tid_me = USER32.GetWindowThreadProcessId(hwnd, None)
+    attached = False
+    if tid_fg and tid_me and tid_fg != tid_me:
+        attached = USER32.AttachThreadInput(tid_me, tid_fg, True) != 0
+    try:
+        USER32.ShowWindow(hwnd, 9)      # SW_RESTORE
+        USER32.SetForegroundWindow(hwnd)
+    finally:
+        if attached:
+            USER32.AttachThreadInput(tid_me, tid_fg, False)
+    time.sleep(0.15)
+    return USER32.GetForegroundWindow() == hwnd
+
+
 def click(hwnd, x, y):
     """Synthetic press+release at client coords (x, y)."""
+    force_foreground(hwnd)
     lparam = (y << 16) | (x & 0xFFFF)
     USER32.PostMessageW(hwnd, 0x0201, 1, lparam)   # WM_LBUTTONDOWN
     time.sleep(0.05)
@@ -172,11 +199,17 @@ def main():
         # (tab strip occupies y~0..42 physical; tab 0 starts after the
         # traffic lights / sidebar, x~160..380).
         resumed = False
-        for y in (25, 18, 32, 40):
-            click(hwnd, 200, y)
+        # Click the LEFT part of the first tab (title area).  x=200 used to be
+        # safe, but the WhiteSur-style tab close "x" hot zone now sits near the
+        # tab's right edge and a biased layout can place it at 200, which
+        # CLOSED the tombstone instead of resuming it.
+        for (x, y) in ((170, 22), (170, 20), (176, 25), (170, 28)):
+            click(hwnd, x, y)
             time.sleep(3)
-            if "resumeTab idx=0" in trace_text():
-                resumed = True
+            tr2 = trace_text()
+            resumed = "resumeTab idx=0" in tr2
+            print(f"  resume try ({x},{y}) resumed={resumed}")
+            if resumed:
                 break
         print(f"resume by clicking tombstone tab: {resumed}")
 

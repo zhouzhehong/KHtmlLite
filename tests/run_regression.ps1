@@ -81,7 +81,7 @@ function Invoke-Probe {
     # 2026-10-23 audit's exploit: a probe printing both).  Verdict-shaped =
     # FAIL at line start, or uppercase words followed by FAIL; prose such as
     # "negative control: ... must FAIL" (lowercase, mid-line) cannot match.
-    $failTok = $text -match "(?m)^\s*(?:\[[^\]]*\]\s*)?(?:FAIL\w*\b|[A-Z][A-Z -]*\s+FAIL\w*\b)"
+    $failTok = $text -cmatch "(?m)^\s*(?:\[[^\]]*\]\s*)?(?:FAIL\w*\b|[A-Z][A-Z -]*\s+FAIL\w*\b)"
     $verdict = ""
     if ($failTok) { $verdict = "FAIL" }
     elseif ($text -match "INCONCLUSIVE") { $verdict = "INCONCLUSIVE" }

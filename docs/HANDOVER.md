@@ -1067,6 +1067,14 @@ INCONCLUSIVE、或退出码 0 但输出里出现判定形 FAIL 令牌，都算�
 - 引擎探针 **48/48 PASS**（DWM 画布 + 屏幕捕获）；`browser_click_probe`、`input_coord_probe`、`dpr_probe`、`portable_smoke` PASS；便携包二进制已同步（含新 KF5KHtml.dll）。
 - 全量回归结果见下方补记。
 
+### 回归适配修复（DWM 画布带来的测试侧变化）
+- `tile_protocol_test` 的静态不变量从旧的 QPainter 1:1 绘制行改为 DWM 契约：`khtml::KHTMLCompositor` 呈现、compose 在物理分辨率、`m_forceGdi` 必须不存在（防止兜底路径回潮）。
+- `run_regression.ps1` 的 FAIL token 匹配改为大小写敏感（`-cmatch`）：原来 PowerShell 默认不区分大小写，探针里 `[OK] no backend failure` 的 "failure" 会被误判为 FAIL token（`dwm_canvas_probe` 曾因此假失败）。
+- `tombstone_probe`：
+  - 点击前提升窗口到前台——DWM 改造后 Qt 会丢弃非激活窗口的合成鼠标按下（agent 复现：前台时点击立即恢复）。
+  - resume 点击从 (200,25) 移到 x=170 的标签文字区——WhiteSur 风格标签的关闭 "×" 热区在标签右缘，旧坐标命中了关闭按钮，浏览器 trace 显示 `currentChanged idx=0 tabs=1 pages=1`（标签被关掉）而不是 `resumeTab`。
+- 复测：`tile_protocol_test` PASS、`dwm_canvas_probe` PASS（三后端+resize）、`tombstone_probe` PASS（resume True）、引擎探针 48/48 PASS。
+
 ## 6. 正在/马上要做的
 A. ~~拆那 1.1s~~ **已完成**（字体枚举缓存 + 图标懒加载，构造 1.1s→~0.35s，TTFF 2.0→1.1s）。
    下一步同部位残账：渲染进程镜像加载+socket 连接 ~500ms（每次新标签都付），

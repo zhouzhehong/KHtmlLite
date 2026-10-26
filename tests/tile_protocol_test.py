@@ -151,21 +151,26 @@ def test_static_consistency():
     # Guarded statically: both 1:1 paths must exist, the device-pixel blit
     # must be gated on the physical size match, and unconditional
     # full-surface scaling stays forbidden.
-    assert "p.drawImage(QPoint(-m_previewDX, -m_previewDY), m_frame)" in brow, \
-        "1:1 anchored draw path missing from PageSurface"
-    assert "p.scale(1.0 / dpr, 1.0 / dpr)" in brow, \
-        "device-pixel 1:1 blit missing (frame would be resampled twice at dpr != 1)"
-    assert re.search(r"qAbs\(m_frame\.width\(\) - physW\) <= 1[^}]*"
-                     r"p\.scale\(1\.0 / dpr, 1\.0 / dpr\)", brow, re.S), \
-        "device-pixel blit must be gated on the physical frame==surface match"
-    assert "p.drawImage(QRect(QPoint(-m_previewDX, -m_previewDY), size()), m_frame)" in brow, \
-        "mismatch stretch fallback missing"
-    assert "p.drawImage(rect(), m_frame)" not in brow, \
-        "PageSurface scales the frame unconditionally"
-    assert "checkerBoard" not in brow, \
-        "stale checkerboard presentation: mismatch now shows the scaled last frame"
-    print("  PageSurface: 1:1 steady state (device px at dpr != 1), "
-          "stretch only on size mismatch")
+    # Presentation contract (DWM composition, kernel adapter):
+    #   steady state / resize preview / scroll preview are composed in PHYSICAL
+    #   pixels at the surface size and handed to khtml::KHTMLCompositor, whose
+    #   D3D11 (hardware -> WARP) device presents a DXGI composition swap chain
+    #   and DWM composites it.  There is deliberately no QPainter/GDI fallback.
+    assert "khtml::KHTMLCompositor *m_dwm" in brow, \
+        "PageSurface must present through the kernel KHTMLCompositor"
+    assert "m_dwm->present(src.constBits(), src.width(), src.height()," in brow, \
+        "PageSurface must hand the composed frame to the DWM canvas"
+    assert "qAbs(m_frame.width() - pw) <= 1" in brow and \
+        "qAbs(m_frame.height() - ph) <= 1" in brow, \
+        "steady-state DWM present must be gated on physical frame==surface"
+    assert "composed = QImage(pw, ph, QImage::Format_RGB32);" in brow, \
+        "resize/scroll preview must compose at physical surface size"
+    assert "cp.drawImage(QPoint(qRound(-m_previewDX * dpr)," in brow, \
+        "scroll preview offset must be applied in physical pixels"
+    assert "m_forceGdi" not in brow, \
+        "QPainter/GDI fallback must not exist (policy: D3D11 -> WARP only)"
+    print("  PageSurface: physical-size composition -> kernel KHTMLCompositor "
+          "(DWM), no GDI fallback")
 
     # True deviceScaleFactor contract: the renderer receives a LOGICAL
     # (CSS px) viewport plus the ratio, lays KHTML out at that logical size
