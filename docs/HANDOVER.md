@@ -1104,6 +1104,12 @@ INCONCLUSIVE、或退出码 0 但输出里出现判定形 FAIL 令牌，都算�
 - 新探针 `tests/polyfill_probe.py` 已加入 `run_regression.ps1`。
 - 回归：`engine_semantics_probe` 48/48 PASS、`tile_protocol_test` PASS、`portable_smoke` PASS（便携包已同步）。
 
+### 全量回归（polyfill 修复后，2026-10-26 17:50→18:41）
+- **`failed: none`**：16 项中 15 PASS + `bing_ghost_check` INCONCLUSIVE（本机 cn.bing.com 无 #0078D4 元素）。
+- 关键项：`polyfill_probe 6.6s PASS`、`engine_semantics_probe 282.6s PASS`、`tile_protocol_test 185.6s PASS`、`tombstone_probe 624.4s PASS`、`dwm_canvas_probe 22.4s PASS`、`resize_probe`/`scroll_smoke`/`bg_smoke`/`click`/`dpr`/`input` 全 PASS。
+- HTTP 初始文档注入实测：页面脚本同步报告 `SHIM|console=object|ls=object|fetch=function`（初始交付即带 shim；随后 refreshed 重载会重置标题，属于既有 loader 刷新时序，不是 polyfill 问题）。
+- 便携包已同步（exe/DLL SHA256 相等），`portable_smoke` PASS。
+
 ## 6. 正在/马上要做的
 A. ~~拆那 1.1s~~ **已完成**（字体枚举缓存 + 图标懒加载，构造 1.1s→~0.35s，TTFF 2.0→1.1s）。
    下一步同部位残账：渲染进程镜像加载+socket 连接 ~500ms（每次新标签都付），
