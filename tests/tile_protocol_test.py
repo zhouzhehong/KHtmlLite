@@ -165,8 +165,8 @@ def test_static_consistency():
         "steady-state DWM present must be gated on physical frame==surface"
     assert "composed = QImage(pw, ph, QImage::Format_RGB32);" in brow, \
         "resize/scroll preview must compose at physical surface size"
-    assert "cp.drawImage(QPoint(qRound(-m_previewDX * dpr)," in brow, \
-        "scroll preview offset must be applied in physical pixels"
+    assert "cp.drawImage(QPoint(qRound(m_previewDX * dpr)," in brow, \
+        "scroll preview offset must be applied in physical pixels, signed like applyScrollAuthority()"
     assert "m_forceGdi" not in brow, \
         "QPainter/GDI fallback must not exist (policy: D3D11 -> WARP only)"
     print("  PageSurface: physical-size composition -> kernel KHTMLCompositor "

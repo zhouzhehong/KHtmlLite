@@ -500,6 +500,40 @@ public:
                         err.toUtf8().constData());
             if (!err.isEmpty()) {
                 sendMessage(QStringLiteral("error"), err);
+                // A failed navigation must never leave the tab white or stuck
+                // on the previous page: synthesize a local error document and
+                // feed it through the same begin/write/end path.  It has no
+                // sub-resources, so it paints immediately and the native
+                // <title> drives the tab caption.
+                const QString target = m_pendingUrl.isValid()
+                        ? m_pendingUrl.toString() : QStringLiteral("(unknown URL)");
+                const QString page = QStringLiteral(
+                    "<!DOCTYPE html><html><head><meta charset=\"utf-8\">"
+                    "<title>LoadError</title></head><body style=\"margin:0;"
+                    "font-family:'Segoe UI',sans-serif;background:#f7f7f7;color:#333\">"
+                    "<div style=\"padding:48px 56px\">"
+                    "<div style=\"font-size:22px;font-weight:600;margin-bottom:12px\">"
+                    "无法加载此页面</div>"
+                    "<div style=\"font-size:13px;color:#666;margin-bottom:18px\">%1</div>"
+                    "<div style=\"font-size:12px;color:#999\">%2</div>"
+                    "</div></body></html>")
+                    .arg(err.toHtmlEscaped(), target.toHtmlEscaped());
+                // QDir::tempPath() proved unwritable for the sandboxed
+                // renderer on this machine (QFile::open failed); the renderer
+                // already writes the page cache under its working directory.
+                const QString ep = QDir::currentPath()
+                        + QStringLiteral("/khtml_load_error_%1.html")
+                              .arg(QCoreApplication::applicationPid());
+                QFile ef(ep);
+                if (ef.open(QIODevice::WriteOnly)) {
+                    ef.write(page.toUtf8());
+                    ef.close();
+                    const QUrl eu = QUrl::fromLocalFile(ep);
+                    m_view->begin(eu);
+                    const QByteArray eb = page.toUtf8();
+                    m_view->write(eb.constData(), eb.size());
+                    m_view->end();
+                }
                 return;
             }
             // Notify the browser of the final URL (after redirects) so the
@@ -553,10 +587,14 @@ public:
             // Decode with the charset the server declared, falling back to
             // UTF-8 (the historical behaviour).  The engine's own detector
             // handles <meta charset> when we do not force a codec.
-            {
-                const QString cs = m_loader->mainCharset();
-                m_view->setEncoding(cs.isEmpty() ? QStringLiteral("utf-8") : cs, true);
-            }
+            // NOTE: do not call KHTMLPart::setEncoding() here.  Its
+            // implementation reloads the document (closeUrl + openUrl(url));
+            // with a non-empty URL that openUrl is our cache-mirror file and
+            // PageLoader mapped it back to http://<site>/index.html, producing
+            // a bogus failed navigation and (before the error page) a white
+            // tab on every refreshed()/second page.  PageLoader writes UTF-8
+            // and the RendererView ctor already selected utf-8, so no
+            // per-load decoding switch is needed.
             dropFrameBase();
             m_view->begin(localFile);
             m_view->write(html.constData(), html.size());
@@ -591,10 +629,13 @@ public:
             const QByteArray html = f.readAll();
             f.close();
             if (html.isEmpty()) return;
-            {
-                const QString cs = m_loader->mainCharset();
-                m_view->setEncoding(cs.isEmpty() ? QStringLiteral("utf-8") : cs, true);
-            }
+            // Same as the initial delivery: no setEncoding() (it reloads).
+            // Explicitly stop the outgoing document's loaders/animation timers
+            // before tearing it down.  Without this, a document with animated
+            // images/GIFs could crash inside libKF5KHtml when the refresh
+            // re-parse destroyed it while image jobs were still live (measured:
+            // busy.html crashed ~1/8 loads; KHTML_NO_REFRESH 10/10 clean).
+            m_view->closeUrl();
             m_view->begin(localFile);
             m_view->write(html.constData(), html.size());
             m_view->end();

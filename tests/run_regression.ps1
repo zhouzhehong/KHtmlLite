@@ -118,6 +118,7 @@ $probes = @(
     "input_coord_probe.py",
     "resize_probe.py",
     "scroll_smoke.py",
+    "scroll_direction_probe.py",
     "tile_protocol_test.py",
 # The standing probes, the DWM presentation probe, plus the two diagnostics
     "tombstone_probe.py",
@@ -126,6 +127,7 @@ $probes = @(
     "dwm_canvas_probe.py",
     "css_trim_probe.py",
     "polyfill_probe.py",
+    "navigation_probe.py",
     "promise_microtask_probe.py",
     "rg_diag4.py",
     "bing_ghost_check.py"

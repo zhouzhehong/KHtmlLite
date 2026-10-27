@@ -1143,6 +1143,44 @@ INCONCLUSIVE、或退出码 0 但输出里出现判定形 FAIL 令牌，都算�
 - 命名只用「项目名.zip」，不再加 `-source-snapshot-<hash>` 等额外后缀。
 - 内容为 `git archive HEAD` 的源码快照（跟踪文件，不含 `.git`、`build/` 产物）；打包后做 ZIP 完整性校验并与 `git ls-files` 核对缺失文件数（必须为 0）。
 
+## 5ah. 导航生命周期 / 资源交付 / 错误页 / 滚动方向（2026-10-27）
+
+第一轮稳定性加固，目标链路：点击链接 → navigateRequested → PageLoader::load → 主文档 → extractResources → 子资源 → finished → begin/write/end → refreshed → 布局首帧。
+
+### 已证实根因与代码证据
+1. **跨导航状态泄漏**：`PageLoader::load()` 复位了很多容器（`m_resources/m_pendingMap/m_cssRaw/m_seenUrls`…）却没有清 `m_rawToLocal`、`m_cssRawToLocal`、`m_mainHtml`、`m_cacheDir`（旧代码 608-632 行）。上一页的 raw→local URL 映射会参与新页 rewrite，快速连续导航/返回后可能把新页资源改写到旧缓存目录。
+2. **旧导航的定时任务无 generation 防护**：`finalizeSubresources()` 用 `QTimer::singleShot(100, this, [this]{...})` 重试，lambda 不携带 `m_navGeneration`。旧页的重试可在新导航开始后执行 rewrite/refreshed（新 load 会重置 `m_rewritten=false`），污染新页或被误判为可重写。
+3. **失败导航没有任何 UI**：renderer 的 `loader finished` 错误分支只 `sendMessage("error")`；`khtml_browser.cpp` 的消息分发（915-998 行）没有 `error` 分支 → 新标签/失败导航停留在空白/旧画面。现在 renderer 合成一张本地错误页并走同一 begin/write/end（标题改为 ASCII `LoadError` 便于测试；正文含错误信息与目标 URL）。注意：`QDir::tempPath()` 在本机沙箱 renderer 中 `QFile::open` 失败（实测 write=0），错误页文件改写到 renderer 工作目录。
+4. **链接点击不进历史**：只有 `KHtmlLiteWindow::navigate(..., pushHistory)` 会 append `pg->back`；链接点击走 renderer 的 `urlChanged`，浏览器只更新 `pg->current`/地址栏，所以点击 B 后 Back 无历史。现在 urlChanged 在 URL 变化且不是 navigate() 已记录时补 push（`TabPage::navPushed` 去重，含重定向）。
+5. **预测滚动方向反了**：Qt 滚轮向上 angleDelta 为正、内容应向下移动；权威路径 `applyScrollAuthority` 用 `shiftCanvas(dx,dy)`（负 delta 时向下画），而 PageSurface 的预测预览用 `drawImage(-preview…)`，方向相反，滚动瞬间先反向跳、等权威帧才纠正（即“反向滚动异常”）。已统一符号，并在新文档/重载/seed 时复位 `m_baseCX/m_baseCY` 与预览（旧 authority base 会把新页首帧按旧偏移平移）。
+6. **setEncoding() 触发隐式重载**（关键）：renderer 每次 `begin` 前调用 `KHTMLPart::setEncoding(cs, true)`，而该 API 的实现是 `closeUrl(); openUrl(oldUrl)`（`khtml_part.cpp` 2668-2684）。oldUrl 是缓存镜像 `file://…/khtml_cache/<hash>/index.html`，openUrl 进入 `RendererView::openUrl(file)` → `navigateRequested` → `PageLoader::load(originalOf(cache index))` → 前缀回退解析成 `http://<site>/index.html` → 404 → 错误页/白屏；带子资源的页面在 `refreshed()` 时必然触发（实测错误页 target 即 `/index.html`）。已删除 finished/refreshed 两处 setEncoding 调用；PageLoader 写出的镜像本就是 UTF-8，ctor 已设 utf-8。
+7. **二次整页解析**：主文档在子资源下载前交付，`refreshed()` 再 begin/write/end 一次（脚本二次执行、DOM 重置）。已做的最小安全改造：
+   - 抽出 `polishHtmlForEngine()`，初始与最终文档使用完全相同的 HTML polish（inline style url/@import、URL 替换、inline script try/catch 包装、polyfill），两边内容可比较；
+   - 对“无子资源且最终 HTML 与初始 hash 相同”的页面跳过 refreshed（`refreshed_skipped_identical`）；
+   - 曾尝试“先启动下载 + 50ms head-start，资源全部完成则以最终文档作为首文档交付（只解析一次）”，实测在带图片/背景图的页面上导致 renderer 连续崩溃（bg_smoke FAIL、产生新 dmp），已回退为原来的立即交付顺序。
+8. **refreshed 二次解析时旧文档仍在加载图片 → 间歇性崩溃**（本轮最后修复）：busy.html 单页加载循环 8 次出现 1 次 renderer 崩溃（URL=busy.html，libKF5KHtml RVA 0x933fc）；用临时 `KHTML_NO_REFRESH` 关闭 refreshed 后 10/10 无崩溃，确认触发点是旧文档带着未完成的图片/GIF 加载被 re-parse 销毁。修复：在 refreshed 的 `begin()` 前显式 `m_view->closeUrl()`，先中止旧文档的 DocLoader/动画任务再拆除。复测：busy 10/10 无新 dmp，`bg_smoke` 3/3 PASS（红/绿像素 82416/10813，单次请求周期），`navigation_probe`/`engine_semantics_probe` PASS。
+
+### 新增/修改文件
+- `src/host/pageloader.cpp/.h`：状态复位、generation 防护、`polishHtmlForEngine()`、hash 判定、失败清理、refreshed 跳过。
+- `src/host/khtml_renderer.cpp`：本地错误页（`LoadError`）；删除会触发隐式重载的 `setEncoding()` 调用；refreshed 前 `closeUrl()`。
+- `src/host/khtml_browser.cpp`：链接点击历史、滚动预测方向/authority 复位。
+- `tests/navigation_probe.py`（新）：普通链接、第二页、Back/Forward、302 重定向、快速连续点击取消慢加载、资源 404、JS 标题、主文档 404 错误页、非白屏、崩溃日志不变。**PASS**。
+- `tests/scroll_direction_probe.py`（新）：单色块位置验证 wheel-down 上移、wheel-up 下移、回位。**PASS**。
+- `tests/polyfill_probe.py`/`tile_protocol_test.py`：适配 polish 注入点与滚动预览符号的静态不变量。
+- `tests/bg_smoke.py`：browser stdout 改 DEVNULL，避免 renderer 继承管道导致探针/回归挂 600s。
+
+### 已跑验证
+- `navigation_probe` PASS（全部 16 项，含错误页最终绘制重试）。
+- `scroll_direction_probe` PASS：block y 538 → 448（wheel-down，内容上移）→ 538（wheel-up 回位）。
+- `bg_smoke` 3/3 PASS（单次请求周期 `/bg_smoke.html,/green.png,/red.png`，无新 dmp）。
+- busy.html 加载循环 10/10 无新 dmp（修复前 8 次 1 崩）。
+- `title_probe` / `dwm_canvas_probe` / `css_trim_probe` / `polyfill_probe` / `promise_microtask_probe` / `browser_click_probe` / `engine_semantics_probe`（48/48）PASS。
+
+### 全量回归（2026-10-28 02:10→02:49）
+- **`failed: none`**（19 项：18 PASS + `bing_ghost_check` INCONCLUSIVE）。
+- 关键项：`bg_smoke 4.3s PASS`（红/绿像素正常、单次请求周期、无新 dmp）、`tombstone_probe 623.2s PASS`、`scroll_smoke 602.6s PASS`、`resize_probe 601.9s PASS`、`engine_semantics_probe 194.6s PASS`、`navigation_probe 18.2s PASS`、`scroll_direction_probe 8.1s PASS`、`tile_protocol_test 145.7s PASS`、`dwm_canvas_probe 20.7s PASS`、`promise_microtask_probe 2.2s PASS`、`polyfill_probe 3.5s PASS`、`css_trim_probe 0.5s PASS`、`click/dpr/input/title/resize_ghost/rg_diag4` 全 PASS。
+- 便携包与 ZIP 打包结果见下方交付记录。
+
 ## 6. 正在/马上要做的
 A. ~~拆那 1.1s~~ **已完成**（字体枚举缓存 + 图标懒加载，构造 1.1s→~0.35s，TTFF 2.0→1.1s）。
    下一步同部位残账：渲染进程镜像加载+socket 连接 ~500ms（每次新标签都付），

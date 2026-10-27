@@ -228,9 +228,11 @@ def main():
     node = find_node()
     print("[0/3] loader wiring")
     src = io.open(PAGELOADER, encoding="utf-8").read()
-    n_inject = src.count("html = injectPolyfillBundle(html);")
-    print(f"  injectPolyfillBundle calls: {n_inject} (want >= 2: initial + final)")
-    ok = (n_inject >= 2) and ok
+    n_polish = src.count("html = polishHtmlForEngine(html);")
+    has_inject = "injectPolyfillBundle(html)" in src
+    print(f"  polish call sites: {n_polish} (want >= 2: initial + final); "
+          f"polyfill inside polish: {has_inject}")
+    ok = (n_polish >= 2 and has_inject) and ok
 
     print("[1/3] syntax")
     js = extract_polyfill_js()

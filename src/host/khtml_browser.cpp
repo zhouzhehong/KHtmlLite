@@ -431,8 +431,11 @@ private:
             composed.fill(Qt::white);
             QPainter cp(&composed);
             if (matches) {
-                cp.drawImage(QPoint(qRound(-m_previewDX * dpr),
-                                    qRound(-m_previewDY * dpr)), m_frame);
+                // Same sign convention as applyScrollAuthority(): Qt wheel-up
+                // (positive angleDelta) must move content DOWN while the
+                // authoritative renderer frame is pending.
+                cp.drawImage(QPoint(qRound(m_previewDX * dpr),
+                                    qRound(m_previewDY * dpr)), m_frame);
             } else {
                 cp.setRenderHint(QPainter::SmoothPixmapTransform, !m_liveResize);
                 cp.drawImage(QRect(0, 0, pw, ph), m_frame);
@@ -569,9 +572,23 @@ public:
         m_socket->connectToServer(m_socketName);
     }
 
+    void resetScrollPosition()
+    {
+        m_baseCX = 0;
+        m_baseCY = 0;
+        if (m_container) {
+            m_container->resetScrollPreview();
+        }
+    }
+
     void navigate(const QUrl &url)
     {
         m_current = url;
+        // New document: the renderer restarts at scroll (0,0).  The canvas
+        // authority base belongs to the previous page; keeping it would make
+        // the first frames shift by the old offset (visible jump / wrong
+        // strip after back/forward and rapid link clicks).
+        resetScrollPosition();
         if (m_socket && m_socket->isOpen()) {
             QJsonObject obj;
             obj[QStringLiteral("cmd")] = QStringLiteral("navigate");
@@ -583,6 +600,7 @@ public:
 
     void reload()
     {
+        resetScrollPosition();
         if (m_socket && m_socket->isOpen()) {
             QJsonObject obj;
             obj[QStringLiteral("cmd")] = QStringLiteral("reload");
@@ -777,7 +795,7 @@ public:
     // Prefill the surface with a previous snapshot while the new renderer
     // is still starting/loading — the user keeps a visual anchor instead
     // of staring at a white surface.  Real tiles overwrite it seamlessly.
-    void seedFrame(const QImage &img) { if (m_container && !img.isNull()) m_container->setFrame(img); }
+    void seedFrame(const QImage &img) { if (m_container && !img.isNull()) { resetScrollPosition(); m_container->setFrame(img); } }
     QUrl currentUrl() const { return m_current; }
     QString title() const { return m_title; }
     bool isCrashed() const { return m_crashed; }
@@ -1227,6 +1245,7 @@ struct TabPage {
     bool suspended = false;
     QString savedTitle;
     qint64 lastActive = 0;
+    bool navPushed = false;   // navigate() already pushed the previous URL
     bool jsDisabled = false;
     int crashCount = 0;
     // Lightweight tombstone: scroll position + zoom for restore after suspend.
@@ -1891,6 +1910,17 @@ public:
             // renderer already maps clicks back; never surface it here.
             if (u.isLocalFile() && u.toLocalFile().contains(QLatin1String("/khtml_cache/")))
                 return;
+            // Link clicks never went through navigate(pg, url, pushHistory):
+            // the renderer reports the final URL here.  Without this push the
+            // Back button had no history entry for clicked links.  Redirects
+            // are included once (the loader only reports the final URL);
+            // address-bar navigations already pushed in navigate(), hence
+            // navPushed.
+            if (u != pg->current && pg->current.isValid() && !pg->navPushed) {
+                pg->back.append(pg->current);
+                pg->fwd.clear();
+            }
+            pg->navPushed = false;
             pg->current = u;
             if (pg == currentPage()) {
                 m_addr->setText(u.toString());
@@ -2077,6 +2107,7 @@ protected:
         if (!pg) return;
         if (pushHistory && pg->current.isValid()) pg->back.append(pg->current);
         pg->fwd.clear();
+        pg->navPushed = pushHistory;
         pg->current = url;
         pg->lastActive = QDateTime::currentMSecsSinceEpoch();
         if (pg->suspended) { resumeTab(pg); return; }

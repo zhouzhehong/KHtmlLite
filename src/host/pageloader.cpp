@@ -625,6 +625,16 @@ void PageLoader::load(const QUrl &url)
     m_cssRaw.clear();
     m_cssVars.clear();
     m_seenUrls.clear();
+    // These used to survive across navigations: stale raw->local URL mappings
+    // could rewrite the NEW page's references to the OLD cache directory,
+    // producing broken resources or a white page after fast consecutive
+    // navigations (back/forward, rapid link clicks).
+    m_rawToLocal.clear();
+    m_cssRawToLocal.clear();
+    m_mainHtml.clear();
+    m_cacheDir.clear();
+    m_initialHtmlHash.clear();
+    m_finalHtmlChanged = false;
     m_pending = 0;
     m_criticalPending = 0;
     m_finished = false;
@@ -690,11 +700,6 @@ void PageLoader::onMainFinished()
     PERF_MARK("extract_resources_start");
     extractResources();
     PERF_MARK_D("extract_resources_done", QString::number(m_resources.size()) + " resources");
-    // Deliver the main document first so KHTML can begin parsing/painting
-    // before the large batch of subresource downloads starts.  Concurrent
-    // QNetworkAccessManager downloads were observed to starve the in-process
-    // KIO file worker, causing it to stall after the first ~32 KB chunk of
-    // the cached index.html and leaving the page permanently white.
     deliverInitialDocument();
     PERF_MARK("resource_downloads_start");
     startDownloads();
@@ -998,79 +1003,12 @@ void PageLoader::extractFromCss(const QByteArray &css, const QUrl &baseUrl, cons
     }
 }
 
-void PageLoader::rewriteAndSave()
+QString PageLoader::polishHtmlForEngine(const QString &input) const
 {
-    PERF_MARK("rewrite_start");
-    QString html = QString::fromUtf8(m_mainHtml);
+    QString html = input;
 
-    // Build the full replacement table: absolute URLs, protocol-relative URLs
-    // and every literal relative reference seen in the page. Targets are
-    // absolute file:// paths so the injected <base href> (which must point at
-    // the original site for navigation) can never hijack resource loading.
-    QStringList needles;
-    QHash<QString, QString> repl;
-    for (const Res &res : m_resources) {
-        const QString la = localAbs(res.localName);
-        repl.insert(res.url.toString(), la);
-        repl.insert(QLatin1String("//") + res.url.host() + res.url.path(), la);
-    }
-    // Relative references are only protected against each other: a short name
-    // ("a.png") must not be patched inside a longer one ("logo-a.png"), but an
-    // absolute URL containing the same name is a legitimately separate match.
-    {
-        const QStringList raws = m_rawToLocal.keys();
-        QSet<QString> subsumed;
-        for (int i = 0; i < raws.size(); ++i)
-            for (int j = 0; j < raws.size(); ++j)
-                if (i != j && raws.at(i).size() < raws.at(j).size()
-                    && raws.at(j).contains(raws.at(i)))
-                    subsumed.insert(raws.at(i));
-        for (auto it = m_rawToLocal.begin(); it != m_rawToLocal.end(); ++it)
-            if (!subsumed.contains(it.key()))
-                repl.insert(it.key(), it.value());
-    }
-    needles = repl.keys();
-    std::sort(needles.begin(), needles.end(), [](const QString &a, const QString &b) {
-        return a.size() > b.size();
-    });
-    for (const QString &n : needles)
-        html.replace(n, repl.value(n));
-    PERF_MARK("rewrite_urls_done");
-
-    // Rewrite <base> so relative links resolve against the final (post-redirect) URL.
-    const QRegularExpression reBase(
-        QStringLiteral("<base[^>]*>"), QRegularExpression::CaseInsensitiveOption);
-    html.replace(reBase, QStringLiteral("<base href=\"%1\">").arg(m_finalUrl.toString()));
-
-    // Ensure the document always carries a <base> — this is the FINAL write
-    // of index.html and it must not lose the base deliverInitialDocument
-    // injected: without it the document URL is the file:// mirror and every
-    // relative URL (form action, JS relative navigation) resolves to
-    // file://…/khtml_cache/… .  See installBase().
-    html = installBase(html);
-
-    // Navigation attributes (<a href>, <area href>, <form action>,
-    // formaction, meta refresh) must keep real URLs.  The global replacement
-    // rewrites every literal known to be an asset URL — if the same literal
-    // is also a click target it would become a file:// mirror and the click
-    // would detour through the local cache before the renderer maps it back.
-    // See restoreNavigationTargets().
-    html = restoreNavigationTargets(html);
-
-    PERF_MARK("rewrite_css_start");
-    rewriteCssFiles();
-    PERF_MARK("rewrite_css_done");
-
-    // Process inline <style> blocks: rewrite url() references to the local
-    // mirror.  Custom properties/var() are handled by the engine; external
-    // stylesheets were already rewritten by rewriteCssFiles().
-
-    const QRegularExpression reStyle(
-        QStringLiteral("<style[^>]*>(.*?)</style>"),
-        QRegularExpression::CaseInsensitiveOption | QRegularExpression::DotMatchesEverythingOption);
-    const QRegularExpression reUrl(
-        QStringLiteral("(url\\(\\s*[\"']?)([^\"')]+)([\"']?\\s*\\))"));
-
+    // Replace table for url(...) references: absolute URLs, protocol-relative
+    // URLs and the literal relative references collected by extractResources().
     QHash<QString, QString> urlToLocal;
     for (const Res &res : m_resources) {
         const QString la = localAbs(res.localName);
@@ -1079,6 +1017,13 @@ void PageLoader::rewriteAndSave()
     }
     for (auto it = m_rawToLocal.begin(); it != m_rawToLocal.end(); ++it)
         urlToLocal.insert(it.key(), it.value());
+
+    const QRegularExpression reStyle(
+        QStringLiteral("<style[^>]*>(.*?)</style>"),
+        QRegularExpression::CaseInsensitiveOption | QRegularExpression::DotMatchesEverythingOption);
+    const QRegularExpression reUrl(
+        QStringLiteral("(url\\(\\s*[\"']?)([^\"')]+)([\"']?\\s*\\))"),
+        QRegularExpression::CaseInsensitiveOption);
 
     // Process inline <style> blocks.
     QString htmlOut;
@@ -1218,6 +1163,93 @@ void PageLoader::rewriteAndSave()
     // Error guard + ES5+ polyfill bundle before any page script.
     html = injectPolyfillBundle(html);
 
+    return html;
+}
+
+void PageLoader::rewriteAndSave()
+{
+    PERF_MARK("rewrite_start");
+    QString html = QString::fromUtf8(m_mainHtml);
+
+    // Build the full replacement table: absolute URLs, protocol-relative URLs
+    // and every literal relative reference seen in the page. Targets are
+    // absolute file:// paths so the injected <base href> (which must point at
+    // the original site for navigation) can never hijack resource loading.
+    QStringList needles;
+    QHash<QString, QString> repl;
+    for (const Res &res : m_resources) {
+        const QString la = localAbs(res.localName);
+        repl.insert(res.url.toString(), la);
+        repl.insert(QLatin1String("//") + res.url.host() + res.url.path(), la);
+    }
+    // Relative references are only protected against each other: a short name
+    // ("a.png") must not be patched inside a longer one ("logo-a.png"), but an
+    // absolute URL containing the same name is a legitimately separate match.
+    {
+        const QStringList raws = m_rawToLocal.keys();
+        QSet<QString> subsumed;
+        for (int i = 0; i < raws.size(); ++i)
+            for (int j = 0; j < raws.size(); ++j)
+                if (i != j && raws.at(i).size() < raws.at(j).size()
+                    && raws.at(j).contains(raws.at(i)))
+                    subsumed.insert(raws.at(i));
+        for (auto it = m_rawToLocal.begin(); it != m_rawToLocal.end(); ++it)
+            if (!subsumed.contains(it.key()))
+                repl.insert(it.key(), it.value());
+    }
+    needles = repl.keys();
+    std::sort(needles.begin(), needles.end(), [](const QString &a, const QString &b) {
+        return a.size() > b.size();
+    });
+    for (const QString &n : needles)
+        html.replace(n, repl.value(n));
+    PERF_MARK("rewrite_urls_done");
+
+    // Rewrite <base> so relative links resolve against the final (post-redirect) URL.
+    const QRegularExpression reBase(
+        QStringLiteral("<base[^>]*>"), QRegularExpression::CaseInsensitiveOption);
+    html.replace(reBase, QStringLiteral("<base href=\"%1\">").arg(m_finalUrl.toString()));
+
+    // Ensure the document always carries a <base> — this is the FINAL write
+    // of index.html and it must not lose the base deliverInitialDocument
+    // injected: without it the document URL is the file:// mirror and every
+    // relative URL (form action, JS relative navigation) resolves to
+    // file://…/khtml_cache/… .  See installBase().
+    html = installBase(html);
+
+    // Navigation attributes (<a href>, <area href>, <form action>,
+    // formaction, meta refresh) must keep real URLs.  The global replacement
+    // rewrites every literal known to be an asset URL — if the same literal
+    // is also a click target it would become a file:// mirror and the click
+    // would detour through the local cache before the renderer maps it back.
+    // See restoreNavigationTargets().
+    html = restoreNavigationTargets(html);
+
+    PERF_MARK("rewrite_css_start");
+    rewriteCssFiles();
+    PERF_MARK("rewrite_css_done");
+
+    // Process inline <style> blocks: rewrite url() references to the local
+    // mirror.  Custom properties/var() are handled by the engine; external
+    // stylesheets were already rewritten by rewriteCssFiles().
+
+    const QRegularExpression reStyle(
+        QStringLiteral("<style[^>]*>(.*?)</style>"),
+        QRegularExpression::CaseInsensitiveOption | QRegularExpression::DotMatchesEverythingOption);
+    const QRegularExpression reUrl(
+        QStringLiteral("(url\\(\\s*[\"']?)([^\"')]+)([\"']?\\s*\\))"));
+
+    QHash<QString, QString> urlToLocal;
+    for (const Res &res : m_resources) {
+        const QString la = localAbs(res.localName);
+        urlToLocal.insert(res.url.toString(), la);
+        urlToLocal.insert(QLatin1String("//") + res.url.host() + res.url.path(), la);
+    }
+    for (auto it = m_rawToLocal.begin(); it != m_rawToLocal.end(); ++it)
+        urlToLocal.insert(it.key(), it.value());
+
+    html = polishHtmlForEngine(html);
+
     // (Removed 2026-10-24: this block used to inject a stylesheet hardcoding
     // cn.bing.com's DOM ids — .sbox / #sb_form / #sb_form_q / #sb_form_go plus
     // Bing blue #0078d4 — into EVERY page.  It was site-specific tuning: it
@@ -1234,6 +1266,9 @@ void PageLoader::rewriteAndSave()
         ts.setCodec("UTF-8");
         ts << html;
     }
+    m_finalHtmlChanged = m_initialHtmlHash.isEmpty()
+            || (QCryptographicHash::hash(html.toUtf8(), QCryptographicHash::Sha1)
+                != m_initialHtmlHash);
 }
 
 void PageLoader::rewriteCssFiles()
@@ -1375,7 +1410,7 @@ void PageLoader::deliverInitialDocument()
 
     // The initial document is what page scripts run against first, so it
     // must carry the polyfill bundle too (the final rewrite re-injects it).
-    html = injectPolyfillBundle(html);
+    html = polishHtmlForEngine(html);
 
     // Write the initial document.
     QDir().mkpath(m_cacheDir);
@@ -1387,14 +1422,18 @@ void PageLoader::deliverInitialDocument()
         ts << html;
     }
     PERF_MARK_D("initial_doc_write", (wok ? QStringLiteral("OK ") : QStringLiteral("FAIL ")) + m_cacheDir);
+    m_initialHtmlHash = QCryptographicHash::hash(html.toUtf8(), QCryptographicHash::Sha1);
+    m_finalHtmlChanged = false;
 
     PERF_MARK("initial_document_delivered");
     const QUrl local = QUrl::fromLocalFile(m_cacheDir + QStringLiteral("/index.html"));
     emit finished(local, m_finalUrl, QString());
     // No subresources were pending: run the full rewrite now so the
     // renderer gets the polyfilled/CSS-simplified copy (refreshed()).
-    if (m_pending == 0 && !m_timedOut)
-        QTimer::singleShot(0, this, [this]() { finalizeSubresources(); });
+    if (m_pending == 0 && !m_timedOut) {
+        const int g = m_navGeneration;
+        QTimer::singleShot(0, this, [this, g]() { finalizeSubresources(g); });
+    }
 }
 
 // Called as subresources finish.  Bookkeeping (cache write of the resource)
@@ -1406,29 +1445,43 @@ void PageLoader::deliverInitialDocument()
 // and then notifies the renderer via refreshed() so a second, complete
 // document replaces the initial one (which referenced not-yet-downloaded
 // local files and permanently failed their images/stylesheets).
-void PageLoader::finalizeSubresources()
+void PageLoader::finalizeSubresources(int gen)
 {
+    // A retry timer queued by a previous navigation must never rewrite (or
+    // re-deliver) the page that replaced it.
+    if (gen != 0 && gen != m_navGeneration) return;
     if (m_failed || m_rewritten) return;
     if (m_pending > 0 && !m_timedOut) {
         // Fast pages deliver the initial document before any subresource has
         // settled; without this retry the final rewrite (polyfill injection,
         // CSS simplification) would never run for them.
-        QTimer::singleShot(100, this, [this]() { finalizeSubresources(); });
+        const int g = m_navGeneration;
+        QTimer::singleShot(100, this, [this, g]() { finalizeSubresources(g); });
         return;
     }
     if (m_criticalPending > 0 && !m_timedOut) {
-        QTimer::singleShot(100, this, [this]() { finalizeSubresources(); });
+        const int g = m_navGeneration;
+        QTimer::singleShot(100, this, [this, g]() { finalizeSubresources(g); });
         return;
     }
     PERF_MARK("rewrite_save_final_begin");
     rewriteAndSave();
     PERF_MARK("rewrite_save_final_done");
+    m_timeout->stop();
     // If the initial (pre-download) document was already handed to the
     // renderer, tell it the final cached copy is ready so it can re-feed.
+    // Skip the re-feed when the final HTML is byte-identical AND the page had
+    // no sub-resources (nothing on disk changed): a second begin/write/end
+    // would only re-run scripts and reset the DOM for no visible gain.
     if (m_initialDelivered) {
-        const QUrl local = QUrl::fromLocalFile(m_cacheDir + QStringLiteral("/index.html"));
-        PERF_MARK("refreshed_emitted");
-        emit refreshed(local, m_finalUrl);
+        const bool pointlessReparse = m_resources.isEmpty() && !m_finalHtmlChanged;
+        if (!pointlessReparse) {
+            const QUrl local = QUrl::fromLocalFile(m_cacheDir + QStringLiteral("/index.html"));
+            PERF_MARK("refreshed_emitted");
+            emit refreshed(local, m_finalUrl);
+        } else {
+            PERF_MARK("refreshed_skipped_identical");
+        }
     }
 }
 
@@ -1452,5 +1505,12 @@ void PageLoader::fail(const QString &msg)
 {
     if (m_failed) return;
     m_failed = true;
+    m_timeout->stop();
+    // Main-document failures happen before subresource downloads, but a
+    // failure during finalization (cache dir unwritable, ...) must not leave
+    // replies running against a dead navigation.
+    const QList<QNetworkReply *> replies = m_pendingMap.keys();
+    for (QNetworkReply *r : replies)
+        r->abort();
     emit finished(QUrl(), m_original, msg);
 }

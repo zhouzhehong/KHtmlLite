@@ -60,19 +60,17 @@ def main():
             print("FAIL: no browser window")
             print("PROMISE MICROTASK PROBE FAIL")
             return 1
-        for _ in range(60):
-            tracef.flush()
-            try:
-                with open(TRACE, "rb") as f:
-                    text = f.read().decode("utf-8", "replace")
-            except OSError:
-                text = ""
-            for line in text.splitlines():
-                if "titleChanged title=MICRO" in line:
-                    title = line.split("titleChanged title=", 1)[1].rsplit(" cur=", 1)[0]
-            if title:
-                break
-            time.sleep(0.25)
+        import ctypes
+        user32 = ctypes.windll.user32
+        buf = ctypes.create_unicode_buffer(2048)
+        for _ in range(80):
+            user32.GetWindowTextW(hwnd, buf, 2048)
+            if buf.value.startswith("MICRO|"):
+                title = buf.value.replace(" - KHtmlLite", "")
+                if all(m in title for m in ("then", "await", "timer-then",
+                                            "timer-sync", "timer-await")):
+                    break
+            time.sleep(0.1)
         print("  report:", title or "(none)")
         ok = title.startswith("MICRO|") and "TIMEOUT" not in title
         for marker in ("then", "await", "timer-then", "timer-sync", "timer-await"):

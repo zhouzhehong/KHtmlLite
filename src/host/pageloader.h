@@ -95,6 +95,11 @@ private:
     // per arriving image!) — now it runs exactly once per navigation, when
     // all pending downloads are done (or the timeout fired).
     bool m_rewritten = false;
+    // Hash of the HTML handed to the renderer as the initial document and
+    // of the final rewritten document; equal hashes mean a re-parse would
+    // only re-run scripts/reset the DOM for no content change.
+    QByteArray m_initialHtmlHash;
+    bool m_finalHtmlChanged = false;
     int m_navGeneration = 0;
     QTimer *m_timeout = nullptr;
 
@@ -121,9 +126,17 @@ private:
     QString hashName(const QUrl &u) const;
     QString localAbs(const QString &localName) const;
     void rewriteAndSave();
+    // Document-level HTML polish shared by the initial and final delivery:
+    // local URL rewriting in inline styles, unsupported CSS removal, inline
+    // script wrapping and the polyfill bundle.  Keeping both deliveries on
+    // the same transformation makes their bytes comparable (refreshed() can
+    // then be skipped when nothing resource-dependent changed).
+    QString polishHtmlForEngine(const QString &html) const;
     void rewriteCssFiles();
     void deliverInitialDocument();
-    void finalizeSubresources();
+    // gen != 0: refuse to run when a newer navigation started in between
+    // (queued retry timers from the previous page must not touch this one).
+    void finalizeSubresources(int gen = 0);
     void maybeFinish();
     void fail(const QString &msg);
     // Map <a|area|form> href/action values that the global URL replacement

@@ -140,6 +140,7 @@ def main():
     env["PATH"] = r"C:\msys64\mingw64\bin;" + env["PATH"]
     proc = subprocess.Popen([os.path.join(BUILD, "khtml_browser.exe"), URL],
                             cwd=BUILD, env=env,
+                            stdout=subprocess.DEVNULL,
                             stderr=open(os.path.join(ROOT, "tests", "bg_smoke_err.txt"), "wb"))
     try:
         hwnd = None
