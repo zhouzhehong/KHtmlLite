@@ -188,6 +188,8 @@ QString QuickJSContext::extractException()
     return result;
 }
 
+void runMicrotasksForContext(::JSContext *ctx);
+
 std::shared_ptr<JSValueHandle> QuickJSContext::evaluate(const QString &source, const QUrl &sourceUrl)
 {
     m_lastException.clear();
@@ -198,6 +200,7 @@ std::shared_ptr<JSValueHandle> QuickJSContext::evaluate(const QString &source, c
     JSValue result = JS_Eval(m_ctx, utf8.constData(), utf8.size(),
                              url.isEmpty() ? "eval" : url.constData(),
                              JS_EVAL_TYPE_GLOBAL);
+    runMicrotasksForContext(m_ctx);
 
     if (JS_IsException(result)) {
         m_lastException = extractException();
@@ -207,6 +210,27 @@ std::shared_ptr<JSValueHandle> QuickJSContext::evaluate(const QString &source, c
 
     auto handle = std::make_shared<QuickJSValue>(m_ctx, result);
     return handle;
+}
+
+void runMicrotasksForContext(::JSContext *ctx)
+{
+    if (!ctx) {
+        return;
+    }
+    JSRuntime *rt = JS_GetRuntime(ctx);
+    ::JSContext *ctx1;
+    int err;
+    size_t jobCount = 0;
+    while ((err = JS_ExecutePendingJob(rt, &ctx1)) > 0) {
+        if (++jobCount > 100000) {
+            qWarning() << "QuickJS: microtask queue exceeded 100k jobs, breaking";
+            break;
+        }
+    }
+    if (err < 0) {
+        ::JSValue e = JS_GetException(ctx);
+        JS_FreeValue(ctx, e);
+    }
 }
 
 void QuickJSContext::runMicrotasks()

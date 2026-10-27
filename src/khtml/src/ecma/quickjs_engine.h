@@ -53,6 +53,12 @@ private:
     size_t m_memLimit = 0;
 };
 
+// Drain QuickJS promise jobs queued on this context's runtime.  The DOM
+// bridge calls it after page <script> evaluation, timer callbacks and
+// DOM event handlers (HTML microtask checkpoints).
+void runMicrotasksForContext(::JSContext *ctx);
+
+
 } // namespace khtml
 
 #endif

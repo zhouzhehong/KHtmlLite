@@ -1,5 +1,6 @@
 #include "pageloader.h"
 #include "css_anim_polyfill.h"
+#include "css_unsupported.h"
 #include "perflog.h"
 #include <QRegularExpression>
 #include <QCryptographicHash>
@@ -88,6 +89,7 @@ static const char *kJsPolyfill =
 "}"
 "if(!document.head)document.head=document.getElementsByTagName('head')[0];"
 "if(!document.activeElement)document.activeElement=document.body;"
+"if(typeof window!=='undefined'&&window!==w){try{var _wn=['console','performance','requestAnimationFrame','cancelAnimationFrame','localStorage','sessionStorage','Map','Set','Symbol','fetch','atob','btoa','IntersectionObserver','MutationObserver','ResizeObserver','AbortController','URLSearchParams','getComputedStyle','matchMedia','crypto','structuredClone','queueMicrotask','globalThis'];for(var _wi=0;_wi<_wn.length;_wi++){var _nk=_wn[_wi];if(typeof w[_nk]!=='undefined'&&typeof window[_nk]==='undefined'){try{window[_nk]=w[_nk];}catch(_we){}}}}catch(_wce){}}"
 "}catch(e){}"
 "})();";
 
@@ -387,79 +389,9 @@ static QString extractKeyframesJs(const QString &css)
 }
 
 
-static QString simplifyUnsupportedCss(const QString &text)
-{
-    QString out = text;
+// Property removal now lives in css_unsupported.h so the CSS unit test
+// (css_trim_probe) exercises exactly the code PageLoader runs.
 
-    // display:grid is NOT rewritten to flex any more: the engine has no grid
-    // and the rewrite (a) collapsed card walls to one row (flex has no wrap)
-    // and (b) corrupted @supports conditions — "(@supports (display:grid))"
-    // became "(display:flex;flex-wrap:wrap)", so the engine could not answer
-    // the query correctly.  The declaration now simply stays unknown (the
-    // element keeps its block fallback), and @supports lets sites choose
-    // their own fallback.
-
-    // position:sticky is parsed and painted by the ENGINE now.
-
-    // transform is parsed and painted by the ENGINE now (parseTransformSpec).
-    // Properties KHTML has no pipeline for 鈥?remove the whole declaration.
-    // Only properties that are genuinely absent or known-crashy are listed;
-    // border-radius / box-shadow / opacity / box-sizing / text-shadow are
-    // supported by KHTML 5.116 and must be kept.
-
-    // CSS calc() is parsed and resolved by the ENGINE now (parseCalcSpec).
-    // Vendor-prefixed property names reach the engine now: getPropertyID()
-    // strips -webkit-/-moz-/-ms-/-o-/-khtml- and retries, so e.g.
-    // -webkit-border-radius applies and -webkit-transform is ignored
-    // gracefully.  They are deliberately NOT stripped here any more.
-
-    const QStringList props = {
-        QStringLiteral("backdrop-filter"), QStringLiteral("filter"),
-        QStringLiteral("clip-path"),
-        QStringLiteral("mask"), QStringLiteral("mask-image"), QStringLiteral("will-change"),
-        QStringLiteral("contain"), QStringLiteral("scroll-behavior"),
-        QStringLiteral("backface-visibility"), QStringLiteral("perspective"),
-        QStringLiteral("transform-style"), QStringLiteral("object-fit"),
-        QStringLiteral("object-position"), QStringLiteral("overflow-anchor"),
-        QStringLiteral("overscroll-behavior"), QStringLiteral("touch-action"),
-        QStringLiteral("scroll-snap-type"), QStringLiteral("scroll-snap-align"),
-        QStringLiteral("scroll-margin"), QStringLiteral("scroll-padding"),
-        QStringLiteral("inline-size"), QStringLiteral("min-inline-size"),
-        QStringLiteral("max-inline-size"), QStringLiteral("block-size"),
-        QStringLiteral("min-block-size"), QStringLiteral("max-block-size"),
-        QStringLiteral("margin-inline"), QStringLiteral("padding-inline"),
-        QStringLiteral("border-inline"), QStringLiteral("inset"),
-        QStringLiteral("inset-block"), QStringLiteral("inset-inline"),
-        QStringLiteral("text-decoration-thickness"), QStringLiteral("text-underline-offset"),
-        QStringLiteral("text-underline-position"), QStringLiteral("font-variant-numeric"),
-        QStringLiteral("font-feature-settings"), QStringLiteral("font-optical-sizing"),
-        QStringLiteral("font-variation-settings"),
-        QStringLiteral("text-wrap"), QStringLiteral("white-space-collapse"),
-        QStringLiteral("box-decoration-break"),
-        QStringLiteral("break-inside"), QStringLiteral("break-before"),
-        QStringLiteral("break-after"), QStringLiteral("column-count"),
-        QStringLiteral("column-gap"), QStringLiteral("column-rule"),
-        QStringLiteral("column-width"), QStringLiteral("columns"),
-        QStringLiteral("mix-blend-mode"), QStringLiteral("isolation"),
-        QStringLiteral("shape-outside"), QStringLiteral("shape-margin"),
-    };
-    for (const QString &p : props) {
-        const QRegularExpression re(
-            QStringLiteral("(?:^|[;{}\\s])") + QRegularExpression::escape(p) +
-            QStringLiteral("\\s*:[^;}]+[;}]?"),
-            QRegularExpression::CaseInsensitiveOption);
-        out.replace(re, QStringLiteral(";"));
-    }
-
-    // @keyframes are parsed and run by the ENGINE now (css_animations.h).
-
-    // @supports blocks are now EVALUATED by the engine
-    // (CSSStyleSheetImpl::parseString expands true conditions and drops false
-    // ones), so they must not be deleted here: deleting them also threw away
-    // rules the engine can render.
-
-    return out;
-}
 
 QString PageLoader::restoreNavigationTargets(const QString &html) const
 {

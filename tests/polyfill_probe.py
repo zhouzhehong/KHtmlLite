@@ -127,6 +127,11 @@ def engine_inline_report(js):
             '<script>'
             'var r=[];'
             'r.push("console="+typeof console);'
+            'r.push("wconsole="+typeof window.console);'
+            'r.push("wls="+typeof window.localStorage);'
+            'r.push("wfetch="+typeof window.fetch);'
+            'r.push("wmatch="+typeof window.matchMedia);'
+            'r.push("wiob="+typeof window.IntersectionObserver);'
             'r.push("fetch="+typeof fetch);'
             'r.push("ls="+typeof localStorage);'
             'try{localStorage.clear();localStorage.setItem("empty","");'
@@ -262,6 +267,11 @@ def main():
         ("matches('#m1') true", flag("mid")),
         ("matches('[data-x=\"1\"]') true", flag("mattr")),
         ("fetch returns a thenable", flag("thenable")),
+        ("window.console exposed", ef.get("wconsole") in ("object", "function")),
+        ("window.localStorage exposed", ef.get("wls") == "object"),
+        ("window.fetch exposed", ef.get("wfetch") == "function"),
+        ("window.matchMedia exposed", ef.get("wmatch") == "function"),
+        ("window.IntersectionObserver exposed", ef.get("wiob") in ("function", "object")),
     ]
     for name, good in checks:
         print(f"  [{'OK' if good else 'FAIL'}] {name}")

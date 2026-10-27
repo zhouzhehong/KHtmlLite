@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>promise-pending</title>
+</head>
+<body>
+<script>
+var __r = [];
+function __done(k) {
+  if (__r.indexOf(k) >= 0) return;
+  __r.push(k);
+  if (__r.length >= 5) {
+    document.title = "MICRO|" + __r.slice().sort().join("+");
+  }
+}
+// 1) promise queued by the page script itself (microtask after <script> eval)
+Promise.resolve().then(function () { __done("then"); });
+// 2) async/await continuation after <script> eval
+(async function () { await Promise.resolve(); __done("await"); })();
+// 3) promise queued inside a timer callback (microtask after timer task)
+setTimeout(function () {
+  Promise.resolve().then(function () { __done("timer-then"); });
+  __done("timer-sync");
+}, 0);
+// 4) async/await continuation started from a timer callback
+setTimeout(function () {
+  (async function () { await Promise.resolve(); __done("timer-await"); })();
+}, 0);
+// Fallback report so a missing microtask checkpoint is visible in the title.
+setTimeout(function () {
+  if (__r.length < 5) {
+    document.title = "MICRO-TIMEOUT|" + __r.join("+");
+  }
+}, 1500);
+</script>
+</body>
+</html>

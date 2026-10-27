@@ -133,6 +133,11 @@ if(BUILD_PROBE_TOOLS)
 
     # Cold-start micro-benchmark for the KConfig/KIconLoader hot spots found
     # by KHTMLPart ctor instrumentation (see git history: khtmlrc read ~0.8 s).
+    # Unit test for the unsupported-CSS declaration remover
+    # (brace balance + values containing ';' inside ()/quotes).
+    add_executable(probe_css_trim css_trim_probe.cpp)
+    target_link_libraries(probe_css_trim PRIVATE Qt5::Core)
+
     add_executable(probe_kconfig probe_kconfig.cpp)
     target_link_libraries(probe_kconfig PRIVATE Qt5::Core Qt5::Gui
         KF5::ConfigCore KF5::ConfigGui KF5::IconThemes)

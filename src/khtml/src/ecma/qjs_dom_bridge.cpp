@@ -78,6 +78,11 @@ using namespace DOM;
 namespace khtml
 {
 
+// Implemented in quickjs_engine.cpp: drains promise jobs on this
+// context's runtime (microtask checkpoint after eval/timer/event).
+void runMicrotasksForContext(::JSContext *ctx);
+
+
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
@@ -1034,6 +1039,7 @@ static ::JSValue jsWindowTimer(::JSContext *ctx, ::JSValueConst, int argc,
             r = JS_Call(ctx2, rec->fn, JS_UNDEFINED,
                         rec->args.size(), rec->args.data());
         }
+        runMicrotasksForContext(ctx2);
         if (JS_IsException(r)) {
             ::JSValue e = JS_GetException(ctx2);
             if (qjsTraceEnabled()) {
@@ -1238,6 +1244,7 @@ struct QJsDomBridge::Impl
                 ::JSValue argv[1] = { eventObj };
                 ::JSValue thisVal = JS_IsObject(targetObj) ? targetObj : JS_UNDEFINED;
                 ::JSValue r = JS_Call(ctx, fnVal, thisVal, 1, argv);
+                runMicrotasksForContext(ctx);
                 if (!JS_IsException(r)) {
                     handled = true;
                 } else {
@@ -1264,6 +1271,7 @@ struct QJsDomBridge::Impl
                     ::JSValue argv[1] = { eventObj };
                     ::JSValue thisVal = JS_IsObject(targetObj) ? targetObj : JS_UNDEFINED;
                     ::JSValue r = JS_Call(ctx, e.func, thisVal, 1, argv);
+                    runMicrotasksForContext(ctx);
                     if (!JS_IsException(r)) {
                         handled = true;
                     }
@@ -1582,6 +1590,7 @@ struct QJsDomBridge::Impl
         ::JSValue r = JS_Eval(ctx, utf8.constData(), utf8.size(),
                               fname.isEmpty() ? "<page>" : fname.constData(),
                               JS_EVAL_TYPE_GLOBAL);
+        runMicrotasksForContext(ctx);
         if (JS_IsException(r)) {
             ::JSValue exc = JS_GetException(ctx);
             qjslog("EVAL_EXCEPTION");

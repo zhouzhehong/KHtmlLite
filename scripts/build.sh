@@ -63,7 +63,7 @@ cmake "${ROOT_DIR}/src/host" \
     -DKHTML_SOURCE_DIR="${ROOT_DIR}/src/khtml/src" \
     -DKHTML_BUILD_DIR="${BUILD_DIR}/khtml" \
     -DKHTML_LIB="${BUILD_DIR}/khtml/lib/libKF5KHtml.dll.a"
-ninja khtml_browser khtml_renderer
+ninja khtml_browser khtml_renderer probe_css_trim
 echo "  Browser + renderer built."
 
 # --- Step 3b: Deploy Qt imageformat plugins next to the host EXEs -----------
