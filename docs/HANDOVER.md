@@ -1110,6 +1110,33 @@ INCONCLUSIVE、或退出码 0 但输出里出现判定形 FAIL 令牌，都算�
 - HTTP 初始文档注入实测：页面脚本同步报告 `SHIM|console=object|ls=object|fetch=function`（初始交付即带 shim；随后 refreshed 重载会重置标题，属于既有 loader 刷新时序，不是 polyfill 问题）。
 - 便携包已同步（exe/DLL SHA256 相等），`portable_smoke` PASS。
 
+## 5af. CSS 属性删除配平、Promise 微任务、window 别名（2026-10-27）
+
+### 任务 A：simplifyUnsupportedCss() 吃掉花括号
+- 删除正则改为分组回填：`((?:^|[;{}\s]))PROP\s*:[^;}]*(?:;|(?=\}))` → `\1`（Qt `QStringLiteral("\\1")`），只删声明本身，保留 `{`/`}`。
+- 实现移到 `src/host/css_unsupported.h`（PageLoader 与单测共用同一份代码）。
+- 值内 `;` 残留：新增跳过 `()`/`[]`/引号的扫描器，把值内 `;`/`}` 暂存为私有区哨兵，删除后再还原；`mask-image:url(data:image/png;base64,...)` 现在整段删除不截断。
+- 单测 `src/host/css_trim_probe.cpp` + `tests/css_trim_probe.py`（已加入回归）：覆盖 4 个指定用例（filter 在前/在后、object-fit、@media 内 inset/will-change，`min-width` 不受影响），以及 data URI、引号内分号/花括号；逐例断言属性已删、规则保留、花括号配平。结果 **CSS TRIM PROBE PASS**（7/7）。
+
+### 任务 B：Promise 微任务从未执行
+- `quickjs_engine` 增加 `khtml::runMicrotasksForContext(::JSContext *)`（JS_ExecutePendingJob 循环，100k 上限）。
+- 调用点：页面 `<script>` JS_Eval 后（qjs_dom_bridge evaluate）、定时器回调 JS_Eval/JS_Call 后、inline DOM 事件 JS_Call 后、addEventListener 回调 JS_Call 后；`QuickJSContext::evaluate` 也补上。
+- 新探针 `tests/promise_microtask_probe.py`（已加入回归）：页面脚本内 `Promise.resolve().then`、`async/await`、定时器内 then 与 async/await 共 5 个 continuation，最终报告 `MICRO|await+then+timer-await+timer-sync+timer-then`，**PROMISE MICROTASK PROBE PASS**。
+
+### 任务 C：window !== globalThis
+- 在 polyfill 末尾把 shim 从 globalThis 镜像到 `window`：console/performance/rAF/localStorage/sessionStorage/Map/Set/Symbol/fetch/atob/btoa/IntersectionObserver/MutationObserver/ResizeObserver/AbortController/URLSearchParams/getComputedStyle/matchMedia/crypto/structuredClone/queueMicrotask/globalThis。
+- `polyfill_probe` 引擎内联报告新增并通过：`window.console=object`、`window.localStorage=object`、`window.fetch=function`、`window.matchMedia=function`、`window.IntersectionObserver=function`。
+
+### 验证（本轮）
+- `css_trim_probe.py` PASS、`promise_microtask_probe.py` PASS、`polyfill_probe.py` PASS（含新增 window.* 检查）。
+- `engine_semantics_probe` 48/48 PASS、`tile_protocol_test` PASS、`portable_smoke` PASS（便携包已同步）。
+
+### 全量回归（2026-10-27 20:14→21:03）
+- **`failed: none`**：18 项中 17 PASS + `bing_ghost_check` INCONCLUSIVE（本机 cn.bing.com 无 #0078D4 元素）。
+- 新增项耗时：`css_trim_probe 0.6s PASS`、`polyfill_probe 3.5s PASS`、`promise_microtask_probe 2.2s PASS`。
+- 主要项：`engine_semantics 186.7s PASS`、`tombstone 624s PASS`、`tile_protocol 148s PASS`、`resize 602s`、`scroll 604.5s`、`bg 603.2s`、`dwm_canvas 20.8s` 全 PASS。
+- 便携包重新同步（exe/DLL SHA256 相等），`portable_smoke` PASS。
+
 ## 6. 正在/马上要做的
 A. ~~拆那 1.1s~~ **已完成**（字体枚举缓存 + 图标懒加载，构造 1.1s→~0.35s，TTFF 2.0→1.1s）。
    下一步同部位残账：渲染进程镜像加载+socket 连接 ~500ms（每次新标签都付），
