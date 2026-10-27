@@ -1137,6 +1137,12 @@ INCONCLUSIVE、或退出码 0 但输出里出现判定形 FAIL 令牌，都算�
 - 主要项：`engine_semantics 186.7s PASS`、`tombstone 624s PASS`、`tile_protocol 148s PASS`、`resize 602s`、`scroll 604.5s`、`bg 603.2s`、`dwm_canvas 20.8s` 全 PASS。
 - 便携包重新同步（exe/DLL SHA256 相等），`portable_smoke` PASS。
 
+## 5ag. 交付打包约定（用户 2026-10-27 确认）
+
+- **每次任务完成并验证无错（回归 `failed: none`、提交已推送）后，自动打包 `C:\Users\zhouzhehong\Desktop\KHtmlLite.zip`**，并删除旧包（同名覆盖）。
+- 命名只用「项目名.zip」，不再加 `-source-snapshot-<hash>` 等额外后缀。
+- 内容为 `git archive HEAD` 的源码快照（跟踪文件，不含 `.git`、`build/` 产物）；打包后做 ZIP 完整性校验并与 `git ls-files` 核对缺失文件数（必须为 0）。
+
 ## 6. 正在/马上要做的
 A. ~~拆那 1.1s~~ **已完成**（字体枚举缓存 + 图标懒加载，构造 1.1s→~0.35s，TTFF 2.0→1.1s）。
    下一步同部位残账：渲染进程镜像加载+socket 连接 ~500ms（每次新标签都付），
