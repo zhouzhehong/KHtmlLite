@@ -12,6 +12,7 @@
 #include <QCloseEvent>
 #include <QElapsedTimer>
 #include <QLineEdit>
+#include <QClipboard>
 #include <QPushButton>
 #include <QToolButton>
 #include <QTabWidget>
@@ -31,6 +32,7 @@
 #include <QDir>
 #include <QKeySequence>
 #include "pageloader.h"
+#include "resourcemanager.h"
 #include <QUrl>
 #include <QLabel>
 #include <QTimer>
@@ -878,6 +880,7 @@ Q_SIGNALS:
     void urlChanged(const QUrl &url);
     void crashed();
     void ready();          // window embedded, ready to show
+    void firstFrame();     // first composited page frame (recovery hand-off)
     void openNewTab(const QUrl &url);
     void stateChanged(int scrollX, int scrollY, int zoom);
     // The page surface was resized: the renderer viewport has to follow.
@@ -893,6 +896,14 @@ private slots:
     void onFinished(int exitCode, QProcess::ExitStatus status)
     {
         if (m_embedded || exitCode != 0) {
+            // Diagnostic only: distinguish crash from user/navigation teardown.
+            // terminate() disconnects this finished() connection, so normal tab
+            // close / suspend / browser exit never reaches here.
+            fprintf(stderr, "[rend-crash] pid=%d embedded=%d exit=%d status=%s url=%s\n",
+                    (int)(m_process ? m_process->processId() : 0), (int)m_embedded,
+                    exitCode, status == QProcess::CrashExit ? "CrashExit" : "NormalExit",
+                    m_current.toString().toUtf8().constData());
+            fflush(stderr);
             m_crashed = true;
             emit crashed();
         }
@@ -1080,11 +1091,6 @@ private:
     void readTiles(int w, int h)
     {
         if (!m_container) return;
-        if (!m_gotFirstFrame) {
-            STARTUP_MARK("tiles message dispatched");
-            m_gotFirstFrame = true;
-            STARTUP_MARK("first frame composited");
-        }
         if (!m_shm) {
             m_shmKey = QStringLiteral("khtml_frame_%1").arg(m_socketName);
             m_shm = new QSharedMemory(m_shmKey, this);
@@ -1187,6 +1193,12 @@ private:
         m_attachedShmW = w;
         m_attachedShmH = h;
         m_container->setFrame(m_canvas, dimsChanged ? QRect() : dirtyUnion);
+        if (!m_gotFirstFrame) {
+            m_gotFirstFrame = true;
+            STARTUP_MARK("tiles message dispatched");
+            STARTUP_MARK("first frame composited");
+            emit firstFrame();
+        }
     }
 
 public:
@@ -1238,7 +1250,9 @@ QString RenderTab::s_warmSocket;
 struct TabPage {
     RenderTab *render = nullptr;
     QWidget *crashWidget = nullptr;  // shown when renderer crashed
+    QWidget *recoveryWidget = nullptr;  // "恢复中" placeholder during automatic/manual restart
     QWidget *tombstoneWidget = nullptr;  // shown while suspended (owns snapshot view)
+    bool cacheCleanupRetried = false;  // second crash already cleared regenerable HTTP/page cache
     QUrl current;
     QList<QUrl> back;
     QList<QUrl> fwd;
@@ -1360,8 +1374,8 @@ protected:
     QSize tabSizeHint(int index) const override
     {
         QSize s = QTabBar::tabSizeHint(index);
-        s.setHeight(22);
-        s.setWidth(qBound(112, s.width() + 10, 220));
+        s.setHeight(26);
+        s.setWidth(qBound(144, s.width() + 10, 220));
         return s;
     }
 
@@ -1373,20 +1387,24 @@ protected:
             const bool sel = (i == currentIndex());
             const bool hov = (i == m_hover);
             QRectF r = QRectF(tabRect(i)).adjusted(2.0, 2.0, -2.0, -2.0);
-            const QColor fill = sel ? QColor(0xE8, 0xE8, 0xE8)
-                                    : (hov ? QColor(0xF0, 0xF0, 0xF0) : QColor(0xF5, 0xF5, 0xF5));
-            p.setPen(QPen(sel ? QColor(0, 0, 0, 42) : QColor(0, 0, 0, 16), 1.0));
+            // Classic Safari: the selected tab is white and visually joins the
+            // toolbar; inactive tabs are flat neutral, not pill-shaped.
+            const QColor fill = sel ? QColor(0xFF, 0xFF, 0xFF)
+                                    : (hov ? QColor(0xE9, 0xE9, 0xE9) : QColor(0xED, 0xED, 0xED));
+            p.setPen(QPen(sel ? QColor(0, 0, 0, 48) : QColor(0, 0, 0, 22), 1.0));
             p.setBrush(fill);
-            p.drawRoundedRect(r.adjusted(0.5, 0.5, -0.5, -0.5), 8, 8);
+            p.drawRoundedRect(r.adjusted(0.5, 0.5, -0.5, sel ? 1.0 : -0.5), 4, 4);
 
             QFont f = font();
             f.setPixelSize(11);
             p.setFont(f);
-            p.setPen(sel ? QColor(46, 52, 54) : QColor(141, 144, 145));
+            p.setPen(sel ? QColor(45, 45, 45) : QColor(105, 105, 105));
             const int closeW = (sel || hov) ? 18 : 7;
             QRectF textR = r.adjusted(9, 0, -closeW, 0);
             p.drawText(textR, Qt::AlignVCenter | Qt::AlignLeft,
-                       fontMetrics().elidedText(tabText(i), Qt::ElideRight,
+                       fontMetrics().elidedText(tabText(i).startsWith(QLatin1Char('&'))
+                                                 ? tabText(i).mid(1) : tabText(i),
+                                                 Qt::ElideRight,
                                                 int(textR.width())));
 
             if (sel || hov) {
@@ -1568,7 +1586,7 @@ public:
         connect(m_resizeTimer, &QTimer::timeout, this, &KHtmlLiteWindow::applyPendingResize);
         addTab(start.isEmpty() ? QUrl(QStringLiteral("https://cn.bing.com")) : start);
         STARTUP_MARK("first tab added");
-        QTimer::singleShot(0, this, [this] { applyRoundedCorners(); });
+        QTimer::singleShot(0, this, [this] { applySquareWindowCorners(); });
         syncChrome();
     }
 
@@ -1580,8 +1598,9 @@ public:
         PageLoader::clearCache();
     }
 
-    // Windows 11: give the frameless Safari window the system rounded corners.
-    void applyRoundedCorners()
+    // Windows 11: the classic Safari/Windows shell must have SQUARE outer corners.
+    // DWMWCP_DONOTROUND(1) overrides the OS default rounded frameless window.
+    void applySquareWindowCorners()
     {
         HMODULE dwm = LoadLibraryW(L"dwmapi.dll");
         if (!dwm)
@@ -1590,14 +1609,14 @@ public:
         SetWindowAttr fn = reinterpret_cast<SetWindowAttr>(
             GetProcAddress(dwm, "DwmSetWindowAttribute"));
         if (fn) {
-            const int round = 2;   // DWMWCP_ROUND
+            const int square = 1;   // DWMWCP_DONOTROUND
             fn((HWND)winId(), 33   // DWMWA_WINDOW_CORNER_PREFERENCE
-               , &round, sizeof(round));
+               , &square, sizeof(square));
         }
     }
 
     enum ChromeGlyph { GlyphBack, GlyphForward, GlyphReload, GlyphShare,
-                       GlyphSidebar, GlyphPlus };
+                       GlyphSidebar, GlyphPlus, GlyphSearch };
 
     static QIcon chromeGlyph(ChromeGlyph g, const QColor &col = QColor(70, 74, 76))
     {
@@ -1634,6 +1653,10 @@ public:
         case GlyphPlus:
             p.drawLine(QPointF(4.5, 9.0), QPointF(13.5, 9.0));
             p.drawLine(QPointF(9.0, 4.5), QPointF(9.0, 13.5));
+            break;
+        case GlyphSearch:
+            p.drawEllipse(QPointF(8.0, 8.0), 3.6, 3.6);
+            p.drawLine(QPointF(10.7, 10.7), QPointF(13.5, 13.5));
             break;
         }
         return QIcon(pm);
@@ -1679,26 +1702,36 @@ public:
 
     static const QString &safariStyleSheet()
     {
-        // Values cross-checked from WhiteSur-gtk-theme's Firefox/Monterey CSS
-        // (light): toolbar #ffffff, inactive tab #f5f5f5, hover #f0f0f0,
-        // selected #e8e8e8, urlbar #e8e8e8 / border #b6b6b6 / text #020202,
-        // focus border #5683da, button hover rgba(0,0,0,0.08).
+        // Classic Safari-inspired shell: square outer edges, light neutral
+        // chrome, one restrained white address field, monochrome line icons.
+        // No Liquid Glass / Safari 15 translucency and no macOS traffic lights.
         static const QString qss = QStringLiteral(
-            "QWidget#central { background: #ffffff; }"
-            "QWidget#tabStrip { background: #f5f5f5; border-bottom: 1px solid #dcdcdc; }"
-            "QWidget#toolbar { background: #ffffff; border-bottom: 1px solid #e2e2e2; }"
-            "QStackedWidget#pageStack { background: #ffffff; }"
+            "QWidget#central { background: #f3f3f3; }"
+            "QWidget#tabStrip { background: #f2f2f2; border-bottom: 1px solid #d6d6d6; }"
+            "QWidget#toolbar { background: #fafafa; border-bottom: 1px solid #d6d6d6; }"
+            "QStackedWidget#pageStack { background: #ffffff; border: none; }"
             "QPushButton#toolBtn { border: none; background: transparent;"
-            "  border-radius: 6px; padding: 0; }"
-            "QPushButton#toolBtn:hover { background: rgba(0, 0, 0, 0.08); }"
-            "QPushButton#toolBtn:pressed { background: rgba(0, 0, 0, 0.14); }"
+            "  border-radius: 4px; padding: 0; }"
+            "QPushButton#toolBtn:hover { background: #e5e5e5; }"
+            "QPushButton#toolBtn:pressed { background: #dcdcdc; }"
+            "QPushButton#toolBtn:disabled { background: transparent; }"
             "QToolButton#glyphBtn { border: none; background: transparent;"
-            "  border-radius: 6px; padding: 0; }"
-            "QToolButton#glyphBtn:hover { background: rgba(0, 0, 0, 0.08); }"
-            "QLineEdit#address { background: #e8e8e8; border: 1px solid #b6b6b6;"
-            "  border-radius: 8px; padding: 2px 10px; color: #020202;"
-            "  font-size: 12px; margin: 0 6px; selection-background-color: #b3d7ff; }"
-            "QLineEdit#address:focus { border: 1px solid #5683da; background: #ffffff; }");
+            "  border-radius: 4px; padding: 0; }"
+            "QToolButton#glyphBtn:hover { background: #e5e5e5; }"
+            "QToolButton#glyphBtn:pressed { background: #dcdcdc; }"
+            "QToolButton#winBtn { border: none; background: transparent;"
+            "  border-radius: 0; padding: 0; }"
+            "QToolButton#winBtn:hover { background: #e2e2e2; }"
+            "QToolButton#winBtn:pressed { background: #d4d4d4; }"
+            "QToolButton#winClose:hover { background: #c42b1c; }"
+            "QLineEdit#address { background: #ffffff; border: 1px solid #c9c9c9;"
+            "  border-radius: 5px; padding: 1px 9px; color: #202020;"
+            "  font-size: 12px; margin: 0 6px; selection-background-color: #b9d7f7; }"
+            "QLineEdit#address:focus { border: 1px solid #4a90e2; background: #ffffff; }"
+            "QPushButton#crashRetry { background: #ffffff; border: 1px solid #c5c5c5;"
+            "  border-radius: 4px; padding: 5px 18px; color: #333; }"
+            "QPushButton#crashRetry:hover { background: #f2f2f2; }"
+            "QPushButton#crashRetry:pressed { background: #e8e8e8; }");
         return qss;
     }
 
@@ -1718,22 +1751,11 @@ public:
 
         DragStrip *strip = new DragStrip(central);
         strip->setObjectName(QStringLiteral("tabStrip"));
-        strip->setFixedHeight(26);
+        strip->setFixedHeight(30);
         m_tabStrip = strip;
         QHBoxLayout *ts = new QHBoxLayout(strip);
         ts->setContentsMargins(8, 2, 8, 2);
         ts->setSpacing(6);
-        m_lightClose = mkLight(strip, QColor(0xFF, 0x5F, 0x57));
-        m_lightMin = mkLight(strip, QColor(0xFE, 0xBC, 0x2E));
-        m_lightMax = mkLight(strip, QColor(0x28, 0xC8, 0x40));
-        ts->addWidget(m_lightClose);
-        ts->addWidget(m_lightMin);
-        ts->addWidget(m_lightMax);
-        ts->addSpacing(7);
-
-        m_sidebarBtn = mkGlyphButton(strip, GlyphSidebar);
-        m_sidebarBtn->setToolTip(QStringLiteral("侧边栏"));
-        ts->addWidget(m_sidebarBtn);
 
         SafariTabBar *bar = new SafariTabBar(strip);
         bar->setObjectName(QStringLiteral("safariTabs"));
@@ -1744,13 +1766,38 @@ public:
         m_newTabBtn = mkGlyphButton(strip, GlyphPlus);
         m_newTabBtn->setToolTip(QStringLiteral("新标签页"));
         ts->addWidget(m_newTabBtn);
+
+        // Windows-native-style caption controls at the top-right (not macOS
+        // red/yellow/green traffic lights).  They occupy only the far-right
+        // reserve; tabs/blank caption area/new-tab keep their own hit regions.
+        QWidget *winCtl = new QWidget(strip);
+        QHBoxLayout *wc = new QHBoxLayout(winCtl);
+        wc->setContentsMargins(0, 0, 0, 0);
+        wc->setSpacing(0);
+        auto mkCaption = [&](QStyle::StandardPixmap sp, const char *name,
+                             const QString &tip) {
+            QToolButton *b = new QToolButton(winCtl);
+            b->setObjectName(QString::fromLatin1(name));
+            b->setIcon(style()->standardIcon(sp));
+            b->setIconSize(QSize(10, 10));
+            b->setFixedSize(46, 30);
+            b->setAutoRaise(true);
+            b->setCursor(Qt::ArrowCursor);
+            b->setToolTip(tip);
+            wc->addWidget(b);
+            return b;
+        };
+        m_winMin = mkCaption(QStyle::SP_TitleBarMinButton, "winBtn", QStringLiteral("最小化"));
+        m_winMax = mkCaption(QStyle::SP_TitleBarMaxButton, "winBtn", QStringLiteral("最大化"));
+        m_winClose = mkCaption(QStyle::SP_TitleBarCloseButton, "winClose", QStringLiteral("关闭"));
+        ts->addWidget(winCtl);
         root->addWidget(strip);
 
         DragStrip *nav = new DragStrip(central);
         nav->setObjectName(QStringLiteral("toolbar"));
-        nav->setFixedHeight(32);
+        nav->setFixedHeight(28);
         QHBoxLayout *tb = new QHBoxLayout(nav);
-        tb->setContentsMargins(8, 4, 8, 4);
+        tb->setContentsMargins(8, 2, 8, 2);
         tb->setSpacing(6);
         m_back = mkToolButton(nav, GlyphBack);
         m_fwd = mkToolButton(nav, GlyphForward);
@@ -1761,6 +1808,8 @@ public:
         m_addr->setPlaceholderText(QStringLiteral("搜索或输入网站名称"));
         m_addr->setClearButtonEnabled(false);
         m_addr->setMinimumHeight(24);
+        m_addr->addAction(chromeGlyph(GlyphSearch, QColor(120, 122, 124)),
+                          QLineEdit::LeadingPosition);
         tb->addWidget(m_addr, 1);
         m_reload = mkToolButton(nav, GlyphReload);
         tb->addWidget(m_reload);
@@ -1770,7 +1819,7 @@ public:
         m_shareBtn->setIconSize(QSize(16, 16));
         m_shareBtn->setFixedSize(24, 24);
         m_shareBtn->setFlat(true);
-        m_shareBtn->setToolTip(QStringLiteral("共享"));
+        m_shareBtn->setToolTip(QStringLiteral("复制链接"));
         tb->addWidget(m_shareBtn);
         root->addWidget(nav);
 
@@ -1781,13 +1830,14 @@ public:
         setCentralWidget(central);
         setStyleSheet(safariStyleSheet());
 
-        connect(m_lightClose, &QToolButton::clicked, this, &QWidget::close);
-        connect(m_lightMin, &QToolButton::clicked, this, &QWidget::showMinimized);
-        connect(m_lightMax, &QToolButton::clicked, this, [this]() {
+        connect(m_winMin, &QToolButton::clicked, this, &QWidget::showMinimized);
+        connect(m_winMax, &QToolButton::clicked, this, [this]() {
             if (isMaximized()) showNormal(); else showMaximized();
         });
-        connect(m_sidebarBtn, &QToolButton::clicked, this, []() {});
-        connect(m_shareBtn, &QPushButton::clicked, this, []() {});
+        connect(m_winClose, &QToolButton::clicked, this, &QWidget::close);
+        connect(m_shareBtn, &QPushButton::clicked, this, [this] {
+            QApplication::clipboard()->setText(m_addr->text());
+        });
         connect(m_newTabBtn, &QToolButton::clicked, this,
                 [this] { addTab(QUrl(QStringLiteral("https://cn.bing.com"))); });
         connect(m_back, &QPushButton::clicked, this, &KHtmlLiteWindow::goBack);
@@ -1915,6 +1965,90 @@ public:
         return w;
     }
 
+    QWidget *makeRecoveryWidget() {
+        // A crashed tab first shows this neutral recovery status, not the final
+        // crash page.  The tab is replaced with the live renderer container as
+        // soon as the new renderer's socket is ready (RenderTab::ready()).
+        QWidget *w = new QWidget;
+        QVBoxLayout *lay = new QVBoxLayout(w);
+        lay->setAlignment(Qt::AlignCenter);
+        QLabel *msg = new QLabel(QStringLiteral("正在恢复页面…"), w);
+        msg->setAlignment(Qt::AlignCenter);
+        msg->setStyleSheet(QStringLiteral("color:#444;font-size:15px;font-weight:600;"));
+        QLabel *sub = new QLabel(QStringLiteral("正在重新创建渲染进程并重载当前页面"), w);
+        sub->setAlignment(Qt::AlignCenter);
+        sub->setStyleSheet(QStringLiteral("color:#888;font-size:12px;"));
+        lay->addWidget(msg);
+        lay->addWidget(sub);
+        return w;
+    }
+
+    // Replace the visible tab widget with the fresh renderer container once
+    // the new renderer's IPC is ready.  No fixed delay is used: readiness is
+    // the real signal.
+    void finishRecovery(TabPage *pg) {
+        if (!pg || !m_pages.contains(pg) || !pg->recoveryWidget || !pg->render)
+            return;
+        const int idx = m_pages.indexOf(pg);
+        if (idx < 0 || !m_stack || idx >= m_stack->count()
+                || m_stack->widget(idx) != pg->recoveryWidget)
+            return;
+        QWidget *container = pg->render->container();
+        if (!container) return;
+        const bool wasCurrent = (currentPage() == pg);
+        QWidget *old = pg->recoveryWidget;
+        pg->recoveryWidget = nullptr;
+        blockPageTabSignals(true);
+        removePageTab(idx);
+        insertPageTab(idx, container,
+                      pg->savedTitle.isEmpty() ? pg->current.host() : pg->savedTitle);
+        blockPageTabSignals(false);
+        if (old) old->deleteLater();
+        if (wasCurrent) {
+            selectPageTab(idx);
+            m_addr->setText(pg->current.toString());
+            updateNavButtons();
+        } else {
+            syncChrome();
+        }
+    }
+
+    // Start a recovery attempt.  oldWidget is the currently displayed tab
+    // widget (renderer container / crash page / previous recovery placeholder);
+    // the caller must already have detached the old renderer.  clearCache only
+    // removes PageLoader's regenerable HTTP/page mirrors — never cookies,
+    // passwords, history or persistent site storage.
+    void startRecoveryRetry(TabPage *pg, QWidget *oldWidget, const QString &title,
+                            bool clearCache, bool jsDisabled) {
+        const int idx = m_pages.indexOf(pg);
+        if (!pg || idx < 0) return;
+        const bool wasCurrent = (currentPage() == pg);
+        if (!title.isEmpty()) pg->savedTitle = title;
+        if (clearCache && !pg->cacheCleanupRetried) {
+            fprintf(stderr, "[recovery] clear regenerable page/HTTP cache for tab %d\n", idx);
+            PageLoader::clearCache();
+            pg->cacheCleanupRetried = true;
+        }
+        pg->jsDisabled = jsDisabled;
+        fprintf(stderr, "[recovery] restart tab=%d jsDisabled=%d clearCache=%d\n",
+                idx, (int)jsDisabled, (int)clearCache);
+        pg->recoveryWidget = makeRecoveryWidget();
+        blockPageTabSignals(true);
+        removePageTab(idx);
+        insertPageTab(idx, pg->recoveryWidget, QStringLiteral("正在恢复…"));
+        blockPageTabSignals(false);
+        // Insert the placeholder first, then start the renderer so a ready()
+        // arriving immediately can always find the displayed recovery widget.
+        startRenderer(pg, pg->current);
+        if (oldWidget) oldWidget->deleteLater();
+        if (wasCurrent) {
+            selectPageTab(idx);
+            setWindowTitle(QStringLiteral("正在恢复… - KHtmlLite"));
+        } else {
+            syncChrome();
+        }
+    }
+
     void addTab(const QUrl &url) {
         TabPage *pg = new TabPage;
         pg->current = url;
@@ -1960,38 +2094,26 @@ public:
         // A new renderer is already starting: ignore duplicate clicks/stale
         // signals from the old crash widget.
         if (pg->render && pg->render->isRunning()) return;
-        const bool wasCurrent = (currentPage() == pg);
-        QWidget *oldWidget = pg->crashWidget;
-        pg->crashWidget = nullptr;
-        dropRenderer(pg);
         const QUrl url = pg->current;
         QString title = pg->savedTitle;
         if (title.isEmpty()) title = pageTabTitle(idx);
         if (title.isEmpty()) title = url.host();
-        // Crash count is kept >= 2 so the next crash shows the error page again
-        // instead of entering another automatic restart loop; JS is enabled for
-        // this manual attempt.
+        QWidget *oldWidget = pg->crashWidget;
+        pg->crashWidget = nullptr;
+        dropRenderer(pg);
+        // Manual retry is a new user action: JS is enabled again.  Crash count
+        // stays >=2 so a subsequent failure shows the error page again rather
+        // than entering another automatic restart loop.
         pg->jsDisabled = false;
         if (pg->crashCount < 2) pg->crashCount = 2;
-        startRenderer(pg, url);
-        QWidget *newWidget = pg->render && pg->render->container()
-                ? pg->render->container() : new QWidget;
-        blockPageTabSignals(true);
-        removePageTab(idx);
-        insertPageTab(idx, newWidget, title);
-        blockPageTabSignals(false);
-        if (oldWidget) oldWidget->deleteLater();
-        if (wasCurrent) {
-            selectPageTab(idx);
-            m_addr->setText(url.toString());
-            updateNavButtons();
-        } else {
-            syncChrome();
-        }
+        startRecoveryRetry(pg, oldWidget, title, false, false);
     }
 
     void startRenderer(TabPage *pg, const QUrl &url) {
         pg->render = new RenderTab(this);
+        connect(pg->render, &RenderTab::firstFrame, this, [this, pg]() {
+            finishRecovery(pg);
+        });
         connect(pg->render, &RenderTab::titleChanged, this, [this, pg](const QString &t) {
             fprintf(stderr, "[tomb] titleChanged title=%s cur=%d\n",
                     t.toUtf8().constData(), pg == currentPage());
@@ -2034,32 +2156,31 @@ public:
             // background, so preserve selection exactly as it was.
             const bool wasCurrent = (currentPage() == pg);
             const QString title = pg->render ? pg->render->title() : QString();
-            QWidget *oldWidget = pg->render ? pg->render->container() : nullptr;
+            QWidget *oldWidget = pg->recoveryWidget ? pg->recoveryWidget
+                                : (pg->render ? pg->render->container() : nullptr);
             dropRenderer(pg);
             pg->crashCount++;
-            // One automatic retry only (first crash), with JS disabled.  The
-            // retry is deliberately bounded: a second crash shows the page UI
-            // and only a manual click can try again.
+            // Attempt 1: automatic retry with JS disabled.
             if (pg->crashCount == 1 && !pg->jsDisabled) {
-                pg->jsDisabled = true;
-                if (!title.isEmpty()) pg->savedTitle = title;
-                startRenderer(pg, pg->current);
-                QWidget *newWidget = pg->render && pg->render->container()
-                        ? pg->render->container() : new QWidget;
-                blockPageTabSignals(true);
-                removePageTab(idx);
-                insertPageTab(idx, newWidget, pg->savedTitle);
-                blockPageTabSignals(false);
-                if (oldWidget) oldWidget->deleteLater();
-                if (wasCurrent) selectPageTab(idx);
-                else syncChrome();
+                startRecoveryRetry(pg, oldWidget, title, false, true);
                 return;
             }
-            if (pg->crashWidget) {
-                QWidget *oldCrash = pg->crashWidget;
-                pg->crashWidget = nullptr;
-                oldCrash->deleteLater();
+            // Attempt 2: clear only regenerable page/HTTP cache, then one more
+            // automatic retry with JS enabled.  This is bounded; cookies,
+            // passwords, history and persistent site data are never touched.
+            if (pg->crashCount == 2 && !pg->cacheCleanupRetried) {
+                startRecoveryRetry(pg, oldWidget, title, true, false);
+                return;
             }
+            // Repeated failure: final error page with a manual retry button.
+            QWidget *oldRecovery = pg->recoveryWidget;
+            pg->recoveryWidget = nullptr;
+            QWidget *oldCrash = pg->crashWidget;
+            pg->crashWidget = nullptr;
+            if (oldWidget && oldWidget != oldRecovery && oldWidget != oldCrash)
+                oldWidget->deleteLater();
+            if (oldRecovery) oldRecovery->deleteLater();
+            if (oldCrash) oldCrash->deleteLater();
             if (!title.isEmpty()) pg->savedTitle = title;
             pg->crashWidget = makeCrashWidget(pg);
             blockPageTabSignals(true);
@@ -2067,7 +2188,6 @@ public:
             insertPageTab(idx, pg->crashWidget,
                           title.isEmpty() ? QStringLiteral("已崩溃") : title);
             blockPageTabSignals(false);
-            if (oldWidget) oldWidget->deleteLater();
             setPageTabTitle(idx, QStringLiteral("已崩溃"));
             if (wasCurrent) {
                 selectPageTab(idx);
@@ -2096,6 +2216,7 @@ public:
         removePageTab(idx);
         if (pg->render) pg->render->terminate();
         if (pg->crashWidget) delete pg->crashWidget;
+        if (pg->recoveryWidget) delete pg->recoveryWidget;
         if (pg->tombstoneWidget) delete pg->tombstoneWidget;
         delete pg;
         if (m_pages.isEmpty()) addTab(QUrl(QStringLiteral("https://cn.bing.com")));
@@ -2147,6 +2268,35 @@ protected:
         // a local window move — the renderer process is never touched.
     }
 
+    void ensureNativeResizeFrame() {
+        // Frameless visual shell, but native WS_THICKFRAME is required for
+        // reliable Windows edge/corner resizing (WM_NCHITTEST alone is not
+        // enough; DefWindowProc needs the sizing style).  Qt can clear the
+        // style on maximize/normal transitions, so re-apply it after a state
+        // change as well as on first show.
+        HWND hwnd = reinterpret_cast<HWND>(winId());
+        LONG_PTR style = GetWindowLongPtrW(hwnd, GWL_STYLE);
+        if (!(style & WS_THICKFRAME)) {
+            SetWindowLongPtrW(hwnd, GWL_STYLE, style | WS_THICKFRAME);
+            SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
+                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER
+                         | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+        }
+    }
+
+    void showEvent(QShowEvent *event) override {
+        QMainWindow::showEvent(event);
+        ensureNativeResizeFrame();
+    }
+
+    void changeEvent(QEvent *event) override {
+        QMainWindow::changeEvent(event);
+        if (event->type() == QEvent::WindowStateChange
+                || event->type() == QEvent::Show) {
+            QTimer::singleShot(0, this, [this]() { ensureNativeResizeFrame(); });
+        }
+    }
+
     void closeEvent(QCloseEvent *event) override {
         // Non-blocking shutdown: kill every renderer and close immediately.
         // Renderer processes are terminated asynchronously; the OS reclaims
@@ -2174,6 +2324,18 @@ protected:
                 break;
             case WM_EXITSIZEMOVE:
                 endLiveResize();
+                break;
+            case WM_NCCALCSIZE:
+                // WS_THICKFRAME is needed for native edge resizing, but when
+                // maximized Windows otherwise reserves the invisible frame and
+                // reports a 1900x988 client instead of the full 1920x1008.
+                // Drop the non-client area for the maximized state only; the
+                // restored window keeps its normal client geometry.
+                if (msg->wParam == TRUE && IsZoomed(msg->hwnd)) {
+                    *result = 0;
+                    return true;
+                }
+                break;
             case WM_NCHITTEST: {
                 // Frameless Safari chrome: resize through the window borders.
                 const int border = 6;
@@ -2310,6 +2472,7 @@ protected:
         // JS heap, caches). Only URL + title + snapshot remain.
         if (pg->render) { pg->render->terminate(); pg->render = nullptr; }
         if (pg->crashWidget) { delete pg->crashWidget; pg->crashWidget = nullptr; }
+        if (pg->recoveryWidget) { delete pg->recoveryWidget; pg->recoveryWidget = nullptr; }
         pg->suspended = true;
         pg->lastActive = QDateTime::currentMSecsSinceEpoch();
         const int idx = m_pages.indexOf(pg);
@@ -2345,6 +2508,7 @@ protected:
         pg->suspended = false;
         if (pg->render) { delete pg->render; pg->render = nullptr; }
         if (pg->crashWidget) { delete pg->crashWidget; pg->crashWidget = nullptr; }
+        if (pg->recoveryWidget) { delete pg->recoveryWidget; pg->recoveryWidget = nullptr; }
         startRenderer(pg, pg->current);
         // Restore tombstone scroll + zoom. Sent when the renderer socket
         // connects; applied by the renderer after the document completes.
@@ -2436,73 +2600,137 @@ protected:
     // (frame-clock throttling already enforces "background CPU ~ 0"; a
     // 50%-of-a-core rule would be dead code — tests/tombstone_probe.py).
     void checkMemoryBudget() {
-        MEMORYSTATUSEX mem = {};
-        mem.dwLength = sizeof(mem);
-        GlobalMemoryStatusEx(&mem);
-        const DWORD loadPct = mem.dwMemoryLoad;  // 0-100 physical in use
-
         const qint64 now = QDateTime::currentMSecsSinceEpoch();
         const qint64 wallMs = m_lastMemTickMs > 0 ? qMax<qint64>(1, now - m_lastMemTickMs)
                                                   : 10000;
         m_lastMemTickMs = now;
 
-        // System CPU load over the last tick (all cores, 0-100).
+        // System CPU load over the last tick (all cores, 0-100); used only for
+        // the CPU-adaptive idle policy, not as a RAM/GPU budget.
         const int sysCpuPct = sampleSystemCpuPct();
 
-        static const bool tombDebug = qEnvironmentVariableIsSet("KHTML_TOMBSTONE_DEBUG");
-        if (tombDebug) {
-            // fprintf (not qDebug): on Windows Qt's default message handler
-            // routes qDebug to OutputDebugString, invisible to test harnesses
-            // that capture stderr.
-            fprintf(stderr, "[tomb] mem=%u%% syscpu=%d%% pages=%d\n",
-                    unsigned(loadPct), sysCpuPct, m_pages.size());
-            for (TabPage *pg : m_pages)
-                fprintf(stderr, "[tomb]  susp=%d age=%lldms\n",
-                        pg->suspended ? 1 : 0,
-                        (long long)(pg->lastActive > 0 ? now - pg->lastActive : -1));
-        }
+        auto makeUsage = [&](TabPage *pg) {
+            khtml::resource::RendererUsage u;
+            u.id = reinterpret_cast<std::uint64_t>(pg);
+            u.foreground = (pg == currentPage());
+            u.suspended = pg->suspended;
+            u.idleMs = pg->lastActive > 0
+                    ? std::uint64_t(qMax<qint64>(0, now - pg->lastActive)) : 0;
+            if (!pg->suspended && pg->render) {
+                const qint64 kb = qMax<qint64>(0, pg->render->memoryKB());
+                u.workingSetBytes = std::uint64_t(kb) * 1024;
+            }
+            return u;
+        };
 
-        // Report OUR footprint + hottest background tab for the chrome
-        // label (informational only; decisions follow system load).
+        std::vector<khtml::resource::RendererUsage> usage;
+        usage.reserve(size_t(m_pages.size()));
         const qint64 browserKB = currentMemKB();
         qint64 rendererKB = 0;
         int hottestPerMill = 0;
         for (TabPage *pg : m_pages) {
-            if (!pg || pg->suspended)
-                continue;
-            rendererKB += pg->render ? pg->render->memoryKB() : 0;
-            const qint64 cpu = pg->render ? pg->render->cpuTimeMs() : 0;
-            const qint64 dCpu = qMax<qint64>(0, cpu - pg->cpuTimeMs);
-            pg->cpuTimeMs = cpu;
-            pg->cpuPerMill = int(dCpu * 1000 / wallMs);
-            if (pg != currentPage())
-                hottestPerMill = qMax(hottestPerMill, pg->cpuPerMill);
+            if (!pg) continue;
+            khtml::resource::RendererUsage u = makeUsage(pg);
+            if (!pg->suspended) {
+                rendererKB += qint64(u.workingSetBytes / 1024);
+                if (pg->render) {
+                    const qint64 cpu = pg->render->cpuTimeMs();
+                    const qint64 dCpu = qMax<qint64>(0, cpu - pg->cpuTimeMs);
+                    pg->cpuTimeMs = cpu;
+                    pg->cpuPerMill = int(dCpu * 1000 / wallMs);
+                    if (pg != currentPage())
+                        hottestPerMill = qMax(hottestPerMill, pg->cpuPerMill);
+                }
+            }
+            usage.push_back(u);
         }
+
+        m_resourceMgr.updateRendererUsage(std::move(usage));
+        const khtml::resource::ResourceSnapshot snap = m_resourceMgr.sample();
+        const khtml::resource::RamSample &ram = snap.ram;
+        const khtml::resource::GpuSample &gpu = snap.gpu;
+        const khtml::resource::PressureLevel ramPressure = ram.pressure;
+        const bool gpuWarning = gpu.pressure != khtml::resource::PressureLevel::Normal;
+        const bool gpuCritical = gpu.pressure == khtml::resource::PressureLevel::Critical;
+        const int ramLevel = ramPressure == khtml::resource::PressureLevel::Critical ? 3
+                           : ramPressure == khtml::resource::PressureLevel::Warning ? 2 : 0;
         const qint64 memKB = browserKB + rendererKB;
 
-        int level = 0;                                        // 0 normal
-        if (loadPct >= 93)      level = 3;                    // critical
-        else if (loadPct >= 85) level = 2;                    // warning
-        else if (loadPct >= 70) level = 1;                    // pressure
+        // The manager's cadence recommendation uses the worse of RAM/GPU
+        // pressure and includes hysteresis (5s/2s/1s by default).
+        const int sampleMs = int(snap.recommendedSampleIntervalMs);
+        if (m_memTimer && sampleMs > 0 && m_memTimer->interval() != sampleMs)
+            m_memTimer->start(sampleMs);
 
-        static const char *names[] = {"正常", "低压", "高压", "危急"};
-        // GPU utilization (PDH GPU Engine counters — the Task Manager data
-        // source).  Sampled for the pressure monitor's own bookkeeping; the
-        // numbers are no longer rendered into browser UI (the status-bar
-        // readout was removed as noise).
-        const int gpuPct = sampleGpuPct();
-        Q_UNUSED(gpuPct);
-        Q_UNUSED(names);
-        Q_UNUSED(memKB);
+        static const bool tombDebug = qEnvironmentVariableIsSet("KHTML_TOMBSTONE_DEBUG");
+        if (tombDebug) {
+            const char *adapter = (gpu.selectedAdapterIndex >= 0
+                                   && size_t(gpu.selectedAdapterIndex) < gpu.adapters.size())
+                    ? gpu.adapters[size_t(gpu.selectedAdapterIndex)].name.c_str() : "-";
+            fprintf(stderr,
+                    "[res] ram=%u%% %s browserKB=%lld rendererKB=%lld totalKB=%lld "
+                    "gpu=%s pressure=%s vramBudgetMB=%.0f vramUsageMB=%.0f adapter=%s pages=%d\n",
+                    unsigned(ram.memoryLoadPercent),
+                    khtml::resource::toString(ramPressure),
+                    (long long)browserKB, (long long)rendererKB, (long long)memKB,
+                    khtml::resource::toString(gpu.status),
+                    khtml::resource::toString(gpu.pressure),
+                    double(gpu.vramBudgetBytes) / (1024.0 * 1024.0),
+                    double(gpu.vramUsageBytes) / (1024.0 * 1024.0),
+                    adapter, m_pages.size());
+        }
 
-        if (level >= 1)
+        // Regenerable page/HTTP cache is the first RAM/GPU release step.  The
+        // engine's PageLoader owns only downloaded page mirrors; cookies,
+        // passwords, history and persistent site storage are not touched.
+        if (ramLevel >= 2 || gpuWarning)
             purgeCache();
+        if ((ramPressure == khtml::resource::PressureLevel::Critical || gpuCritical)
+                && m_lastPageCacheClearMs > 0
+                && now - m_lastPageCacheClearMs > 30000) {
+            fprintf(stderr, "[res] critical pressure: clear regenerable page/HTTP cache\n");
+            PageLoader::clearCache();
+            m_lastPageCacheClearMs = now;
+        } else if ((ramPressure == khtml::resource::PressureLevel::Critical || gpuCritical)
+                   && m_lastPageCacheClearMs == 0) {
+            PageLoader::clearCache();
+            m_lastPageCacheClearMs = now;
+        }
 
-        // Tab eviction: warning suspends the least-recently-active
-        // background tab (true LRU by lastActive); critical suspends
-        // every background tab in one pass — one-tab-per-tick would lag
-        // the system by N×10 s exactly when reclaim must be immediate.
-        if (level == 2) {
+        // Unified policy: soft budget for trim/suspend decisions, and the Job
+        // Object commit ceiling (the only true hard limit) for each renderer.
+        // The foreground tab is never suspended here.
+        for (TabPage *pg : m_pages) {
+            if (!pg || pg->suspended || !pg->render) continue;
+            const khtml::resource::RendererUsage u = makeUsage(pg);
+            const khtml::resource::RendererPolicy pol = m_resourceMgr.policyFor(u);
+            if (pol.hardCeilingBytes > 0)
+                pg->render->setMemoryCeilingKB(qint64(pol.hardCeilingBytes / 1024));
+            if (pg == currentPage()) continue;
+            const bool overSoft = pol.softBudgetBytes > 0
+                    && u.workingSetBytes > pol.softBudgetBytes;
+            const auto advice = m_resourceMgr.adviseBackground(u);
+            if (overSoft || advice == khtml::resource::BackgroundAction::Suspend) {
+                fprintf(stderr, "[res] suspend background tab (soft=%lldKB used=%lldKB)\n",
+                        (long long)(pol.softBudgetBytes / 1024),
+                        (long long)(u.workingSetBytes / 1024));
+                suspendTab(pg);
+            } else if (advice == khtml::resource::BackgroundAction::Trim) {
+                purgeCache();
+            }
+        }
+
+        // Pressure eviction still runs as a final backstop.  RAM and GPU are
+        // separate domains; GPU pressure only reclaims renderer/page resources,
+        // it never changes a CPU memory ceiling by a VRAM-derived amount.
+        // Critical FIRST: gpuWarning includes Critical, and the old ordering
+        // made the all-background branch unreachable.
+        if (ramLevel >= 3 || gpuCritical) {
+            for (TabPage *pg : m_pages) {
+                if (pg != currentPage() && !pg->suspended)
+                    suspendTab(pg);
+            }
+        } else if (ramLevel == 2 || gpuWarning) {
             TabPage *victim = nullptr;
             for (TabPage *pg : m_pages) {
                 if (pg == currentPage() || pg->suspended)
@@ -2511,50 +2739,17 @@ protected:
                     victim = pg;
             }
             if (victim) suspendTab(victim);
-        } else if (level >= 3) {
-            for (TabPage *pg : m_pages) {
-                if (pg != currentPage() && !pg->suspended)
-                    suspendTab(pg);
-            }
         }
 
-        // Per-renderer dynamic memory budget — the SOFT layer of the
-        // renderer sandbox (the Job Object is the hard one).  A single
-        // runaway background tab is tombstoned, never crashes the browser
-        // and never competes with the OS (Safari per-WebProcess limits).
-        // The budget follows machine class AND live pressure: warning+
-        // halves it (内存动态调节).  The Job Object ceiling tracks at 2x,
-        // so commit pressure can never surprise the working-set monitor.
-        const qint64 budgetKB = perRendererBudgetKB(mem.ullTotalPhys, level);
-        for (TabPage *pg : m_pages) {
-            if (!pg || pg->suspended || !pg->render)
-                continue;
-            pg->render->setMemoryCeilingKB(budgetKB * 2);
-            if (pg != currentPage()) {
-                const qint64 kb = pg->render->memoryKB();
-                if (kb > budgetKB) {
-                    // fprintf (not qDebug): Qt routes qDebug to
-                    // OutputDebugString on Windows, invisible to harnesses.
-                    fprintf(stderr, "[tomb] renderer budget exceeded: "
-                            "%lldKB > %lldKB -> suspend tab\n",
-                            (long long)kb, (long long)budgetKB);
-                    suspendTab(pg);
-                }
-            }
-        }
-
-        // CPU-modulated idle eviction (the CPU-adaptive pillar): idle tabs
-        // are discarded after 5 min on a relaxed machine, but after just
-        // 60 s while the whole system has been pinned at the CPU for the
-        // entire tick — a saturated machine is exactly when a stale
-        // background renderer's working set hurts, and the suspension is
-        // user-invisible (snapshot stays; click to resume).
+        // CPU-modulated idle eviction (unchanged behaviour): idle tabs are
+        // discarded after 5 min on a relaxed machine, 60 s under CPU saturation.
         const qint64 idleMs = sysCpuPct >= 85 ? 60 * 1000 : 5 * 60 * 1000;
         for (TabPage *pg : m_pages) {
             if (pg != currentPage() && !pg->suspended && pg->lastActive > 0
                 && (now - pg->lastActive) > idleMs)
                 suspendTab(pg);
         }
+        Q_UNUSED(hottestPerMill);
     }
 
     // Whole-system CPU utilization between watchdog ticks (0-100).
@@ -2583,19 +2778,6 @@ protected:
         return int(busy * 100 / total);
     }
 
-    // Dynamic per-renderer memory budget (KB).  Machine class sets the
-    // base; live system pressure halves it at warning/critical — "the
-    // budget follows the machine and the moment" (Safari's
-    // MemoryPressureHandler doctrine) instead of one fixed number.
-    static qint64 perRendererBudgetKB(ULONGLONG totalPhysBytes, int level) {
-        const ULONGLONG totalKB = totalPhysBytes / 1024;
-        qint64 budget = totalKB >= (16ull << 20) ? qint64(1024) * 1024
-                      : totalKB >= (8ull << 20)  ? qint64(768) * 1024
-                      : qint64(512) * 1024;
-        if (level >= 2)
-            budget /= 2;
-        return budget;
-    }
 
     // Whole-machine GPU utilization (0-100) from PDH GPU Engine counters —
     // the same data source Task Manager graphs.  Instances are per-engine
@@ -2692,6 +2874,8 @@ protected:
     qint64 m_lastMemTickMs = 0;
     // GPU monitor (PDH).  m_gpuUnavailable marks "no GPU counters on this
     // box" so the sampler stops retrying a path that can never exist.
+    khtml::resource::ResourceManager m_resourceMgr;
+    qint64 m_lastPageCacheClearMs = 0;
     PDH_HQUERY m_gpuQuery = nullptr;
     PDH_HCOUNTER m_gpuCounter = nullptr;
     bool m_gpuUnavailable = false;
@@ -2700,8 +2884,8 @@ protected:
     QTabBar *m_tabBar = nullptr;
     QStackedWidget *m_stack = nullptr;
     QWidget *m_tabStrip = nullptr;
-    QToolButton *m_lightClose = nullptr, *m_lightMin = nullptr, *m_lightMax = nullptr;
-    QToolButton *m_sidebarBtn = nullptr, *m_newTabBtn = nullptr;
+    QToolButton *m_winMin = nullptr, *m_winMax = nullptr, *m_winClose = nullptr;
+    QToolButton *m_newTabBtn = nullptr;
     QPushButton *m_shareBtn = nullptr;
     QList<TabPage *> m_pages;
     QLineEdit *m_addr = nullptr;

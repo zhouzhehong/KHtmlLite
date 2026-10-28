@@ -195,15 +195,12 @@ def main():
         alive_renderers = len(renderer_pids())
         print(f"renderers alive after tombstone: {alive_renderers}")
 
-        # Resume: click the tombstoned tab in the Safari-style tab strip
-        # (tab strip occupies y~0..42 physical; tab 0 starts after the
-        # traffic lights / sidebar, x~160..380).
+        # Resume: click the tombstoned tab in the classic-Safari tab strip.
+        # New shell: tabs start at x~15 logical (22 physical), min width 144
+        # logical; the close hot zone is at the tab's right edge.  Click the
+        # left/title part and also retry a few nearby points for robustness.
         resumed = False
-        # Click the LEFT part of the first tab (title area).  x=200 used to be
-        # safe, but the WhiteSur-style tab close "x" hot zone now sits near the
-        # tab's right edge and a biased layout can place it at 200, which
-        # CLOSED the tombstone instead of resuming it.
-        for (x, y) in ((170, 22), (170, 20), (176, 25), (170, 28)):
+        for (x, y) in ((80, 22), (100, 22), (120, 22), (170, 22), (170, 20)):
             click(hwnd, x, y)
             time.sleep(3)
             tr2 = trace_text()
@@ -217,7 +214,7 @@ def main():
         crash_after = os.path.getsize(crashlog) if os.path.exists(crashlog) else -1
         print(f"browser alive: {alive}, crashlog clean: {crash_after == crash_before}")
         # Print the watchdog calibration record for the handover doc.
-        ticks = [l for l in tr.splitlines() if "mem=" in l]
+        ticks = [l for l in tr.splitlines() if "mem=" in l or "[res]" in l]
         print("watchdog ticks: " + "; ".join(ticks[-3:]))
         ok = (evicted and not auto_resume and resumed and alive
               and crash_after == crash_before)

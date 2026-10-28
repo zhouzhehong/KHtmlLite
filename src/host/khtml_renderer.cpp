@@ -384,6 +384,10 @@ public:
         // browser owns the only visible surface and window movement never
         // touches the renderer process.
         STARTUP_MARK("RendererHost ctor: creating KHTMLPart");
+        // The ctor parameter carries --disable-js; the RendererView must use
+        // it.  Previously RendererView(m_jsEnabled) read the never-assigned
+        // member (always true), so --disable-js was silently ignored.
+        m_jsEnabled = jsEnabled;
         m_view = new RendererView(m_jsEnabled, nullptr);
         STARTUP_MARK("KHTMLPart created");
         m_view->widget()->setEnabled(true);

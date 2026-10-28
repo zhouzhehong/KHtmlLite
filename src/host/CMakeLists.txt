@@ -69,10 +69,11 @@ set(KHTML_HOST_COMPILE_OPTS
 add_executable(khtml_browser WIN32
     khtml_browser.cpp
     pageloader.cpp
+    resourcemanager.cpp
 )
 target_include_directories(khtml_browser PRIVATE ${KHTML_HOST_INCLUDES})
-# pdh: GPU Engine utilization counters for the real-time monitor.
-target_link_libraries(khtml_browser PRIVATE ${KHTML_HOST_LIBS} pdh)
+# pdh: GPU Engine utilization counters; dxgi: VRAM budgets/usage via Adapter3.
+target_link_libraries(khtml_browser PRIVATE ${KHTML_HOST_LIBS} pdh dxgi dxguid)
 target_compile_options(khtml_browser PRIVATE ${KHTML_HOST_COMPILE_OPTS})
 
 # --- Renderer process (out-of-process, one per tab) --------------------------

@@ -1259,6 +1259,57 @@ INCONCLUSIVE、或退出码 0 但输出里出现判定形 FAIL 令牌，都算�
 - 地址栏在多标签下也验证：`target=_blank` 打开本地第二标签后，点击地址栏、Ctrl+A、输入新 URL、Enter，服务器收到 `/c.html` 且标题变为 page-c。此前一次“新标签 + Bing”用例 Enter 未生效是 Bing 页面焦点/测试时序问题，同一地址栏在本地第二标签可稳定工作。
 - 全量回归（2026-10-28 20:48→21:28）：**`failed: none`**（20 项：19 PASS + `bing_ghost_check` INCONCLUSIVE）。关键：`bg_smoke 5.8s PASS`、`resize_probe 601.8s PASS`、`scroll_smoke 603.1s PASS`、`tombstone_probe 623.5s PASS`、`engine_semantics_probe 205.7s PASS`、`navigation_probe 20.4s PASS`、`dwm_canvas_probe 21.3s PASS`、`tile_protocol_test 155s PASS`、`iframe_crash_probe 5.9s PASS`、`promise_microtask_probe 2.3s PASS`、`dpr_probe 31.4s PASS`（dpr=1.5）、`resize_ghost_probe 5.7s PASS`、`click/input/title/css_trim/polyfill/rg_diag4` 全 PASS。上一轮全量曾出现 `navigation_probe`/`dwm_canvas_probe` 各一次瞬时失败，单独重跑均 PASS，最终本轮无失败。
 
+## 5ak. 动态资源管理 + 崩溃恢复第二版 + EXE 外壳改版（2026-10-28）
+
+### 子代理分工
+- `resource-eng`：审计现有 400 MB 策略、实现 Qt-free `src/host/resourcemanager.h/.cpp` + `docs/resource_manager.md`（仅新文件，C++17/C++20 编译通过）。
+- `crash-probe`：独立审计崩溃恢复并编写/运行 `tests/crash_recovery_probe.py`（仅新测试文件）；发现并回报 `--disable-js` 未生效、`firstFrame` 不可达两个真实 bug。
+- `ui-spec`：审计 EXE 外壳并交付 `docs/ui_redesign_spec.md`（仅规范）；发现并预警 tab0 关闭热区与 (170,22) 回归冲突。
+- Lead：统一方案、所有 `khtml_browser.cpp`/CMake/HANDOVER 修改、ResourceManager 集成、构建、回归、提交。
+
+### 资源策略审计（修改前）
+- 400 MB 只是注释中的参考，**没有硬限**；实际 `perRendererBudgetKB()` 按 RAM 给 512/768/1024 MB，Warning+ 减半；Job Object 的 `JOB_OBJECT_LIMIT_PROCESS_MEMORY` 才是硬限制（`setMemoryCeilingKB`，值=2×soft budget）。
+- `RenderTab::memoryKB()` 是 renderer 工作集统计；浏览器自身工作集、系统 `GlobalMemoryStatusEx` 只用于日志/压力阈值。
+- GPU 只有 PDH `GPU Engine Utilization` 利用率，**没有 DXGI 显存预算/使用量**；旧策略把 GPU 利用率采样后丢弃。
+- 后台挂起/恢复（tombstone）按系统 RAM 高水位 + CPU idle 触发；前台标签不挂起。没有统一 RAM/GPU/前后台策略对象。
+
+### ResourceManager（新模块）
+- `docs/resource_manager.md` 记录 API、公式、上下限、hysteresis、Job Object/软阈值区别。
+- RAM：`GlobalMemoryStatusEx` + `GetProcessMemoryInfo` + 调用方提供的 renderer usage 列表；按总内存缩放 400 MB 参考基线（8 GiB→400 MiB；4 GiB→300 MiB；32 GiB→1600 MiB），限制 absolute min/max 且单标签不超过 10% RAM；Warning/Critical 降低预算；前后台不同因子。
+- GPU：`CreateDXGIFactory1` 枚举多适配器，`IDXGIAdapter3::QueryVideoMemoryInfo` 查 LOCAL/NON_LOCAL 的 budget/usage；集成显卡 shared memory 与 NON_LOCAL **不**计入 VRAM；无 Adapter3/无适配器/查询失败返回 `Unsupported/QueryError`，不伪造数字；`VRAM` 从不换算成 CPU 上限。
+- 预算、压力阈值、OS 强制限制三者分开：`softBudgetBytes`/压力是软阈值；Job Object commit ceiling 是硬限制；系统内存负载是压力输入。
+- 浏览器集成：每 tick 构造 `RendererUsage`（id=TabPage 指针、working set、foreground、suspended、idle），`updateRendererUsage` + `sample()`；按 `policyFor()` 设置 Job ceiling；用 `adviseBackground()`/压力带做 trim/suspend；采样间隔跟随 `recommendedSampleIntervalMs()`（正常5s/告警2s/危急1s，带 hysteresis）。GPU pressure 仅用于释放可再生成的页面/renderer 资源（purge/suspend），不参与 RAM 预算换算。
+- 临界分支已按审计修正为 critical-first（此前 `gpuWarning` 包含 Critical 导致“挂起全部后台”分支不可达）。
+- 可再生成缓存释放：warning 时异步 purge；critical 时限频调用 `PageLoader::clearCache()`（仅 `khtml_cache` 页面/HTTP 镜像；不碰 Cookie/密码/历史/持久存储）。**未**把清缓存当作 0xC0000005 的根治办法。
+
+### 崩溃自动恢复第二版
+- `onFinished()` 记录 `[rend-crash] pid/embedded/exit/status/url`；`terminate()` 主动关闭时先断 QProcess 信号，因此正常关标签/挂起/退出不进入崩溃路径。
+- 首次崩溃：显示“正在恢复页面…”占位（不是最终错误页），自动重建 renderer + IPC + 当前 URL；**自动重试 #1 使用 `--disable-js`**。
+- 若第二次崩溃：先清理**仅可再生成**的 PageLoader HTTP/页面缓存，再自动重试 #2（JS 恢复启用）；最多 2 次自动重试。
+- 第三次失败：显示最终崩溃页（“重新加载”按钮）+ 允许手动重试；手动重试 JS enabled。连续手动重试仍可，但不进入无限自动重启。
+- 恢复占位只在 **firstFrame**（真实首帧）后替换为页面容器；`ready()` 不再作为过早的切换条件。此前两个 bug 已修复：
+  1. `RendererView` 使用未赋值的 `m_jsEnabled`，`--disable-js` 完全无效；现在 ctor 先 `m_jsEnabled=jsEnabled`；
+  2. `readTiles()` 入口提前把 `m_gotFirstFrame=true`，导致底部 `firstFrame` 永不 emit；现在只在 `setFrame()` 成功后置位并 emit。
+- `retryCrashedTab()/dropRenderer()` 保持：sender 信号内不析构、重复点击 `isRunning()` 防护、同索引替换、选中/地址恢复。渲染器崩溃/用户关标签/导航/浏览器退出已区分。
+- 未清除 Cookie/登录/密码/书签/历史/站点持久存储。
+
+### EXE 外壳改版（实际 `khtml_browser.exe` 主窗口）
+- 参考经典 Safari 4/5 轮廓，而非 Safari 14/15 Liquid Glass：标签并入标题条、右上 Windows 原生风格最小化/最大化/关闭（删除 macOS 红黄绿）、统一工具栏、地址/搜索一体栏（内嵌放大镜）。
+- 几何：**30 逻辑标签条 + 28 逻辑工具栏 = 58 逻辑 = 87 物理**，页面原点保持 (11,87)；地址栏中心 y=66；back/fwd 仍覆盖 (34,66)/(68,66)；tab 最小宽度 144，保证 tombstone 的 (170,22) 命中标题而不是关闭热区。
+- `SafariTabBar`：选中白底、未选中浅灰、4px 顶部圆角、单色标题、关闭 X hover/选中；去掉浮动胶囊与 8px 大圆角。
+- 工具栏：浅中性灰、1px 分隔线、单色线性图标；地址栏白底 1px 边框 5px 圆角 + 搜索图标；reload 保留；share 改为“复制链接”实际动作（非 no-op）。
+- 外框：DWM `DWMWCP_DONOTROUND(1)` 方角；保留 `Qt::FramelessWindowHint`；标题条空白区拖动/双击最大化由 `SafariTabBar` 处理，Windows 标题按钮只占右上预留区。
+- 边缘缩放：注入 `WS_THICKFRAME`（show/状态变化后重加，Qt 可能清 style）；`WM_NCCALCSIZE` 仅在最大化时返回 0，恢复最大化客户区 1920×1008；修正 `WM_EXITSIZEMOVE` 缺 `break;` 贯穿问题。实测：拖动标题条移动、双击最大化/还原、边缘缩放（宽度变化）、caption 最小化、最大化按钮、tab 点击（不误关）均工作。
+- 未伪造下载/设置：当前 shell 实际没有下载管理器/设置页；保留已有清除缓存/Ctrl+Shift+Del、F11、前进后退、刷新、地址导航、标签新建/关闭/切换/拖动、右键菜单。死 sidebar 删除；share 改为真实复制链接。
+- 未改 renderer 页面内容、tile/damage 协议、KHTML/QuickJS 网络代码。
+
+### 本机验证
+- [res] 实测：RAM 85-90% Warning，browser ~63-112MB，renderer ~51-234MB；GPU DXGI available，NVIDIA GeForce 940MX LOCAL budget 1701MB usage 0；采样跟随 2s；无崩溃。DXGI 查询失败/真实 GPU 压力/真实 RAM 临界未能人为制造（标记未验证）。
+- 崩溃恢复：`tests/crash_recovery_probe.py` 连续两次 **24/24 PASS**（45.5s/46.5s）：auto1 JS-off(StaticTitle/蓝页) → auto2 cache-clear JS-on(绿页/JsTitle) → crash3 UI；手动/连点/缓存/Cookie/清理均 PASS；crashlog/dmp 不变。--disable-js 直连 renderer 也验证 StaticTitle vs JsTitle。
+- UI：最终截图 `docs/assets/classic_safari_shell.png`；空白标签条拖动、双击最大化/还原、caption 最小化/最大化、边缘缩放（宽度变化）、地址栏/标签/按钮交互、DPI 1.5 均通过；标签最小宽度 144 使 tombstone 点击安全。
+- UI/回归测试适配：`tests/tombstone_probe.py` 的恢复点击改为先点 tab 左侧 (80,22)（新 shell tab0 起点 22 物理、min 144 逻辑），并打印 `[res]` 校准行；`tests/tile_protocol_test.py` 的静态不变量从旧 `loadPct >= 93/85/70` 改为检查 ResourceManager 集成标记。
+- 全量回归（2026-10-29 00:03→00:42）：**`failed: none`**（20 项：19 PASS + `bing_ghost_check` INCONCLUSIVE）。关键：`bg_smoke 5s PASS`、`resize_probe 601.8s PASS`（max client 1920x1008）、`scroll_smoke 602.2s PASS`、`tile_protocol 139.6s PASS`、`tombstone_probe 623.2s PASS`、`engine_semantics 170.6s PASS`、`dwm_canvas 20.5s PASS`、`iframe_crash 5.7s PASS`、`navigation 18.1s PASS`、`scroll_direction`/`click`/`dpr`/`input`/`resize_ghost`/`promise`/`css_trim`/`polyfill`/`rg_diag4` 全 PASS。
+
 ## 6. 正在/马上要做的
 A. ~~拆那 1.1s~~ **已完成**（字体枚举缓存 + 图标懒加载，构造 1.1s→~0.35s，TTFF 2.0→1.1s）。
    下一步同部位残账：渲染进程镜像加载+socket 连接 ~500ms（每次新标签都付），
