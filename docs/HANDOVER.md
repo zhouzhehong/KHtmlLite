@@ -1181,6 +1181,43 @@ INCONCLUSIVE、或退出码 0 但输出里出现判定形 FAIL 令牌，都算�
 - 关键项：`bg_smoke 4.3s PASS`（红/绿像素正常、单次请求周期、无新 dmp）、`tombstone_probe 623.2s PASS`、`scroll_smoke 602.6s PASS`、`resize_probe 601.9s PASS`、`engine_semantics_probe 194.6s PASS`、`navigation_probe 18.2s PASS`、`scroll_direction_probe 8.1s PASS`、`tile_protocol_test 145.7s PASS`、`dwm_canvas_probe 20.7s PASS`、`promise_microtask_probe 2.2s PASS`、`polyfill_probe 3.5s PASS`、`css_trim_probe 0.5s PASS`、`click/dpr/input/title/resize_ghost/rg_diag4` 全 PASS。
 - 便携包与 ZIP 打包结果见下方交付记录。
 
+## 5ai. Renderer 崩溃根因（0x933fc / Qt5Core+0x23d747，2026-10-28）
+
+### 版本核对
+- portable 目录中的 `khtml_browser.exe`/`khtml_renderer.exe`/`libKF5KHtml.dll` 与 build/host 产物 SHA256 完全一致；崩溃时段的 .dmp 模块时间戳/校验和也与这三个 PE 文件一致：
+  - renderer ts=1793124603 cs=646517；Qt5Core ts=1780573085 cs=5574437；libKF5KHtml ts=1793100977 cs=15788325。
+- 因此 2026-10-27 21:04、2026-10-28 13:48/13:49/13:55 的转储可与当前源码/二进制一一对应；不是旧构建或错配 DLL。
+
+### 崩溃 A：libKF5KHtml.dll+0x933fc（Bing 首页 / 翻译搜索）
+- 反汇编：`0x933fc` 属于 `DOM::DocumentImpl::part() const+0xc`：`mov 0x48(%rax),%rax`，其中 `%rax = this->m_view`（DocumentImpl+0x80）。`rcx`（DocumentImpl*）指向的内存已不是 DocumentImpl：首 qword 是 `0x7ffcf2ffffff` 类数据/哈希条目，`m_view+0x80` 为 `0x21fa00000026` 等非指针。
+- 调用栈：`KHTMLPart::slotLoaderRequestDone(DocLoader*, CachedObject*)+0xd7` 调用 `DocumentImpl::part()`；该处机器码为 `mov 0x40(%rsi),%rcx; call DocumentImpl::part()`，`%rsi` 是 `DocLoader*`，`dl+0x40` 就是 `DocLoader::m_doc`。
+- 根因链（源码 `src/khtml/src/misc/loader.cpp`）：
+  1. 本地文件子资源（宿主缓存镜像）走 `Loader::scheduleRequest()` 的 `QFile` 分支，用 `QTimer::singleShot(0, this, [this, req, path]{... emit requestDone(req->m_docLoader, req->object); ...})` 延迟一个事件循环；
+  2. `DocLoader::~DocLoader()` 调 `Cache::loader()->cancelRequests(this)`，但旧 `cancelRequests()` 只遍历 `m_requestsLoading`（KIO job），**完全不知道这些本地延迟 Request**；
+  3. 页面切换/refreshed 重建/关闭 iframe 时 DocLoader 与 DocumentImpl 被删除，零延迟回调仍执行，`req->m_docLoader` 已悬空；`requestDone` 到达 `slotLoaderRequestDone()`，`dl->doc()->part()` 解引用已释放的 DocumentImpl → 0xC0000005。
+- 转储中 `dl` 内存呈 QStringData/QHash 式内容，正是释放后被堆复用（DocumentImpl 析构已把 m_view 置 nullptr，但复用会覆写）。
+- 确定性复现：`tests/khtml_lifetime_probe.cpp` 先写含本地缺失 CSS 的文档，`closeUrl()/begin()` 重建文档后进入事件循环；旧 DLL 在 gdb 下稳定崩溃于 `DocumentImpl::part()`，栈为 `slotLoaderRequestDone` ← `Loader::scheduleRequest lambda`；新 DLL 正常退出。
+
+### 崩溃 B：Qt5Core.dll+0x23d747（Bing 视频页面 / 本地缓存页）
+- Qt5Core 导出表解析 `0x23d747` = `QObject::setObjectName(QString const&)+0x7`；异常 `READ 0x8`、`RCX=0` → 对 **null QObject** 调用 `setObjectName`（读 `[rcx+8]` 的 d_ptr）。
+- 源码 `KHTMLPart::connectToChildPart()`（`khtml_part.cpp` 4591 附近）第一行 `part->setObjectName(child->m_name)` 未判空；调用方 `loadFrameElement()` 的 `KParts::ReadOnlyPart *part = createPart(...)` 在 portable 无 KParts khtmlpart 插件时返回 `nullptr`（`createPart()` 对 `offers.isEmpty()` 直接 return nullptr），随后 `navigateLocalProtocol(child, part, ...)`/`connectToChildPart()` 直接使用。
+- 本地 iframe 页可稳定复现：新构建前启动 iframe 页，renderer 以同签名 Qt5Core+0x23d747 崩溃并生成 dmp；browser 进程仍存活（自动恢复），与日志一致。
+- 修复：`loadFrameElement()` 在 `createPart()` 后判空，失败走既有 `childLoadFailure(child)` 并返回；`connectToChildPart()` 首部再加防御性判空。需要说明：portable 未部署 khtmlpart 插件，因此 iframe 内容能力仍受限（不再崩溃，但子框架加载失败），这是后续部署/直建 child KHTMLPart 的功能问题，不是本次崩溃修复的掩盖。
+
+### 修改文件
+- `src/khtml/src/misc/loader.h/.cpp`：新增 `Loader::m_localRequests` 跟踪本地延迟请求；`cancelRequests()` 移除并取消匹配的本地 Request（只从集合移除，回调看到未决即自行 delete，不提前 delete 避免回调悬空）；`Loader::~Loader()` 清理；`Cache::isDocLoaderAlive(DocLoader*)` 仅做指针身份校验。
+- `src/khtml/src/khtml_part.cpp`：`slotLoaderRequestDone()` 首部 `if (!dl || !Cache::isDocLoaderAlive(dl)) return;`（不先解引用 dl）；`loadFrameElement()` createPart 空值处理；`connectToChildPart()` 空值防御。
+- `tests/khtml_lifetime_probe.cpp`（新增诊断）：确定性构造 stale local Request；gdb 下旧 DLL 崩、新 DLL 正常。
+- `tests/iframe_crash_probe.py`（新增并加入回归）：本地 iframe 页父文档仍绘制、无新 dmp/crashlog。
+
+### 已验证
+- 旧/新 DLL 生命周期探针（gdb）：旧 `DocumentImpl::part()` SIGSEGV（栈含 Loader::scheduleRequest lambda），新 `exited normally`。
+- `iframe_crash_probe` PASS（title=True，blue_pixels=10989，无新 dmp）。
+- 新构建打开 Bing 首页/视频/翻译搜索：browser/renderer 均存活，无新 dmp，crashlog 不增长；视频/翻译页较白属于页面渲染不完整，不是崩溃。
+- 本机 reload 按钮 (client 1729,66) 实测触发第二次主文档请求（requests 1→2）；随后 Ctrl+W 关闭当前标签，该标签的 renderer PID 退出、浏览器保持存活且无新 dmp/crashlog；关闭浏览器后所有 renderer 子进程退出。
+- 目标探针：navigation_probe / scroll_direction_probe / browser_click_probe / bg_smoke / engine_semantics_probe / iframe_crash_probe 全 PASS。
+- 全量回归（2026-10-28 15:04→15:43）：**`failed: none`**（20 项：19 PASS + `bing_ghost_check` INCONCLUSIVE）。关键：iframe_crash_probe 5.7s PASS、bg_smoke 3.6s PASS、tombstone_probe 623.1s PASS、scroll_smoke 602s PASS、resize_probe 601.5s PASS、engine_semantics 181.8s PASS、navigation_probe 18.6s PASS、scroll_direction 7.1s PASS、dwm 21.1s PASS、tile_protocol 138.6s PASS。
+
 ## 6. 正在/马上要做的
 A. ~~拆那 1.1s~~ **已完成**（字体枚举缓存 + 图标懒加载，构造 1.1s→~0.35s，TTFF 2.0→1.1s）。
    下一步同部位残账：渲染进程镜像加载+socket 连接 ~500ms（每次新标签都付），

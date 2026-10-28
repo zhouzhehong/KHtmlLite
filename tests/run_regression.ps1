@@ -127,6 +127,7 @@ $probes = @(
     "dwm_canvas_probe.py",
     "css_trim_probe.py",
     "polyfill_probe.py",
+    "iframe_crash_probe.py",
     "navigation_probe.py",
     "promise_microtask_probe.py",
     "rg_diag4.py",

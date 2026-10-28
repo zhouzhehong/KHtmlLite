@@ -644,6 +644,11 @@ protected Q_SLOTS:
 protected:
     void scheduleRequest(Request *req);
     QHash<KIO::Job *, Request *> m_requestsLoading;
+    // KHtmlLite: local-file requests are deferred with a zero-delay timer and
+    // are therefore not in m_requestsLoading; keep track of them so
+    // cancelRequests() can stop a deferred read from firing after its
+    // DocLoader/Document was destroyed.
+    QSet<Request *> m_localRequests;
     QStringList m_supportedImageTypes;
 };
 
@@ -712,6 +717,14 @@ public:
     static int cacheSize;
 
     static void removeCacheEntry(CachedObject *object);
+
+    /**
+     * KHtmlLite: true while @p dl is a live DocLoader registered by its
+     * constructor and not yet removed by its destructor.  A deferred
+     * local-file read can outlive its document (see m_localRequests), so slots
+     * must check this before dereferencing the raw DocLoader pointer.
+     */
+    KHTML_EXPORT static bool isDocLoaderAlive(DocLoader *dl);
 
 private:
 

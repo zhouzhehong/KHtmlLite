@@ -2266,6 +2266,15 @@ static bool isAncestorOrSamePart(KHTMLPart *p1, KHTMLPart *p2)
 
 void KHTMLPart::slotLoaderRequestDone(khtml::DocLoader *dl, khtml::CachedObject *obj)
 {
+    // KHtmlLite: the load signals carry a raw DocLoader*.  A deferred local-file
+    // read can outlive its document (Loader::cancelRequests() historically only
+    // cancelled KIO jobs); emitting requestDone() afterwards hands us a freed
+    // DocLoader, and dereferencing dl->doc() crashes in
+    // DocumentImpl::part().  Validate pointer identity against the live
+    // DocLoader list before touching *dl (see Cache::isDocLoaderAlive).
+    if (!dl || !khtml::Cache::isDocLoaderAlive(dl)) {
+        return;
+    }
     if (obj && obj->type() == khtml::CachedObject::Image && d->m_doc && d->m_doc->docLoader() == dl) {
         KHTMLPart *p = this;
         while (p) {
@@ -4232,6 +4241,16 @@ void KHTMLPart::loadFrameElement(DOM::HTMLPartContainerElementImpl *frame, const
         KParts::ReadOnlyPart *part = createPart(d->m_view->viewport(), this,
                                                 QString::fromLatin1("text/html"),
                                                 khtml, dummy, QStringList());
+        if (!part) {
+            // KHtmlLite: the portable bundle does not deploy a KParts
+            // khtmlpart plugin, so createPart() returns null for <iframe>/
+            // <frame>.  connectToChildPart() dereferences part unconditionally
+            // (QObject::setObjectName), which produced the Qt5Core+0x23d747
+            // null-dereference.  Fail the frame cleanly instead.
+            qCWarning(KHTML_LOG) << "could not create child part for frame" << frameName;
+            childLoadFailure(child);
+            return;
+        }
         // We navigate it to about:blank to setup an empty one, but we do it
         // before hooking up the signals and extensions, so that any sync emit
         // of completed by the kid doesn't cause us to be marked as completed.
@@ -4583,6 +4602,12 @@ void KHTMLPart::connectToChildPart(khtml::ChildFrame *child, KParts::ReadOnlyPar
 {
     // qCDebug(KHTML_LOG) << "we:" << this << "kid:" << child << part << mimetype;
 
+    if (!part) {
+        // Defensive: callers should have used childLoadFailure() already; never
+        // dereference a null part (Qt crash signature: QObject::setObjectName
+        // reading [rcx+8] with rcx==0).
+        return;
+    }
     part->setObjectName(child->m_name);
 
     // Cleanup any previous part for this childframe and its connections

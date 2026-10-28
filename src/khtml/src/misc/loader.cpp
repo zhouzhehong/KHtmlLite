@@ -1297,6 +1297,11 @@ Loader::Loader() : QObject()
 Loader::~Loader()
 {
     qDeleteAll(m_requestsLoading);
+    // Local-file reads are deferred and not in m_requestsLoading.  Their
+    // zero-delay timer has "this" as context, so destroying the Loader cancels
+    // the callback; free the captured Request objects here instead.
+    qDeleteAll(m_localRequests);
+    m_localRequests.clear();
 }
 
 void Loader::load(DocLoader *dl, CachedObject *object, bool incremental, int priority)
@@ -1323,7 +1328,16 @@ void Loader::scheduleRequest(Request *req)
     // KIO's asynchronous contract for callers of requestObject().
     if (u.isLocalFile()) {
         const QString path = u.toLocalFile();
+        m_localRequests.insert(req);
         QTimer::singleShot(0, this, [this, req, path]() {
+            // cancelRequests() may have dropped this request between the
+            // deferral and this turn because its DocLoader (and Document) was
+            // destroyed.  In that case both req->m_docLoader and req->object
+            // may already be freed; never touch them, just release the Request.
+            if (!m_localRequests.remove(req)) {
+                delete req;
+                return;
+            }
             QFile f(path);
             if (!f.open(QIODevice::ReadOnly)) {
                 req->object->error(QFile::OpenError, "file open failed");
@@ -1494,6 +1508,26 @@ int Loader::numRequests(DocLoader *dl) const
 
 void Loader::cancelRequests(DocLoader *dl)
 {
+    // KHtmlLite: cancel deferred local-file reads as well.  They are not in
+    // m_requestsLoading, so previously a zero-delay lambda could run after the
+    // DocLoader (and its DocumentImpl) had been destroyed and emit
+    // requestDone() with a dangling DocLoader, crashing
+    // KHTMLPart::slotLoaderRequestDone() in DocumentImpl::part().
+    // Only remove the Request from the pending set here: the already-posted
+    // timer callback owns it and will delete it when it sees the request is no
+    // longer pending (deleting it here would leave the callback with a stale
+    // pointer).
+    QSet<Request *> localToCancel;
+    for (Request *req : m_localRequests) {
+        if (req->m_docLoader == dl) {
+            localToCancel.insert(req);
+        }
+    }
+    for (Request *req : localToCancel) {
+        m_localRequests.remove(req);
+        Cache::removeCacheEntry(req->object);
+    }
+
     QMutableHashIterator<KIO::Job *, Request *> lIt(m_requestsLoading);
     while (lIt.hasNext()) {
         lIt.next();
@@ -1770,6 +1804,14 @@ void Cache::removeCacheEntry(CachedObject *object)
         Cache::freeList->append(object);
         object->m_free = true;
     }
+}
+
+bool Cache::isDocLoaderAlive(DocLoader *dl)
+{
+    // Pointer identity only: the caller must not dereference dl until this
+    // returns true.  DocLoader registers itself in Cache::init()'s list from
+    // its constructor and removes itself in its destructor.
+    return dl && docloader && docloader->contains(dl);
 }
 
 static inline int FastLog2(unsigned int j)
