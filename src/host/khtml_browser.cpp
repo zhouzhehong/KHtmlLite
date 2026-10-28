@@ -1419,6 +1419,7 @@ protected:
     {
         const int idx = tabAt(e->pos());
         if (idx >= 0 && e->button() == Qt::LeftButton) {
+            m_lastCaptionClick = 0;
             const QRect r = tabRect(idx);
             const QRect closeRect(r.right() - 20, r.center().y() - 7, 16, 14);
             if (closeRect.contains(e->pos())) {
@@ -1429,11 +1430,55 @@ protected:
                 return;
             }
         }
+        if (idx < 0 && e->button() == Qt::LeftButton) {
+            // Bug 2: the blank title-strip area is part of this stretch-filled
+            // QTabBar, not of the parent DragStrip.  Handle the caption here
+            // (this was the no-drag root cause).  A manual double-click check
+            // is needed because the first press starts the system move loop,
+            // which can swallow Qt's normal double-click event.
+            const qint64 now = QDateTime::currentMSecsSinceEpoch();
+            const bool dbl = m_lastCaptionClick > 0
+                    && now - m_lastCaptionClick <= QApplication::doubleClickInterval()
+                    && (e->pos() - m_lastCaptionPos).manhattanLength()
+                       <= QApplication::startDragDistance();
+            m_lastCaptionClick = now;
+            m_lastCaptionPos = e->pos();
+            if (dbl) {
+                m_lastCaptionClick = 0;
+                if (QMainWindow *mw = qobject_cast<QMainWindow *>(window())) {
+                    if (mw->isMaximized()) mw->showNormal();
+                    else mw->showMaximized();
+                }
+                e->accept();
+                return;
+            }
+            if (QWindow *win = window() ? window()->windowHandle() : nullptr)
+                win->startSystemMove();
+            e->accept();
+            return;
+        }
         QTabBar::mousePressEvent(e);
+    }
+
+    void mouseDoubleClickEvent(QMouseEvent *e) override
+    {
+        if (e->button() == Qt::LeftButton && tabAt(e->pos()) < 0) {
+            // Also honor Qt's double-click event when the platform delivers it.
+            m_lastCaptionClick = 0;
+            if (QMainWindow *mw = qobject_cast<QMainWindow *>(window())) {
+                if (mw->isMaximized()) mw->showNormal();
+                else mw->showMaximized();
+            }
+            e->accept();
+            return;
+        }
+        QTabBar::mouseDoubleClickEvent(e);
     }
 
 private:
     int m_hover = -1;
+    qint64 m_lastCaptionClick = 0;
+    QPoint m_lastCaptionPos;
 };
 
 class KHtmlLiteWindow : public QMainWindow
@@ -1749,7 +1794,8 @@ public:
         connect(m_fwd, &QPushButton::clicked, this, &KHtmlLiteWindow::goForward);
         connect(m_reload, &QPushButton::clicked, this, [this] {
             TabPage *pg = currentPage();
-            if (pg && pg->render && pg->render->isRunning()) pg->render->reload();
+            if (pg && pg->crashWidget) retryCrashedTab(pg);
+            else if (pg && pg->render && pg->render->isRunning()) pg->render->reload();
             else if (pg && pg->suspended) resumeTab(pg);
         });
         connect(m_addr, &QLineEdit::returnPressed, this, &KHtmlLiteWindow::onAddressEntered);
@@ -1862,7 +1908,7 @@ public:
         msg->setStyleSheet(QStringLiteral("color:#666;font-size:14px;"));
         QPushButton *retry = new QPushButton(QStringLiteral("重新加载"), w);
         retry->setFixedWidth(100);
-        connect(retry, &QPushButton::clicked, this, [this, pg]() { resumeTab(pg); });
+        connect(retry, &QPushButton::clicked, this, [this, pg]() { retryCrashedTab(pg); });
         lay->addWidget(icon);
         lay->addWidget(msg);
         lay->addWidget(retry, 0, Qt::AlignCenter);
@@ -1888,6 +1934,60 @@ public:
             // Logical (CSS px) viewport: RenderTab::resize attaches the dpr.
             pg->render->resize(s.width(), s.height());
         });
+    }
+
+    // Drop a renderer without deleting it synchronously from its own
+    // crashed()/finished() signal.  terminate() disconnects the QProcess
+    // signals and kills the process; deleteLater keeps the QObject alive until
+    // the current signal emission has unwound.
+    void dropRenderer(TabPage *pg) {
+        if (!pg || !pg->render) return;
+        RenderTab *old = pg->render;
+        pg->render = nullptr;
+        old->terminate();
+        old->deleteLater();
+    }
+
+    // Bug 1: a crashed tab is NOT a suspended tab.  resumeTab() intentionally
+    // refuses !suspended tabs, so the crash widget must use this separate path.
+    // It replaces the crash placeholder with a fresh renderer at the same tab
+    // index, restores the current URL, and re-enables JS (a manual retry is a
+    // new user action, not the one-shot automatic JS-disabled retry).
+    void retryCrashedTab(TabPage *pg) {
+        if (!pg || pg->suspended) return;
+        const int idx = m_pages.indexOf(pg);
+        if (idx < 0) return;
+        // A new renderer is already starting: ignore duplicate clicks/stale
+        // signals from the old crash widget.
+        if (pg->render && pg->render->isRunning()) return;
+        const bool wasCurrent = (currentPage() == pg);
+        QWidget *oldWidget = pg->crashWidget;
+        pg->crashWidget = nullptr;
+        dropRenderer(pg);
+        const QUrl url = pg->current;
+        QString title = pg->savedTitle;
+        if (title.isEmpty()) title = pageTabTitle(idx);
+        if (title.isEmpty()) title = url.host();
+        // Crash count is kept >= 2 so the next crash shows the error page again
+        // instead of entering another automatic restart loop; JS is enabled for
+        // this manual attempt.
+        pg->jsDisabled = false;
+        if (pg->crashCount < 2) pg->crashCount = 2;
+        startRenderer(pg, url);
+        QWidget *newWidget = pg->render && pg->render->container()
+                ? pg->render->container() : new QWidget;
+        blockPageTabSignals(true);
+        removePageTab(idx);
+        insertPageTab(idx, newWidget, title);
+        blockPageTabSignals(false);
+        if (oldWidget) oldWidget->deleteLater();
+        if (wasCurrent) {
+            selectPageTab(idx);
+            m_addr->setText(url.toString());
+            updateNavButtons();
+        } else {
+            syncChrome();
+        }
     }
 
     void startRenderer(TabPage *pg, const QUrl &url) {
@@ -1930,24 +2030,51 @@ public:
         connect(pg->render, &RenderTab::crashed, this, [this, pg]() {
             const int idx = m_pages.indexOf(pg);
             if (idx < 0) return;
+            // Capture before detaching the renderer; also the tab may be in the
+            // background, so preserve selection exactly as it was.
+            const bool wasCurrent = (currentPage() == pg);
+            const QString title = pg->render ? pg->render->title() : QString();
+            QWidget *oldWidget = pg->render ? pg->render->container() : nullptr;
+            dropRenderer(pg);
             pg->crashCount++;
-            // Auto-recovery: first crash → retry with JS disabled (most
-            // modern-site crashes come from page script; without JS the
-            // page degrades gracefully). Second crash → show crash UI.
+            // One automatic retry only (first crash), with JS disabled.  The
+            // retry is deliberately bounded: a second crash shows the page UI
+            // and only a manual click can try again.
             if (pg->crashCount == 1 && !pg->jsDisabled) {
                 pg->jsDisabled = true;
-                if (pg->render) { delete pg->render; pg->render = nullptr; }
+                if (!title.isEmpty()) pg->savedTitle = title;
                 startRenderer(pg, pg->current);
+                QWidget *newWidget = pg->render && pg->render->container()
+                        ? pg->render->container() : new QWidget;
+                blockPageTabSignals(true);
                 removePageTab(idx);
-                insertPageTab(idx, pg->render->container(), pg->savedTitle);
-                selectPageTab(idx);
+                insertPageTab(idx, newWidget, pg->savedTitle);
+                blockPageTabSignals(false);
+                if (oldWidget) oldWidget->deleteLater();
+                if (wasCurrent) selectPageTab(idx);
+                else syncChrome();
                 return;
             }
-            if (pg->crashWidget) delete pg->crashWidget;
+            if (pg->crashWidget) {
+                QWidget *oldCrash = pg->crashWidget;
+                pg->crashWidget = nullptr;
+                oldCrash->deleteLater();
+            }
+            if (!title.isEmpty()) pg->savedTitle = title;
             pg->crashWidget = makeCrashWidget(pg);
+            blockPageTabSignals(true);
             removePageTab(idx);
-            insertPageTab(idx, pg->crashWidget, pg->render ? pg->render->title() : QStringLiteral("已崩溃"));
+            insertPageTab(idx, pg->crashWidget,
+                          title.isEmpty() ? QStringLiteral("已崩溃") : title);
+            blockPageTabSignals(false);
+            if (oldWidget) oldWidget->deleteLater();
             setPageTabTitle(idx, QStringLiteral("已崩溃"));
+            if (wasCurrent) {
+                selectPageTab(idx);
+                setWindowTitle(QStringLiteral("已崩溃 - KHtmlLite"));
+            } else {
+                syncChrome();
+            }
         });
         connect(pg->render, &RenderTab::openNewTab, this, [this](const QUrl &u) { addTab(u); });
         // A page surface was resized: coalesce through the existing single-shot
@@ -2066,6 +2193,7 @@ protected:
                 if (right) { *result = HTRIGHT; return true; }
                 if (top) { *result = HTTOP; return true; }
                 if (bottom) { *result = HTBOTTOM; return true; }
+
                 break;
             }
                 break;

@@ -1218,6 +1218,47 @@ INCONCLUSIVE、或退出码 0 但输出里出现判定形 FAIL 令牌，都算�
 - 目标探针：navigation_probe / scroll_direction_probe / browser_click_probe / bg_smoke / engine_semantics_probe / iframe_crash_probe 全 PASS。
 - 全量回归（2026-10-28 15:04→15:43）：**`failed: none`**（20 项：19 PASS + `bing_ghost_check` INCONCLUSIVE）。关键：iframe_crash_probe 5.7s PASS、bg_smoke 3.6s PASS、tombstone_probe 623.1s PASS、scroll_smoke 602s PASS、resize_probe 601.5s PASS、engine_semantics 181.8s PASS、navigation_probe 18.6s PASS、scroll_direction 7.1s PASS、dwm 21.1s PASS、tile_protocol 138.6s PASS。
 
+## 5aj. 崩溃恢复按钮 + 无边框窗口拖动（2026-10-28）
+
+修改前状态：HEAD `fe75ee3`（上一轮 engine 崩溃修复），工作区干净；portable 仍是旧二进制（browser/renderer 02:10、libKF5KHtml 19:36），build/host 是 14:55 的新构建。portable 的 17:25 crashlog 是旧 DLL 产生的，不能用来判断这两项 UI 修复。
+
+### Bug 1：崩溃页“重新加载”无效
+证据链（`src/host/khtml_browser.cpp`）：
+- `makeCrashWidget()` 的按钮直接 `connect(..., [this,pg]{ resumeTab(pg); })`；
+- `resumeTab()` 第一行 `if (!pg || !pg->suspended) return;`；
+- 崩溃路径只设置 `crashWidget`，从未设置 `suspended`，所以点击必然空操作。
+- 另有两个隐患：崩溃 handler 在 `RenderTab::crashed`（由 `RenderTab::onFinished` 直接 emit）信号内同步 `delete pg->render`；且手动重试没有重复启动保护/JS 策略重置/标签索引与选中恢复。
+
+修复（最小、分离两类恢复）：
+- 新增 `dropRenderer(pg)`：先把 `pg->render` 置空，`terminate()` 断开 QProcess 并杀进程，`deleteLater()` 延迟删除，避免在 sender 自身信号内析构。
+- 新增 `retryCrashedTab(pg)`：仅用于 crashed 标签；`suspended` 标签仍走 `resumeTab()`。
+  - 校验 `m_pages.indexOf(pg)`、`pg->suspended`，若新 renderer 已在运行则直接返回（双击/陈旧信号保护）；
+  - 清理旧 renderer 与 crashWidget（`deleteLater`，不删除正在处理点击的按钮）；
+  - `startRenderer(pg, pg->current)` 重新建进程 + IPC；同索引 remove/insert 标签页（blockPageTabSignals），恢复原选中态和地址栏；
+  - 手动重试 `jsDisabled=false` 且 `crashCount>=2`：JS 恢复启用；后续再崩只显示错误页，不再自动重启。
+- crashWidget 按钮与工具栏 reload 按钮都改走 `retryCrashedTab()`；首次自动恢复仍只有一次，JS 禁用仅用于这一次自动重试。
+- 崩溃/自动恢复/手动重试的标签替换统一 block signals，避免 `currentChanged` 重入导致索引错乱；崩溃页显示时选中标签的窗口标题改为“已崩溃 - KHtmlLite”。
+
+### Bug 2：窗口不能拖动
+证据：
+- 标题栏空白区实际是 stretch 填充的 `SafariTabBar`（QTabBar）子控件；`DragStrip` 只有在自身背景区域才收到 mouse press。
+- 实测（真实 SendInput 鼠标）从空白标题栏拖动：窗口 rect 完全不变 (delta 0,0)，双击也不最大化；说明事件被 QTabBar 吞掉，父级 `DragStrip::startSystemMove()` 未执行。
+- 通过向窗口发送 `WM_NCHITTEST` 验证空白区坐标属于 tab bar；直接返回 HTCAPTION 的实验在本 Qt frameless 窗口上 DefWindowProc 并未实际移动窗口，因此改用 Qt 层机制。
+
+修复：
+- 在 `SafariTabBar::mousePressEvent` 中，仅当 `tabAt(pos)<0`（标签栏空白、非标签/关闭按钮）且左键时调用 `window()->windowHandle()->startSystemMove()`；
+- 同一空白区手工双击检测（`QApplication::doubleClickInterval()` + 距离阈值）切换最大化/还原；另保留 `mouseDoubleClickEvent`；标签本体/关闭按钮仍走原 QTabBar 逻辑。
+- 不改工具栏/地址栏/按钮的命中逻辑，不把整个工具栏变成拖动区。
+
+### 已验证（本机 Windows GUI，真实 SendInput）
+- 崩溃恢复：正常加载 → 杀 renderer → **首次自动恢复**（新 renderer、URL 重新请求）→ 再杀 → 崩溃页 → 点击“重新加载” → 新 renderer 启动、请求增加、标题恢复；再杀 → 工具栏 reload 重试同样成功。
+- 多标签：后台标签崩溃时当前标签不变；切换回后页面已恢复；关闭崩溃标签后其他标签保留；连续崩溃不会无限自动重启（第二次只显示错误页）。
+- 手动重试后 renderer 命令行为 JS enabled（`--disable-js` 不存在）；自动恢复那次带 `--disable-js`。
+- 窗口拖动：空白标题栏拖动后窗口 rect 改变；双击最大化/再双击还原；地址栏点击+输入导航、+ 新标签、标签切换、标签关闭按钮、双击标签不最大化均正常。
+- 已知预存在问题：交互式边框 resize 在旧 portable 与新构建上同样 width/height delta=0（`WM_NCHITTEST` 返回 HTLEFT/HTRIGHT 但 frameless 窗口未实际 resize）；本次未修改该路径，最大化/还原与 DPI 正常。不计入本次两个 Bug。
+- 地址栏在多标签下也验证：`target=_blank` 打开本地第二标签后，点击地址栏、Ctrl+A、输入新 URL、Enter，服务器收到 `/c.html` 且标题变为 page-c。此前一次“新标签 + Bing”用例 Enter 未生效是 Bing 页面焦点/测试时序问题，同一地址栏在本地第二标签可稳定工作。
+- 全量回归（2026-10-28 20:48→21:28）：**`failed: none`**（20 项：19 PASS + `bing_ghost_check` INCONCLUSIVE）。关键：`bg_smoke 5.8s PASS`、`resize_probe 601.8s PASS`、`scroll_smoke 603.1s PASS`、`tombstone_probe 623.5s PASS`、`engine_semantics_probe 205.7s PASS`、`navigation_probe 20.4s PASS`、`dwm_canvas_probe 21.3s PASS`、`tile_protocol_test 155s PASS`、`iframe_crash_probe 5.9s PASS`、`promise_microtask_probe 2.3s PASS`、`dpr_probe 31.4s PASS`（dpr=1.5）、`resize_ghost_probe 5.7s PASS`、`click/input/title/css_trim/polyfill/rg_diag4` 全 PASS。上一轮全量曾出现 `navigation_probe`/`dwm_canvas_probe` 各一次瞬时失败，单独重跑均 PASS，最终本轮无失败。
+
 ## 6. 正在/马上要做的
 A. ~~拆那 1.1s~~ **已完成**（字体枚举缓存 + 图标懒加载，构造 1.1s→~0.35s，TTFF 2.0→1.1s）。
    下一步同部位残账：渲染进程镜像加载+socket 连接 ~500ms（每次新标签都付），
