@@ -1507,8 +1507,10 @@ public:
         : QMainWindow(parent)
     {
         setWindowTitle(QStringLiteral("KHtmlLite"));
-        // Safari-15-style chrome: frameless window drawn by buildChrome().
-        setWindowFlag(Qt::FramelessWindowHint, true);
+        // Native Windows 11 frame and caption: real DWM slightly-rounded
+        // corners plus the system minimize/maximize/close buttons.  Do not
+        // set FramelessWindowHint; the client chrome begins below the native
+        // title bar, so the page origin inside the client is unchanged.
         // Default window size — LOGICAL (Qt/CSS) pixels.  Sizing follows the
         // desktop-browser convention: a fraction of the work area, capped at
         // a sane default DIP size (Chrome/Edge open ~1200x650 outer on this
@@ -1586,7 +1588,6 @@ public:
         connect(m_resizeTimer, &QTimer::timeout, this, &KHtmlLiteWindow::applyPendingResize);
         addTab(start.isEmpty() ? QUrl(QStringLiteral("https://cn.bing.com")) : start);
         STARTUP_MARK("first tab added");
-        QTimer::singleShot(0, this, [this] { applySquareWindowCorners(); });
         syncChrome();
     }
 
@@ -1598,22 +1599,8 @@ public:
         PageLoader::clearCache();
     }
 
-    // Windows 11: the classic Safari/Windows shell must have SQUARE outer corners.
-    // DWMWCP_DONOTROUND(1) overrides the OS default rounded frameless window.
-    void applySquareWindowCorners()
-    {
-        HMODULE dwm = LoadLibraryW(L"dwmapi.dll");
-        if (!dwm)
-            return;
-        typedef HRESULT (WINAPI *SetWindowAttr)(HWND, DWORD, LPCVOID, DWORD);
-        SetWindowAttr fn = reinterpret_cast<SetWindowAttr>(
-            GetProcAddress(dwm, "DwmSetWindowAttribute"));
-        if (fn) {
-            const int square = 1;   // DWMWCP_DONOTROUND
-            fn((HWND)winId(), 33   // DWMWA_WINDOW_CORNER_PREFERENCE
-               , &square, sizeof(square));
-        }
-    }
+    // Windows 11 draws the native slightly-rounded frame and caption for this
+    // top-level window.  No DWM corner override is applied.
 
     enum ChromeGlyph { GlyphBack, GlyphForward, GlyphReload, GlyphShare,
                        GlyphSidebar, GlyphPlus, GlyphSearch };
@@ -1719,11 +1706,6 @@ public:
             "  border-radius: 4px; padding: 0; }"
             "QToolButton#glyphBtn:hover { background: #e5e5e5; }"
             "QToolButton#glyphBtn:pressed { background: #dcdcdc; }"
-            "QToolButton#winBtn { border: none; background: transparent;"
-            "  border-radius: 0; padding: 0; }"
-            "QToolButton#winBtn:hover { background: #e2e2e2; }"
-            "QToolButton#winBtn:pressed { background: #d4d4d4; }"
-            "QToolButton#winClose:hover { background: #c42b1c; }"
             "QLineEdit#address { background: #ffffff; border: 1px solid #c9c9c9;"
             "  border-radius: 5px; padding: 1px 9px; color: #202020;"
             "  font-size: 12px; margin: 0 6px; selection-background-color: #b9d7f7; }"
@@ -1737,12 +1719,9 @@ public:
 
     void buildChrome()
     {
-        // Safari-15-like chrome with the WhiteSur-Monterey values:
-        //   tab strip 26 logical px: traffic lights, sidebar, rounded tabs, plus
-        //   toolbar  32 logical px: back/forward, rounded address pill,
-        //                           reload, share
-        // 26 + 32 = 58 logical = 87 physical px, so the page content origin
-        // stays (11, 87) and every existing regression coordinate is valid.
+        // Classic Safari-inspired client chrome under the native Windows 11
+        // title bar: 30 logical tab strip + 28 logical toolbar = 58 logical
+        // (87 physical at dpr=1.5), keeping the page origin at (11,87).
         QWidget *central = new QWidget(this);
         central->setObjectName(QStringLiteral("central"));
         QVBoxLayout *root = new QVBoxLayout(central);
@@ -1766,31 +1745,8 @@ public:
         m_newTabBtn = mkGlyphButton(strip, GlyphPlus);
         m_newTabBtn->setToolTip(QStringLiteral("新标签页"));
         ts->addWidget(m_newTabBtn);
-
-        // Windows-native-style caption controls at the top-right (not macOS
-        // red/yellow/green traffic lights).  They occupy only the far-right
-        // reserve; tabs/blank caption area/new-tab keep their own hit regions.
-        QWidget *winCtl = new QWidget(strip);
-        QHBoxLayout *wc = new QHBoxLayout(winCtl);
-        wc->setContentsMargins(0, 0, 0, 0);
-        wc->setSpacing(0);
-        auto mkCaption = [&](QStyle::StandardPixmap sp, const char *name,
-                             const QString &tip) {
-            QToolButton *b = new QToolButton(winCtl);
-            b->setObjectName(QString::fromLatin1(name));
-            b->setIcon(style()->standardIcon(sp));
-            b->setIconSize(QSize(10, 10));
-            b->setFixedSize(46, 30);
-            b->setAutoRaise(true);
-            b->setCursor(Qt::ArrowCursor);
-            b->setToolTip(tip);
-            wc->addWidget(b);
-            return b;
-        };
-        m_winMin = mkCaption(QStyle::SP_TitleBarMinButton, "winBtn", QStringLiteral("最小化"));
-        m_winMax = mkCaption(QStyle::SP_TitleBarMaxButton, "winBtn", QStringLiteral("最大化"));
-        m_winClose = mkCaption(QStyle::SP_TitleBarCloseButton, "winClose", QStringLiteral("关闭"));
-        ts->addWidget(winCtl);
+        // The minimize/maximize/close buttons are supplied by the native
+        // Windows 11 caption above this client area.
         root->addWidget(strip);
 
         DragStrip *nav = new DragStrip(central);
@@ -1830,11 +1786,6 @@ public:
         setCentralWidget(central);
         setStyleSheet(safariStyleSheet());
 
-        connect(m_winMin, &QToolButton::clicked, this, &QWidget::showMinimized);
-        connect(m_winMax, &QToolButton::clicked, this, [this]() {
-            if (isMaximized()) showNormal(); else showMaximized();
-        });
-        connect(m_winClose, &QToolButton::clicked, this, &QWidget::close);
         connect(m_shareBtn, &QPushButton::clicked, this, [this] {
             QApplication::clipboard()->setText(m_addr->text());
         });
@@ -2268,35 +2219,6 @@ protected:
         // a local window move — the renderer process is never touched.
     }
 
-    void ensureNativeResizeFrame() {
-        // Frameless visual shell, but native WS_THICKFRAME is required for
-        // reliable Windows edge/corner resizing (WM_NCHITTEST alone is not
-        // enough; DefWindowProc needs the sizing style).  Qt can clear the
-        // style on maximize/normal transitions, so re-apply it after a state
-        // change as well as on first show.
-        HWND hwnd = reinterpret_cast<HWND>(winId());
-        LONG_PTR style = GetWindowLongPtrW(hwnd, GWL_STYLE);
-        if (!(style & WS_THICKFRAME)) {
-            SetWindowLongPtrW(hwnd, GWL_STYLE, style | WS_THICKFRAME);
-            SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
-                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER
-                         | SWP_NOACTIVATE | SWP_FRAMECHANGED);
-        }
-    }
-
-    void showEvent(QShowEvent *event) override {
-        QMainWindow::showEvent(event);
-        ensureNativeResizeFrame();
-    }
-
-    void changeEvent(QEvent *event) override {
-        QMainWindow::changeEvent(event);
-        if (event->type() == QEvent::WindowStateChange
-                || event->type() == QEvent::Show) {
-            QTimer::singleShot(0, this, [this]() { ensureNativeResizeFrame(); });
-        }
-    }
-
     void closeEvent(QCloseEvent *event) override {
         // Non-blocking shutdown: kill every renderer and close immediately.
         // Renderer processes are terminated asynchronously; the OS reclaims
@@ -2324,40 +2246,6 @@ protected:
                 break;
             case WM_EXITSIZEMOVE:
                 endLiveResize();
-                break;
-            case WM_NCCALCSIZE:
-                // WS_THICKFRAME is needed for native edge resizing, but when
-                // maximized Windows otherwise reserves the invisible frame and
-                // reports a 1900x988 client instead of the full 1920x1008.
-                // Drop the non-client area for the maximized state only; the
-                // restored window keeps its normal client geometry.
-                if (msg->wParam == TRUE && IsZoomed(msg->hwnd)) {
-                    *result = 0;
-                    return true;
-                }
-                break;
-            case WM_NCHITTEST: {
-                // Frameless Safari chrome: resize through the window borders.
-                const int border = 6;
-                RECT r;
-                GetWindowRect((HWND)winId(), &r);
-                const int x = (int)(short)LOWORD(msg->lParam);
-                const int y = (int)(short)HIWORD(msg->lParam);
-                const bool left = x < r.left + border;
-                const bool right = x >= r.right - border;
-                const bool top = y < r.top + border;
-                const bool bottom = y >= r.bottom - border;
-                if (top && left) { *result = HTTOPLEFT; return true; }
-                if (top && right) { *result = HTTOPRIGHT; return true; }
-                if (bottom && left) { *result = HTBOTTOMLEFT; return true; }
-                if (bottom && right) { *result = HTBOTTOMRIGHT; return true; }
-                if (left) { *result = HTLEFT; return true; }
-                if (right) { *result = HTRIGHT; return true; }
-                if (top) { *result = HTTOP; return true; }
-                if (bottom) { *result = HTBOTTOM; return true; }
-
-                break;
-            }
                 break;
             default:
                 break;
@@ -2884,7 +2772,6 @@ protected:
     QTabBar *m_tabBar = nullptr;
     QStackedWidget *m_stack = nullptr;
     QWidget *m_tabStrip = nullptr;
-    QToolButton *m_winMin = nullptr, *m_winMax = nullptr, *m_winClose = nullptr;
     QToolButton *m_newTabBtn = nullptr;
     QPushButton *m_shareBtn = nullptr;
     QList<TabPage *> m_pages;

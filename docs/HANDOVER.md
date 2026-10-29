@@ -1294,21 +1294,23 @@ INCONCLUSIVE、或退出码 0 但输出里出现判定形 FAIL 令牌，都算�
 - 未清除 Cookie/登录/密码/书签/历史/站点持久存储。
 
 ### EXE 外壳改版（实际 `khtml_browser.exe` 主窗口）
-- 参考经典 Safari 4/5 轮廓，而非 Safari 14/15 Liquid Glass：标签并入标题条、右上 Windows 原生风格最小化/最大化/关闭（删除 macOS 红黄绿）、统一工具栏、地址/搜索一体栏（内嵌放大镜）。
+- **2026-10-29 原生窗口更新（用户明确要求）**：改用 **Windows 11 原生非客户区**——真实系统轻微圆角边框、原生最小化/最大化/关闭按钮、原生拖动/Aero Snap/边缘缩放；删除自定义 frameless caption、DWM 方角覆盖、自定义 caption 按钮与 `WM_NCCALCSIZE`/`WM_NCHITTEST` 边框补丁。客户端标签条/工具栏保留，窗口客户区内的页面原点仍是 (11,87)。
+- 参考经典 Safari 4/5 轮廓，而非 Safari 14/15 Liquid Glass：标签并入客户区顶部、统一工具栏、地址/搜索一体栏（内嵌放大镜）。
 - 几何：**30 逻辑标签条 + 28 逻辑工具栏 = 58 逻辑 = 87 物理**，页面原点保持 (11,87)；地址栏中心 y=66；back/fwd 仍覆盖 (34,66)/(68,66)；tab 最小宽度 144，保证 tombstone 的 (170,22) 命中标题而不是关闭热区。
 - `SafariTabBar`：选中白底、未选中浅灰、4px 顶部圆角、单色标题、关闭 X hover/选中；去掉浮动胶囊与 8px 大圆角。
 - 工具栏：浅中性灰、1px 分隔线、单色线性图标；地址栏白底 1px 边框 5px 圆角 + 搜索图标；reload 保留；share 改为“复制链接”实际动作（非 no-op）。
-- 外框：DWM `DWMWCP_DONOTROUND(1)` 方角；保留 `Qt::FramelessWindowHint`；标题条空白区拖动/双击最大化由 `SafariTabBar` 处理，Windows 标题按钮只占右上预留区。
-- 边缘缩放：注入 `WS_THICKFRAME`（show/状态变化后重加，Qt 可能清 style）；`WM_NCCALCSIZE` 仅在最大化时返回 0，恢复最大化客户区 1920×1008；修正 `WM_EXITSIZEMOVE` 缺 `break;` 贯穿问题。实测：拖动标题条移动、双击最大化/还原、边缘缩放（宽度变化）、caption 最小化、最大化按钮、tab 点击（不误关）均工作。
+- 原生窗口：默认 DWM 轻微圆角（不设 `DWMWCP_DONOTROUND`）；不设置 `Qt::FramelessWindowHint`；系统 caption 提供 native min/max/close，`WS_CAPTION/WS_THICKFRAME/WS_SYSMENU` 及 native edge resize 由 Windows 管理。客户端空白标签条拖动/双击仍保留为辅助交互。
+- 实测：原生标题栏拖动、标题栏双击最大化/还原、原生最大化按钮、原生 caption 最小化、原生右边框慢速缩放（宽度变化）、客户区页面原点 (11,87) 均工作；原生最大化客户区为 1920×974（非无边框时的 1008，属原生非客户区行为）。
 - 未伪造下载/设置：当前 shell 实际没有下载管理器/设置页；保留已有清除缓存/Ctrl+Shift+Del、F11、前进后退、刷新、地址导航、标签新建/关闭/切换/拖动、右键菜单。死 sidebar 删除；share 改为真实复制链接。
 - 未改 renderer 页面内容、tile/damage 协议、KHTML/QuickJS 网络代码。
 
 ### 本机验证
 - [res] 实测：RAM 85-90% Warning，browser ~63-112MB，renderer ~51-234MB；GPU DXGI available，NVIDIA GeForce 940MX LOCAL budget 1701MB usage 0；采样跟随 2s；无崩溃。DXGI 查询失败/真实 GPU 压力/真实 RAM 临界未能人为制造（标记未验证）。
-- 崩溃恢复：`tests/crash_recovery_probe.py` 连续两次 **24/24 PASS**（45.5s/46.5s）：auto1 JS-off(StaticTitle/蓝页) → auto2 cache-clear JS-on(绿页/JsTitle) → crash3 UI；手动/连点/缓存/Cookie/清理均 PASS；crashlog/dmp 不变。--disable-js 直连 renderer 也验证 StaticTitle vs JsTitle。
-- UI：最终截图 `docs/assets/classic_safari_shell.png`；空白标签条拖动、双击最大化/还原、caption 最小化/最大化、边缘缩放（宽度变化）、地址栏/标签/按钮交互、DPI 1.5 均通过；标签最小宽度 144 使 tombstone 点击安全。
-- UI/回归测试适配：`tests/tombstone_probe.py` 的恢复点击改为先点 tab 左侧 (80,22)（新 shell tab0 起点 22 物理、min 144 逻辑），并打印 `[res]` 校准行；`tests/tile_protocol_test.py` 的静态不变量从旧 `loadPct >= 93/85/70` 改为检查 ResourceManager 集成标记。
-- 全量回归（2026-10-29 00:03→00:42）：**`failed: none`**（20 项：19 PASS + `bing_ghost_check` INCONCLUSIVE）。关键：`bg_smoke 5s PASS`、`resize_probe 601.8s PASS`（max client 1920x1008）、`scroll_smoke 602.2s PASS`、`tile_protocol 139.6s PASS`、`tombstone_probe 623.2s PASS`、`engine_semantics 170.6s PASS`、`dwm_canvas 20.5s PASS`、`iframe_crash 5.7s PASS`、`navigation 18.1s PASS`、`scroll_direction`/`click`/`dpr`/`input`/`resize_ghost`/`promise`/`css_trim`/`polyfill`/`rg_diag4` 全 PASS。
+- 崩溃恢复：`tests/crash_recovery_probe.py` 在旧自定义框构建连续两次 **24/24 PASS**（45.5s/46.5s）；原生 Win11 框最终构建再次 **24/24 PASS**（48.4s）：auto1 JS-off(StaticTitle/蓝页) → auto2 cache-clear JS-on(绿页/JsTitle) → crash3 UI；手动/连点/缓存/Cookie/清理均 PASS；crashlog/dmp 不变。--disable-js 直连 renderer 也验证 StaticTitle vs JsTitle。
+- UI：最终截图 `docs/assets/native_win11_shell.png`；原生 Windows 11 标题栏（轻微圆角、原生 min/max/close）已接管边框；原生标题栏拖动、双击最大化/还原、原生 caption 最小化/最大化、原生边缘慢速缩放（宽度变化）、地址栏/标签/按钮交互、DPI 1.5 均通过；标签最小宽度 144 使 tombstone 点击安全。
+- UI/回归测试适配：`tests/tombstone_probe.py` 的恢复点击改为先点 tab 左侧 (80,22)（新 shell tab0 起点 22 物理、min 144 逻辑），并打印 `[res]` 校准行；`tests/tile_protocol_test.py` 的静态不变量从旧 `loadPct >= 93/85/70` 改为检查 ResourceManager 集成标记；`tests/navigation_probe.py` 对原生非客户区创建后的首帧增加重试窗口，避免 "initial page not white" 瞬时误报。
+- 全量回归（2026-10-29 08:11→08:49）：**`failed: none`**（20 项：19 PASS + `bing_ghost_check` INCONCLUSIVE）。关键：`bg_smoke 3.7s PASS`、`resize_probe 601.7s PASS`（原生 max client 1920×974）、`scroll_smoke 602.4s PASS`、`tile_protocol 141.4s PASS`、`tombstone_probe 623.1s PASS`、`engine_semantics 182.1s PASS`、`dwm_canvas 20.6s PASS`、`iframe_crash 5.8s PASS`、`navigation 18s PASS`、`scroll_direction`/`click`/`dpr`/`input`/`resize_ghost`/`promise`/`css_trim`/`polyfill`/`rg_diag4` 全 PASS。
+- Portable: `release/KHtmlLite-portable` 已同步原生框构建（browser 1,077,178B / 08:11:05；三件套 SHA256 与 build/host 相等），`portable_smoke` PASS；旧自定义框二进制保留在 `release/KHtmlLite-portable-old-customframe-20261029`，更早的 `release/KHtmlLite-portable-old-fc46ab7` 与 14 个 dmp/crashlog 未动。
 
 ## 6. 正在/马上要做的
 A. ~~拆那 1.1s~~ **已完成**（字体枚举缓存 + 图标懒加载，构造 1.1s→~0.35s，TTFF 2.0→1.1s）。

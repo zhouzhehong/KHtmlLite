@@ -196,7 +196,16 @@ def main():
         s = Session("/a.html")
         try:
             check("initial page A", s.wait("A|ready", 10))
-            check("initial page not white", non_white(s.shot(shot)))
+            # Native Win11 frame creation can deliver the title one beat before
+            # the first DWM-composed client frame; retry the pixel gate instead
+            # of treating that as a white-page failure.
+            initial_painted = False
+            for _ in range(12):
+                if non_white(s.shot(shot)):
+                    initial_painted = True
+                    break
+                time.sleep(0.25)
+            check("initial page not white", initial_painted)
             click(s.hwnd, *LINKS["b"])
             check("link navigation to page B", s.wait("B|ready"))
             check("page B not white", non_white(s.shot(shot)))
