@@ -1307,10 +1307,42 @@ INCONCLUSIVE、或退出码 0 但输出里出现判定形 FAIL 令牌，都算�
 ### 本机验证
 - [res] 实测：RAM 85-90% Warning，browser ~63-112MB，renderer ~51-234MB；GPU DXGI available，NVIDIA GeForce 940MX LOCAL budget 1701MB usage 0；采样跟随 2s；无崩溃。DXGI 查询失败/真实 GPU 压力/真实 RAM 临界未能人为制造（标记未验证）。
 - 崩溃恢复：`tests/crash_recovery_probe.py` 在旧自定义框构建连续两次 **24/24 PASS**（45.5s/46.5s）；原生 Win11 框最终构建再次 **24/24 PASS**（48.4s）：auto1 JS-off(StaticTitle/蓝页) → auto2 cache-clear JS-on(绿页/JsTitle) → crash3 UI；手动/连点/缓存/Cookie/清理均 PASS；crashlog/dmp 不变。--disable-js 直连 renderer 也验证 StaticTitle vs JsTitle。
-- UI：最终截图 `docs/assets/native_win11_shell.png`；原生 Windows 11 标题栏（轻微圆角、原生 min/max/close）已接管边框；原生标题栏拖动、双击最大化/还原、原生 caption 最小化/最大化、原生边缘慢速缩放（宽度变化）、地址栏/标签/按钮交互、DPI 1.5 均通过；标签最小宽度 144 使 tombstone 点击安全。
+- UI：最终截图 `docs/assets/native_title_hidden.png`（标题文字已隐藏）；原生 Windows 11 标题栏（轻微圆角、原生 min/max/close）已接管边框；原生标题栏拖动、双击最大化/还原、原生 caption 最小化/最大化/还原、原生边缘慢速缩放（宽度变化）、地址栏/标签/按钮交互、DPI 1.5 均通过；标签最小宽度 144 使 tombstone 点击安全。
 - UI/回归测试适配：`tests/tombstone_probe.py` 的恢复点击改为先点 tab 左侧 (80,22)（新 shell tab0 起点 22 物理、min 144 逻辑），并打印 `[res]` 校准行；`tests/tile_protocol_test.py` 的静态不变量从旧 `loadPct >= 93/85/70` 改为检查 ResourceManager 集成标记；`tests/navigation_probe.py` 对原生非客户区创建后的首帧增加重试窗口，避免 "initial page not white" 瞬时误报。
 - 全量回归（2026-10-29 08:11→08:49）：**`failed: none`**（20 项：19 PASS + `bing_ghost_check` INCONCLUSIVE）。关键：`bg_smoke 3.7s PASS`、`resize_probe 601.7s PASS`（原生 max client 1920×974）、`scroll_smoke 602.4s PASS`、`tile_protocol 141.4s PASS`、`tombstone_probe 623.1s PASS`、`engine_semantics 182.1s PASS`、`dwm_canvas 20.6s PASS`、`iframe_crash 5.8s PASS`、`navigation 18s PASS`、`scroll_direction`/`click`/`dpr`/`input`/`resize_ghost`/`promise`/`css_trim`/`polyfill`/`rg_diag4` 全 PASS。
 - Portable: `release/KHtmlLite-portable` 已同步原生框构建（browser 1,077,178B / 08:11:05；三件套 SHA256 与 build/host 相等），`portable_smoke` PASS；旧自定义框二进制保留在 `release/KHtmlLite-portable-old-customframe-20261029`，更早的 `release/KHtmlLite-portable-old-fc46ab7` 与 14 个 dmp/crashlog 未动。
+
+## 5al. 隐藏 Windows 11 原生标题栏文字（2026-10-29）
+
+### 目标与现状
+- 目标：隐藏原生标题栏左上角的应用/页面文字 **和图标**，同时保留真实 Win11 非客户区、原生最小化/最大化(还原)/关闭、拖动、Aero Snap、边缘缩放、DPI 和任务栏/Alt+Tab 行为；不恢复 macOS 红黄绿，不改客户端 Safari 风格标签/工具栏。
+- 当前 `KHtmlLiteWindow` 是普通 `QMainWindow`（无 `FramelessWindowHint`/自定义 flags），Qt 5.15 使用原生 `WS_CAPTION|WS_THICKFRAME`；所有标题写入仍是 `KHtmlLite`/`<page> - KHtmlLite` 等（构造、titleChanged、恢复、崩溃、syncChrome）。
+
+### 最小实验结论
+- Qt `setWindowTitle("")` **不能**可靠清空原生标题：Qt `QPlatformWindow::formatWindowTitle` 在空标题时回退 `applicationName()`（当前为 `KHtmlLite`）；若直接 `SetWindowText("")` 虽能清空文字，但会破坏 Alt+Tab/无障碍窗口名，且下一次 titleChanged 会恢复。
+- 无 WS_*/WS_EX_* 样式位可单独隐藏文字而保留原生按钮；WM_NCPAINT/WM_NCACTIVATE/SetWindowTheme 均不能可靠隐藏 DWM caption text。
+- **采用**：Windows 11 `DWMWA_TEXT_COLOR`（36）和 `DWMWA_CAPTION_COLOR`（35）成对设成同一背景色，让 DWM 把文字画成背景色；原生图标/按钮/边框/交互完全不动，`GetWindowText` 保持完整，因此任务栏/Alt+Tab 不受影响。实测 DWM 文字颜色生效、按钮像素不变；成对设置可消除仅设 36 时 Mica 渐变造成的极淡残影。
+- **图标**：创建 16×16 单色全透明 `HICON`，仅设置 `WM_SETICON(ICON_SMALL)`。原生标题栏使用 small icon，因此 caption 图标消失；`ICON_BIG`（任务栏/Alt+Tab）保持原 app 图标。实测标题栏完全空白、任务栏 UIA 按钮仍为 `khtml_browser.exe - 1 个运行窗口`。
+- 启动时先以 light fallback `#F3F3F3` 成对设置 35/36 并设置透明小图标，保证第一时间不闪文字/图标；窗口前台后采样真实 DWM/Mica 背景，继续成对 35/36 并重设透明小图标。
+
+### 采样性能回归（已修复）
+- 第一版用逐点 `GetPixel` 扫描标题栏约 15,000 像素，在 UI 线程造成 2s+ 阻塞；Windows 事件日志出现 `khtml_browser.exe` AppHang/Not Responding（Event ID 1002），且窗口控制命中异常。
+- 已改为 **一次 BitBlt 到 32bpp DIB section** 后内存统计主色；15 秒空闲响应性探测 `SendMessageTimeout(WM_NULL)` 全部通过，`IsHungAppWindow=False`。这次卡死是 caption 背景采样实现导致的真实回归，不是 KHTML/renderer 0xC0000005。
+
+### 验证
+- `GetWindowText` 仍为 `Experiment Page - KHtmlLite`；任务栏 UIA 按钮仍为 `khtml_browser.exe - 1 个运行窗口`；标题栏文字/图标区域（排除圆角和按钮）均已清空，原生按钮暗像素保留。
+- 原生 min 点击后 `GetWindowPlacement.showCmd=2`；max=3（client 1920×974）；还原点击=1；标题栏拖动 delta 非零；原生右边框慢速拖拽宽度变化；全程响应。
+- 页面 title 更新（模拟 `Second Page - KHtmlLite`）后标题文字仍不可见；原生按钮/图标保留（图标区域已透明）。
+- 全量回归（2026-10-29 14:00:37→14:39:17）：**`failed: none`**（20 项：19 PASS + `bing_ghost_check` INCONCLUSIVE）。`bg_smoke 4.5s`、`resize_probe 601.5s`（原生 max client 1920×974）、`scroll_smoke 602.3s`、`tile_protocol 139s`、`tombstone_probe 623.2s`、`engine_semantics 174.3s`、`navigation 18.1s` 全 PASS。
+- `crash_recovery_probe.py` 最终构建 **24/24 PASS**（102.1s）；crash log 9321B、14 个 dmp 未动。
+- 修复后空闲 12s 响应性探测全部响应（`IsHungAppWindow=False`）；13:45 之后 Windows Application Hang/Error 日志无新增 `khtml_browser` 记录。
+- Portable: `release/KHtmlLite-portable` 已同步最终构建（browser 1,089,453B / 2026-10-29 13:59:29；三件套 SHA256 与 build/host 相等），`portable_smoke` PASS（anchor 11,87）；大图标/任务栏按钮名保持 `khtml_browser.exe - 1 个运行窗口`。
+
+### 限制 / 未验证
+- `DWMWA_TEXT_COLOR`/`DWMWA_CAPTION_COLOR` 需要 Windows 11 build 22000+；Win10/经典主题或无 DWM 环境不做架构降级，保留原生文字（避免无边框/自绘 caption）。
+- 隐藏的是**全部** caption 文字，无法只隐藏 app name 后缀而保留 page title；页面标题仍显示在标签、任务栏、Alt+Tab。标题栏背景被固定为单一 native caption 颜色（失去 active/inactive Mica 细微变化）。
+- 高对比度/强制颜色、深色主题运行期切换、Mica 渐变下的不完全匹配未验证；标题栏图标用透明 small icon 移除，任务栏/Alt+Tab 大图标保留。
+- 该方案不改 `WS_CAPTION`/窗口样式/DPI，故不改变窗口拖动、缩放、任务栏存在性；全量回归结果见本节上方。
 
 ## 6. 正在/马上要做的
 A. ~~拆那 1.1s~~ **已完成**（字体枚举缓存 + 图标懒加载，构造 1.1s→~0.35s，TTFF 2.0→1.1s）。

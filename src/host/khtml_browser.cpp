@@ -14,6 +14,7 @@
 #include <QLineEdit>
 #include <QClipboard>
 #include <QPushButton>
+#include <cstring>
 #include <QToolButton>
 #include <QTabWidget>
 #include <QTabBar>
@@ -1588,7 +1589,23 @@ public:
         connect(m_resizeTimer, &QTimer::timeout, this, &KHtmlLiteWindow::applyPendingResize);
         addTab(start.isEmpty() ? QUrl(QStringLiteral("https://cn.bing.com")) : start);
         STARTUP_MARK("first tab added");
+        STARTUP_MARK("first tab added");
         syncChrome();
+        // Apply the caption-text colour before show() so the title text never
+        // flashes on screen.  At construction the window is not foreground, so
+        // this first pass uses the theme fallback; retry/refine after show when
+        // the real DWM/Mica background can be sampled.
+        hideNativeCaptionText();
+        hideNativeCaptionIcon();
+        QTimer::singleShot(500, this, [this]() {
+            if (!m_captionTextHidden) hideNativeCaptionText();
+            refineNativeCaptionText();
+            hideNativeCaptionIcon();
+        });
+        QTimer::singleShot(1000, this, [this]() {
+            refineNativeCaptionText();
+            hideNativeCaptionIcon();
+        });
     }
 
     // Clear the engine's page-cache mirror on demand.  Settings UIs should call
@@ -1600,7 +1617,210 @@ public:
     }
 
     // Windows 11 draws the native slightly-rounded frame and caption for this
-    // top-level window.  No DWM corner override is applied.
+    // top-level window.  The only supported way to remove the caption *text*
+    // while keeping the real WM_NCPAINT buttons/frame is DWMWA_TEXT_COLOR
+    // (Windows 11): draw the text in the actual caption-background colour.
+    // Do not set an empty window title: GetWindowText is also the Alt+Tab /
+    // taskbar identity and all page-title/recovery/crash UI writes rely on it.
+    static COLORREF fallbackCaptionBackground()
+    {
+        // This Qt shell is a light UI and does not opt into
+        // DWMWA_USE_IMMERSIVE_DARK_MODE, so its native Win32 caption is the
+        // light default even when Windows apps are configured dark.  Use the
+        // light native caption colour; refine with the sampled DWM/Mica value
+        // once the window is foreground.
+        return RGB(243, 243, 243);
+    }
+
+    static bool sampleCaptionBackground(HWND hwnd, COLORREF &out)
+    {
+        RECT wr {};
+        POINT clientTop { 0, 0 };
+        if (!GetWindowRect(hwnd, &wr) || !ClientToScreen(hwnd, &clientTop))
+            return false;
+        // Native caption = non-client strip above the client area.  Avoid the
+        // app icon/title text at the far left and the native buttons at right.
+        const int left = wr.left + 80;
+        const int right = wr.right - 220;
+        const int top = wr.top + 3;
+        const int bottom = clientTop.y - 2;
+        if (right - left < 80 || bottom - top < 4)
+            return false;
+
+        const int sw = right - left;
+        const int sh = bottom - top;
+        if (sw < 80 || sh < 4)
+            return false;
+
+        // One BitBlt into a DIB section.  Do NOT call GetPixel per sample
+        // point: a single caption strip is ~15k pixels, and thousands of
+        // synchronous desktop GetPixel calls blocked the UI thread long
+        // enough for Windows to mark the browser "Not Responding".
+        HDC screenDc = GetDC(nullptr);
+        if (!screenDc)
+            return false;
+        BITMAPINFO bmi {};
+        bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+        bmi.bmiHeader.biWidth = sw;
+        bmi.bmiHeader.biHeight = -sh;   // top-down
+        bmi.bmiHeader.biPlanes = 1;
+        bmi.bmiHeader.biBitCount = 32;
+        bmi.bmiHeader.biCompression = BI_RGB;
+        void *bits = nullptr;
+        HBITMAP bmp = CreateDIBSection(screenDc, &bmi, DIB_RGB_COLORS, &bits, nullptr, 0);
+        HDC memDc = CreateCompatibleDC(screenDc);
+        bool bltOk = false;
+        if (bmp && bits && memDc) {
+            HGDIOBJ old = SelectObject(memDc, bmp);
+            bltOk = BitBlt(memDc, 0, 0, sw, sh, screenDc, left, top, SRCCOPY) != FALSE;
+            SelectObject(memDc, old);
+        }
+        if (memDc)
+            DeleteDC(memDc);
+        ReleaseDC(nullptr, screenDc);
+        if (!bltOk || !bits) {
+            if (bmp)
+                DeleteObject(bmp);
+            return false;
+        }
+
+        struct Bin { unsigned long long n = 0, r = 0, g = 0, b = 0; };
+        Bin bins[16 * 16 * 16] = {};
+        unsigned long long total = 0;
+        const unsigned int *pixels = static_cast<const unsigned int *>(bits);
+        for (int y = 0; y < sh; y += 2) {
+            for (int x = 0; x < sw; x += 2) {
+                const unsigned int c = pixels[y * sw + x];   // BGRA in DIB
+                const int b = int(c & 0xFF), g = int((c >> 8) & 0xFF),
+                          r = int((c >> 16) & 0xFF);
+                Bin &bin = bins[((r >> 4) << 8) | ((g >> 4) << 4) | (b >> 4)];
+                bin.n++;
+                bin.r += r;
+                bin.g += g;
+                bin.b += b;
+                total++;
+            }
+        }
+        if (total < 100) {
+            if (bmp)
+                DeleteObject(bmp);
+            return false;
+        }
+        int best = 0;
+        for (int i = 1; i < 16 * 16 * 16; ++i) {
+            if (bins[i].n > bins[best].n)
+                best = i;
+        }
+        if (bins[best].n < total / 10) {
+            if (bmp)
+                DeleteObject(bmp);
+            return false;
+        }
+        out = RGB(static_cast<int>(bins[best].r / bins[best].n),
+                  static_cast<int>(bins[best].g / bins[best].n),
+                  static_cast<int>(bins[best].b / bins[best].n));
+        if (bmp)
+            DeleteObject(bmp);
+        return true;
+    }
+
+    void hideNativeCaptionText()
+    {
+        if (m_captionTextHidden)
+            return;
+        HWND hwnd = reinterpret_cast<HWND>(winId());
+        if (!hwnd)
+            return;
+
+        COLORREF bg = fallbackCaptionBackground();
+        bool sampled = false;
+        if (GetForegroundWindow() == hwnd && !IsIconic(hwnd))
+            sampled = sampleCaptionBackground(hwnd, bg);
+
+        HMODULE dwm = LoadLibraryW(L"dwmapi.dll");
+        if (!dwm)
+            return;
+        typedef HRESULT (WINAPI *SetWindowAttr)(HWND, DWORD, LPCVOID, DWORD);
+        SetWindowAttr fn = reinterpret_cast<SetWindowAttr>(
+            GetProcAddress(dwm, "DwmSetWindowAttribute"));
+        if (!fn) {
+            FreeLibrary(dwm);
+            return;
+        }
+        // Always lock the caption fill to the same colour as the text.  This
+        // is required for a truly invisible title (a text colour sampled from
+        // the Mica gradient can leave a faint ghost where the gradient
+        // differs), while native buttons/icons/frame and all hit-testing stay
+        // native.  It intentionally gives up the active/inactive Mica tint.
+        fn(hwnd, 35 /* DWMWA_CAPTION_COLOR */, &bg, sizeof(bg));
+        const HRESULT hr = fn(hwnd, 36 /* DWMWA_TEXT_COLOR */, &bg, sizeof(bg));
+        FreeLibrary(dwm);
+        if (SUCCEEDED(hr)) {
+            m_captionTextHidden = true;
+            m_captionColorSampled = sampled;
+            fprintf(stderr, "[ui] native caption text hidden color=#%02X%02X%02X sampled=%d\n",
+                    GetRValue(bg), GetGValue(bg), GetBValue(bg), sampled ? 1 : 0);
+        } else {
+            // Pre-Win11 / non-DWM caption: leave the native text untouched
+            // rather than changing the window architecture or clearing the
+            // window title (which would break Alt+Tab/taskbar identity).
+            fprintf(stderr, "[ui] native caption text hide unsupported hr=0x%08lx\n",
+                    static_cast<unsigned long>(hr));
+        }
+    }
+
+    void hideNativeCaptionIcon()
+    {
+        HWND hwnd = reinterpret_cast<HWND>(winId());
+        if (!hwnd)
+            return;
+        if (!m_transparentCaptionIcon) {
+            // Monochrome 16x16 fully transparent icon: AND mask all 1,
+            // XOR mask all 0.  The native title bar uses ICON_SMALL, so this
+            // removes only the caption icon; ICON_BIG (taskbar/Alt+Tab) stays
+            // the application's original icon.
+            BYTE andMask[32];
+            std::memset(andMask, 0xFF, sizeof(andMask));
+            BYTE xorMask[32] = {};
+            m_transparentCaptionIcon = CreateIcon(
+                GetModuleHandleW(nullptr), 16, 16, 1, 1, andMask, xorMask);
+        }
+        if (m_transparentCaptionIcon) {
+            SendMessageW(hwnd, WM_SETICON, ICON_SMALL,
+                         reinterpret_cast<LPARAM>(m_transparentCaptionIcon));
+        }
+    }
+
+    void refineNativeCaptionText()
+    {
+        if (!m_captionTextHidden || m_captionColorSampled)
+            return;
+        HWND hwnd = reinterpret_cast<HWND>(winId());
+        if (!hwnd || GetForegroundWindow() != hwnd || IsIconic(hwnd))
+            return;
+        COLORREF bg = 0;
+        if (!sampleCaptionBackground(hwnd, bg))
+            return;
+
+        HMODULE dwm = LoadLibraryW(L"dwmapi.dll");
+        if (!dwm)
+            return;
+        typedef HRESULT (WINAPI *SetWindowAttr)(HWND, DWORD, LPCVOID, DWORD);
+        SetWindowAttr fn = reinterpret_cast<SetWindowAttr>(
+            GetProcAddress(dwm, "DwmSetWindowAttribute"));
+        if (!fn) {
+            FreeLibrary(dwm);
+            return;
+        }
+        fn(hwnd, 35 /* DWMWA_CAPTION_COLOR */, &bg, sizeof(bg));
+        const HRESULT hr = fn(hwnd, 36 /* DWMWA_TEXT_COLOR */, &bg, sizeof(bg));
+        FreeLibrary(dwm);
+        if (SUCCEEDED(hr)) {
+            m_captionColorSampled = true;
+            fprintf(stderr, "[ui] native caption text hidden color=#%02X%02X%02X sampled=1\n",
+                    GetRValue(bg), GetGValue(bg), GetBValue(bg));
+        }
+    }
 
     enum ChromeGlyph { GlyphBack, GlyphForward, GlyphReload, GlyphShare,
                        GlyphSidebar, GlyphPlus, GlyphSearch };
@@ -2774,6 +2994,9 @@ protected:
     QWidget *m_tabStrip = nullptr;
     QToolButton *m_newTabBtn = nullptr;
     QPushButton *m_shareBtn = nullptr;
+    bool m_captionTextHidden = false;
+    bool m_captionColorSampled = false;
+    HICON m_transparentCaptionIcon = nullptr;
     QList<TabPage *> m_pages;
     QLineEdit *m_addr = nullptr;
     QPushButton *m_back = nullptr, *m_fwd = nullptr, *m_reload = nullptr;
