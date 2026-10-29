@@ -65,6 +65,7 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+#include <dwmapi.h>
 #include <psapi.h>
 #include <pdh.h>
 #include <pdhmsg.h>
@@ -1568,6 +1569,120 @@ private:
     int m_loadProgress = -1;
 };
 
+// One-window toolbar / caption metrics (logical pixels).  The native title
+// bar is extended away; CaptionButtonsWidget paints the three Windows glyphs
+// while WM_NCHITTEST returns the real HT* codes so the system still performs
+// min/max/close, Snap Layouts and drag behavior.
+static constexpr int kUnifiedHeaderHeight = 58;
+static constexpr int kCaptionButtonWidth = 31;
+static constexpr int kCaptionButtonsWidth = kCaptionButtonWidth * 3;
+
+class CaptionButtonsWidget : public QWidget
+{
+public:
+    explicit CaptionButtonsWidget(QWidget *parent = nullptr) : QWidget(parent)
+    {
+        setFocusPolicy(Qt::NoFocus);
+        setMouseTracking(true);
+    }
+
+    void setHovered(int index)
+    {
+        if (m_hover == index) return;
+        m_hover = index;
+        update();
+    }
+
+protected:
+    int buttonAt(const QPoint &p) const
+    {
+        const int bw = qMax(1, width() / 3);
+        const int idx = qBound(0, p.x() / bw, 2);
+        return rect().contains(p) ? idx : -1;
+    }
+
+    void mouseMoveEvent(QMouseEvent *e) override
+    {
+        setHovered(buttonAt(e->pos()));
+        QWidget::mouseMoveEvent(e);
+    }
+
+    void leaveEvent(QEvent *e) override
+    {
+        setHovered(-1);
+        QWidget::leaveEvent(e);
+    }
+
+    void mousePressEvent(QMouseEvent *e) override
+    {
+        if (e->button() != Qt::LeftButton) {
+            QWidget::mousePressEvent(e);
+            return;
+        }
+        m_pressed = buttonAt(e->pos());
+        setHovered(m_pressed);
+        update();
+    }
+
+    void mouseReleaseEvent(QMouseEvent *e) override
+    {
+        if (e->button() != Qt::LeftButton) return;
+        const int idx = buttonAt(e->pos());
+        if (idx >= 0 && idx == m_pressed) {
+            QWidget *top = window();
+            if (auto *mw = qobject_cast<QMainWindow *>(top)) {
+                if (idx == 0) mw->showMinimized();
+                else if (idx == 1) {
+                    if (mw->isMaximized()) mw->showNormal();
+                    else mw->showMaximized();
+                } else {
+                    mw->close();
+                }
+            }
+        }
+        m_pressed = -1;
+        update();
+    }
+
+    void paintEvent(QPaintEvent *) override
+    {
+        QPainter p(this);
+        p.setRenderHint(QPainter::Antialiasing, true);
+        p.fillRect(rect(), QColor(0xF3, 0xEC, 0xEF));
+        // Preserve the toolbar's bottom hairline across the overlay.
+        p.setPen(QPen(QColor(0xDC, 0xD2, 0xD5), 1));
+        p.drawLine(0, height() - 1, width(), height() - 1);
+
+        const int bw = qMax(1, width() / 3);
+        for (int i = 0; i < 3; ++i) {
+            const QRect r(i * bw, 0, (i == 2 ? width() - 2 * bw : bw), height());
+            if (m_hover == i) {
+                p.fillRect(r, i == 2 ? QColor(0xE8, 0x11, 0x23)
+                                     : QColor(0xE5, 0xDF, 0xE2));
+            }
+            const QColor glyph = (m_hover == 2 && i == 2)
+                    ? QColor(255, 255, 255) : QColor(0x45, 0x40, 0x44);
+            p.setPen(QPen(glyph, 1.2));
+            const QPointF c(r.center());
+            if (i == 0) {                         // minimize
+                p.drawLine(QPointF(c.x() - 5, c.y()),
+                           QPointF(c.x() + 5, c.y()));
+            } else if (i == 1) {                  // maximize / restore
+                p.drawRect(QRectF(c.x() - 5, c.y() - 5, 10, 10));
+            } else {                              // close
+                p.drawLine(QPointF(c.x() - 5, c.y() - 5),
+                           QPointF(c.x() + 5, c.y() + 5));
+                p.drawLine(QPointF(c.x() + 5, c.y() - 5),
+                           QPointF(c.x() - 5, c.y() + 5));
+            }
+        }
+    }
+
+private:
+    int m_hover = -1;
+    int m_pressed = -1;
+};
+
 class KHtmlLiteWindow : public QMainWindow
 {
     Q_OBJECT
@@ -1576,14 +1691,14 @@ public:
         : QMainWindow(parent)
     {
         setWindowTitle(QStringLiteral("KHtmlLite"));
-        // Native Windows 11 frame and caption: real DWM slightly-rounded
-        // corners plus the system minimize/maximize/close buttons.  Do not
-        // set FramelessWindowHint; the client chrome begins below the native
-        // title bar, so the page origin inside the client is unchanged.
-        // Default window size — LOGICAL (Qt/CSS) pixels.  Sizing follows the
-        // desktop-browser convention: a fraction of the work area, capped at
-        // a sane default DIP size (Chrome/Edge open ~1200x650 outer on this
-        // desktop), never smaller than 720x480 client.
+        // Native Win11 frame is retained for DWM shadow/rounded corners, but
+        // WM_NCCALCSIZE extends the client over the caption.  The tab/address
+        // toolbar therefore starts at the very top; CaptionButtonsWidget draws
+        // the min/max/close glyphs on the same row.  Do not set
+        // FramelessWindowHint.  Default window size — LOGICAL (Qt/CSS) pixels:
+        // sizing follows the desktop-browser convention, a fraction of the
+        // work area capped at a sane default DIP size (Chrome/Edge open
+        // ~1200x650 outer on this desktop), never smaller than 720x480 client.
         //   History: a literal 1024x720 became 1536x1080 DEVICE px once
         //   High-DPI scaling was on; the previous "fix" divided by the screen
         //   ratio to restore the pre-High-DPI PHYSICAL footprint (683x480
@@ -1657,23 +1772,17 @@ public:
         connect(m_resizeTimer, &QTimer::timeout, this, &KHtmlLiteWindow::applyPendingResize);
         addTab(start.isEmpty() ? QUrl(QStringLiteral("https://cn.bing.com")) : start);
         STARTUP_MARK("first tab added");
-        STARTUP_MARK("first tab added");
         syncChrome();
-        // Apply the caption-text colour before show() so the title text never
-        // flashes on screen.  At construction the window is not foreground, so
-        // this first pass uses the theme fallback; retry/refine after show when
-        // the real DWM/Mica background can be sampled.
-        hideNativeCaptionText();
-        hideNativeCaptionIcon();
-        QTimer::singleShot(500, this, [this]() {
-            if (!m_captionTextHidden) hideNativeCaptionText();
-            refineNativeCaptionText();
-            hideNativeCaptionIcon();
-        });
-        QTimer::singleShot(1000, this, [this]() {
-            refineNativeCaptionText();
-            hideNativeCaptionIcon();
-        });
+        // Extend the client into the caption strip and put the tab/address
+        // toolbar on that row, with custom-drawn Win11 caption glyphs.  This
+        // replaces the previous DWM "paint native caption text invisible"
+        // approach, which left an empty native strip above the toolbar.
+        extendClientIntoCaption();
+        qApp->installEventFilter(this);
+    }
+
+    ~KHtmlLiteWindow() override {
+        if (qApp) qApp->removeEventFilter(this);
     }
 
     // Clear the engine's page-cache mirror on demand.  Settings UIs should call
@@ -2022,7 +2131,7 @@ public:
 
         DragStrip *header = new DragStrip(central);
         header->setObjectName(QStringLiteral("toolbar"));
-        header->setFixedHeight(58);
+        header->setFixedHeight(kUnifiedHeaderHeight);
         m_tabStrip = header;
         QHBoxLayout *tb = new QHBoxLayout(header);
         tb->setContentsMargins(8, 0, 8, 0);
@@ -2066,9 +2175,10 @@ public:
 
         // Invisible balance equal to the tab-strip's extra left width keeps
         // the address field centered in the client, not merely centered in the
-        // remaining gap.  (Left fixed = back/fwd+tab=281; right fixed=54.)
+        // remaining gap.  Left fixed = back/fwd+tab=281.  The right side is
+        // balance + share/plus (54) + the 93-logical caption-button reserve.
         QWidget *balance = new QWidget(header);
-        balance->setFixedWidth(227);
+        balance->setFixedWidth(134);
         tb->addWidget(balance);
 
         // Right logical group: actual shell functions only.  Share copies the
@@ -2088,6 +2198,18 @@ public:
         rg->addWidget(m_shareBtn);
         rg->addWidget(m_newTabBtn);
         tb->addWidget(rightGroup, 0, Qt::AlignVCenter);
+
+        // Reserved strip for the custom-drawn Win11 caption buttons.  The
+        // buttons themselves are an overlay flush with the window's top-right
+        // corner, so they are not clipped by the central widget's 7px inset.
+        QWidget *captionSpacer = new QWidget(header);
+        captionSpacer->setFixedWidth(kCaptionButtonsWidth);
+        tb->addWidget(captionSpacer);
+
+        m_captionButtons = new CaptionButtonsWidget(this);
+        m_captionButtons->setFixedSize(kCaptionButtonsWidth, kUnifiedHeaderHeight);
+        m_captionButtons->show();
+        m_captionButtons->raise();
         root->addWidget(header);
 
         m_stack = new QStackedWidget(central);
@@ -2544,6 +2666,7 @@ protected:
     void resizeEvent(QResizeEvent *event) override {
         QMainWindow::resizeEvent(event);
         updateAddressMetrics();
+        updateCaptionButtonsGeometry();
         if (m_liveResize) {
             // Live-resize in progress: do not ship intermediate pixel sizes to
             // the renderer. PageSurface scales its last frame for visual
@@ -2581,9 +2704,52 @@ protected:
     // changes such as maximize / restore / programmatic resize. Those go
     // straight through resizeEvent → the existing coalescing timer, so they
     // commit the real final size immediately with no temporary transform.
+    bool eventFilter(QObject *watched, QEvent *event) override {
+        // The extended client contains native Qt child windows that cover the
+        // frame edges, so WM_NCHITTEST at the top level never sees edge mouse
+        // presses.  Start the system resize from the Qt press instead.
+        if (event->type() == QEvent::MouseButtonPress && !isMaximized()
+                && !isFullScreen()) {
+            auto *me = static_cast<QMouseEvent *>(event);
+            QWidget *w = qobject_cast<QWidget *>(watched);
+            if (me->button() == Qt::LeftButton && w && w->window() == this) {
+                const QPoint p = mapFromGlobal(me->globalPos());
+                const int e = 6;
+                Qt::Edges edges;
+                if (p.x() >= 0 && p.x() < e) edges |= Qt::LeftEdge;
+                else if (p.x() < width() && p.x() >= width() - e) edges |= Qt::RightEdge;
+                if (p.y() >= 0 && p.y() < e) edges |= Qt::TopEdge;
+                else if (p.y() < height() && p.y() >= height() - e) edges |= Qt::BottomEdge;
+                if (edges != Qt::Edges() && windowHandle()
+                        && windowHandle()->startSystemResize(edges)) {
+                    return true;
+                }
+            }
+        }
+        return QMainWindow::eventFilter(watched, event);
+    }
+
     bool nativeEvent(const QByteArray &eventType, void *message, long *result) override {
         if (eventType == "windows_generic_MSG") {
             MSG *msg = reinterpret_cast<MSG *>(message);
+            if (m_captionExtended && msg->message == WM_NCCALCSIZE
+                    && msg->wParam == TRUE) {
+                // Client covers the whole window, so the address/toolbar can
+                // sit in the caption row.  Pinning the client to rcWork while
+                // maximized avoids inheriting the invisible resize border.
+                if (IsZoomed(msg->hwnd)) {
+                    NCCALCSIZE_PARAMS *p =
+                            reinterpret_cast<NCCALCSIZE_PARAMS *>(msg->lParam);
+                    MONITORINFO mi = {sizeof(MONITORINFO)};
+                    if (GetMonitorInfoW(
+                                MonitorFromWindow(msg->hwnd, MONITOR_DEFAULTTONEAREST),
+                                &mi)) {
+                        p->rgrc[0] = mi.rcWork;
+                    }
+                }
+                *result = 0;
+                return true;
+            }
             switch (msg->message) {
             case WM_ENTERSIZEMOVE:
                 beginLiveResize();
@@ -2596,6 +2762,44 @@ protected:
             }
         }
         return QMainWindow::nativeEvent(eventType, message, result);
+    }
+
+    void showEvent(QShowEvent *event) override {
+        QMainWindow::showEvent(event);
+        extendClientIntoCaption();
+        updateCaptionButtonsGeometry();
+    }
+
+    void extendClientIntoCaption() {
+        if (m_captionExtended) return;
+        HWND hwnd = reinterpret_cast<HWND>(winId());
+        if (!hwnd) return;
+        // DwmExtendFrameIntoClientArea is loaded dynamically: the host does
+        // not otherwise link dwmapi and remains runnable without DWM.
+        HMODULE dwm = LoadLibraryW(L"dwmapi.dll");
+        if (!dwm) return;
+        using ExtendFn = HRESULT (WINAPI *)(HWND, const MARGINS *);
+        ExtendFn extend = reinterpret_cast<ExtendFn>(
+                GetProcAddress(dwm, "DwmExtendFrameIntoClientArea"));
+        if (!extend) {
+            FreeLibrary(dwm);
+            return;
+        }
+        MARGINS margins = {0, 0, kUnifiedHeaderHeight, 0};
+        const HRESULT hr = extend(hwnd, &margins);
+        FreeLibrary(dwm);
+        if (FAILED(hr)) return;
+        m_captionExtended = true;
+        SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+        updateCaptionButtonsGeometry();
+    }
+
+    void updateCaptionButtonsGeometry() {
+        if (!m_captionButtons) return;
+        m_captionButtons->setGeometry(width() - kCaptionButtonsWidth, 0,
+                                      kCaptionButtonsWidth, kUnifiedHeaderHeight);
+        m_captionButtons->raise();
     }
 
     void beginLiveResize() {
@@ -3152,6 +3356,8 @@ protected:
     QList<TabPage *> m_pages;
     AddressEdit *m_addr = nullptr;
     QAction *m_reloadAction = nullptr;
+    CaptionButtonsWidget *m_captionButtons = nullptr;
+    bool m_captionExtended = false;
     QPushButton *m_back = nullptr, *m_fwd = nullptr;
 };
 

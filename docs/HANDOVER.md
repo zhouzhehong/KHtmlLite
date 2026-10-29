@@ -1355,7 +1355,7 @@ INCONCLUSIVE、或退出码 0 但输出里出现判定形 FAIL 令牌，都算�
 - 地址框：固定宽度 `clientLogicalWidth × 0.408`（1805 物理 / 1203 逻辑客户区时约 **491 逻辑 = 736 物理**），实测中心落在客户区水平中心（参考图 497/1218 = 40.8%，中心 607.5 vs 609）；高 28 逻辑，圆角 7，`#E6E0E2` 填充、`#D5CDD0` 细边，无蓝边/阴影/胶囊。
 - 左起坐标（物理）：后退约 22.5–58.5，前进约 67.5–103.5；标签标题区从约 114 起，tombstone 恢复点击在 `(170,43)` 已验证可落在标签标题区。
 - 右侧只保留真实功能：分享=复制当前 URL，`+`=新建标签；没有实现侧边栏/标签总览，因此不加伪按钮。刷新/停止在地址框尾部 action 内。
-- 原生 Windows 11 caption、最小化/最大化/关闭、拖动/缩放/无边框处理均未改；`docs/assets/native_title_hidden.png` 已更新为最终单行 UI 全窗截图，`docs/assets/safari_unified_toolbar.png` 为客户区截图。
+- **5an 起**将整个顶部行扩展进 native caption 区域，原生 caption 行不再保留；最终形态与原生按钮取舍见下方 5an。`docs/assets/native_title_hidden.png`、`docs/assets/safari_unified_toolbar.png` 已替换为最终截图。
 
 ### 真实加载状态（无定时器伪造）
 - `PageLoader` 新增 `progress(int)`：0 开始，10 表示主文档落地，子资源按**实际完成数**映射到 10–95，最终 rewrite 后 100；`PageLoader::cancel()` 真实 abort 当前导航与未完成 reply。
@@ -1369,13 +1369,36 @@ INCONCLUSIVE、或退出码 0 但输出里出现判定形 FAIL 令牌，都算�
 - `tests/tombstone_probe.py` 恢复点击从旧的 `(80,22)` 改为 `(170,43)`（单行标签标题区），并用真实 OS 鼠标事件（先移动光标再按下）避免 PostMessage 在标签控件上的选择丢失；**单独运行 PASS**（包含第二标签、挂起、无 auto-resume、点击恢复、crashlog clean）。
 - `tests/input_coord_probe.py` **PASS**（hit-tl / hit-br 都命中）；`tests/dpr_probe.py` **PASS**（innerWidth=680, innerHeight=356, dpr=1.5, canvas 1020×534）；`browser_click_probe`、`bg_smoke` 在本轮回归前段均 **PASS**；`crash_recovery_probe` **23/24 PASS + 1 optional inconclusive**。
 - 全量 `run_regression.ps1` 在最终构建上尝试两次，均未完整跑完：一次停在 `dpr_probe`、一次停在 `input_coord_probe` 的 harness 阶段（两者单独重跑均 PASS，属顺序回归的进程/socket 竞态，非断言失败）；因此本轮**不宣称全绿**，上述单项结果和可视验收为准。下一次若要求 46 分钟全量，需先清理孤儿 renderer/端口并在每个直驱探针前等待上一浏览器完全退出。
-- 可视验收：1805×927 客户区截图与参考图按 1218×668 归一化对比，地址框宽度约 40.8%、中心重合（实测填充边界约 x=537..1269，参考归一化约 x=532..1269）；全窗截图中原生标题文字/图标仍隐藏、原生按钮保留。
+- 可视验收（5am 时）：1805×927 客户区截图与参考图按 1218×668 归一化对比，地址框宽度约 40.8%、中心重合；**5an 的标题栏扩展后重新验收见下**。
 - Portable: 已复制最终 `khtml_browser.exe`/`khtml_renderer.exe` 到 `release/KHtmlLite-portable`，`portable_smoke` **PASS**（anchor `(11,87)`）。
 
 ### 已知限制
-- 顶部仍是 58 逻辑高（参考图 52），因为保留原生 Windows 标题栏 + 单行高工具栏的折中；若追求 52 需同时改页面原点和多项回归。
+- 顶部行高 58 逻辑（参考图 52）；5an 后页面原点仍为 (11,87)。
 - 标签条固定 220 逻辑宽，多标签时由 QTabBar 滚动；地址框按客户区宽度比例固定，不随标签数伸缩。
 - 全量回归为最终判据；如失败项与既有 flaky/网络有关，需在报告中原样记录，不宣称全绿。
+
+## 5an. 标题栏扩展：把统一工具栏放进 caption 行（2026-10-29，用户指定）
+
+### 用户要求与文档依据
+- 用户要求像 Firefox/Safari 一样，把地址框/工具栏放到窗口最顶的标题栏行，不能只让三个系统窗口按钮独占该行。检索的官方依据：
+  - [Windows title bar customization](https://learn.microsoft.com/en-us/windows/apps/develop/title-bar)：Full customization 时 client area 扩展到整个窗口；WinUI 的 `AppWindowTitleBar.ExtendsContentIntoTitleBar` 仍由系统画 caption controls，但那是 WinUI/Windows App SDK 路径。
+  - [Custom Window Frame Using DWM](https://learn.microsoft.com/en-us/windows/win32/dwm/customframe)：可在扩展 frame 中放 toolbar，移除标准 frame 后必须自行处理 caption 绘制和 hit testing。
+  - [Microsoft Q&A: Qt/Win32 custom title bar](https://learn.microsoft.com/zh-cn/answers/questions/5979096/how-can-i-create-a-visual-studio-2022-style-custom)：Win10/11 上 `WM_NCCALCSIZE` 去掉标准 frame 后系统不再画 min/max/close；常见做法是自绘 glyph，并保留/转发窗口 hit-test 行为。WinUI/AppWindow 才能同时保留系统 caption buttons。
+- 本项目是 Qt 5.15 + Win32（非 WinUI/AppSDK），采用 **client 扩展进 caption + 自绘 Windows 11 glyph**，这是能让地址框真正位于标题栏行的可行路径；代价是窗口按钮由 Qt 自绘、Win11 Snap Layout 不可用。
+
+### 实现
+- `DwmExtendFrameIntoClientArea` + `WM_NCCALCSIZE`（wParam=TRUE 返回 0）将 client 扩展到整个窗口；`showEvent`/构造期安装，最大化时把 client 固定到 `MonitorFromWindow(...).rcWork`，避免最大化继承不可见边框后溢出屏幕。
+- 新建 `CaptionButtonsWidget`：顶部右侧 **93 逻辑像素** 三条 31 逻辑宽按钮，QPainter 画最小化横线、最大化方框、关闭 X；支持 hover（close 变红）和 Qt 点击，执行 `showMinimized/showMaximized/showNormal/close`。它作为 override 子窗口贴窗口右上角，不被 central 的 7px inset 影响。
+- 统一工具栏仍在同一行：后退/前进 → 标签 → 地址/搜索 → 分享 → 新建标签；右侧再加 **93 逻辑 caption 保留区**，地址中心通过 balance=134 维持窗口水平中心。地址框上方不再有空白 native titlebar 行。
+- 拖拽：现有 `DragStrip` 的 `startSystemMove` 保持；边缘缩放：扩展 client 后顶层 WM_NCHITTEST 看不到覆盖全窗口的 Qt 子窗口事件，新增 qApp event filter 在鼠标按下靠近 6 逻辑像素边缘时调用 `QWindow::startSystemResize`，右侧慢速 resize 实测生效。
+
+### 验证（本机 dpr=1.5）
+- Release 构建通过；默认窗口 outer=client=`1805×927`（标题栏行已融入 client），页面原点仍 `(11,87)`；`portable_smoke` anchor `(11,87)` PASS。
+- 截图：`docs/assets/native_title_hidden.png`（全窗）、`docs/assets/safari_unified_toolbar.png`（客户区）。地址与自定义窗口按钮同处顶部一行。
+- 窗口按钮：最小化后 `IsIconic=True`；最大化 client `1920×1008`（工作区）；还原 `1805×927`；关闭后 browser 进程退出。拖拽标题栏区域窗口坐标改变；右边缘拖拽宽度改变。
+- 地址框/标签命中、页面点击、`navigation_probe`、`input_coord_probe` 均 PASS；真实加载状态/停止逻辑未改。
+- **未验证/不保留**：Win11 Snap Layouts 悬停菜单、系统标题栏右键菜单、系统原生绘制的 min/max/close（现为自绘）；Alt+Tab/任务栏标题仍为完整窗口标题，任务栏图标保留。若必须保留系统绘制按钮，需要迁移到 WinUI3/Windows App SDK 的 `AppWindowTitleBar`，而不是当前 Qt/Win32 自定义 frame。
+- 本轮没有重跑 46 分钟 `run_regression.ps1`；已验证上述单项/portable/navigation/input。全量回归需在新的标题栏架构上重新采集。
 
 ## 6. 正在/马上要做的
 A. ~~拆那 1.1s~~ **已完成**（字体枚举缓存 + 图标懒加载，构造 1.1s→~0.35s，TTFF 2.0→1.1s）。
