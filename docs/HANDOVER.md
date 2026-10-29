@@ -1377,7 +1377,7 @@ INCONCLUSIVE、或退出码 0 但输出里出现判定形 FAIL 令牌，都算�
 - 标签条固定 220 逻辑宽，多标签时由 QTabBar 滚动；地址框按客户区宽度比例固定，不随标签数伸缩。
 - 全量回归为最终判据；如失败项与既有 flaky/网络有关，需在报告中原样记录，不宣称全绿。
 
-## 5an. 标题栏扩展：把统一工具栏放进 caption 行（2026-10-29，用户指定）
+## 5an. 标题栏扩展：把统一工具栏放进 caption 行（2026-10-29，已被 5ap 取代）
 
 ### 用户要求与文档依据
 - 用户要求像 Firefox/Safari 一样，把地址框/工具栏放到窗口最顶的标题栏行，不能只让三个系统窗口按钮独占该行。检索的官方依据：
@@ -1399,6 +1399,48 @@ INCONCLUSIVE、或退出码 0 但输出里出现判定形 FAIL 令牌，都算�
 - 地址框/标签命中、页面点击、`navigation_probe`、`input_coord_probe` 均 PASS；真实加载状态/停止逻辑未改。
 - **未验证/不保留**：Win11 Snap Layouts 悬停菜单、系统标题栏右键菜单、系统原生绘制的 min/max/close（现为自绘）；Alt+Tab/任务栏标题仍为完整窗口标题，任务栏图标保留。若必须保留系统绘制按钮，需要迁移到 WinUI3/Windows App SDK 的 `AppWindowTitleBar`，而不是当前 Qt/Win32 自定义 frame。
 - 本轮没有重跑 46 分钟 `run_regression.ps1`；已验证上述单项/portable/navigation/input。全量回归需在新的标题栏架构上重新采集。
+
+## 5ap. 严格规范落地：原生标题栏 + 工具栏在标签上方 + SVG 图标（2026-10-29 晚）
+
+### 规范与结果
+- 最新严格规范覆盖 5an 的自定义 caption 扩展：**恢复原生 Windows 11 title bar / DWM hidden-title mechanism / 原生 min-max-close / 拖动 / 缩放**；删除 `DwmExtendFrameIntoClientArea`、`WM_NCCALCSIZE` 扩展、`CaptionButtonsWidget` 和自定义 resize event filter。
+- 客户区顺序现在固定：**native title bar → 32 逻辑 toolbar → 26 逻辑 horizontal tab strip → web content**。总 chrome 58 逻辑 = 87 物理；页面原点保持 `(11,87)`。
+- 工具栏：Back/Forward 左；地址框可用宽度 **50%**（45–55% 范围内）并水平居中、随窗口 resize 更新；右侧 Reload/Stop、Share（复制当前 URL）、New Tab。左右组均固定 82 逻辑，保证居中而不是只居中剩余空隙。
+- 地址框保持真实 `QLineEdit`/`AddressEdit`，不是 SVG：`#F4F5F7` 填充、`#D9DDE3` 低对比边框、8px 圆角；focus 动态切换 `#7FB3DD` 细蓝边并启用 `QGraphicsDropShadowEffect` 柔和阴影。focus in/out 截图对比已确认边框变化。
+- Tab strip 在工具栏下方；紧凑圆角 tab，active 白底、inactive `#ECEEF2` 左右近似，关闭 X 与新建/关闭行为保留；+ 仍在右侧 toolbar。web content 从 tab strip 下方开始。
+
+### SVG 资源（Qt resource + Qt5Svg）
+- 目录：`src/host/resources/icons/`；resource：`src/host/resources/icons.qrc`；CMake 使用 `qt5_add_resources`，并给 `khtml_browser` 链接 **Qt5::Svg**（Qt 5.15.19 已安装，portable 已有 Qt5Svg.dll）。
+- 嵌入并逐字节保存：
+  - `chevron-left.svg`（Back）
+  - `chevron-right.svg`（Forward）
+  - `address-field-frame.svg`（仅视觉参考，**不用于实际输入框**）
+- 从官方 raw URL 下载并保留：
+  - `refresh-cw.svg` — https://raw.githubusercontent.com/lucide-icons/lucide/main/icons/refresh-cw.svg
+  - `square.svg` — https://raw.githubusercontent.com/lucide-icons/lucide/main/icons/square.svg
+  - `search.svg` — https://raw.githubusercontent.com/lucide-icons/lucide/main/icons/search.svg
+  - `share.svg` — https://raw.githubusercontent.com/lucide-icons/lucide/main/icons/share.svg
+  - `plus.svg` — https://raw.githubusercontent.com/lucide-icons/lucide/main/icons/plus.svg
+  - `LICENSE.lucide.txt` — https://raw.githubusercontent.com/lucide-icons/lucide/main/LICENSE（ISC + Feather MIT notice）
+- **跳过** `copy/shield-check/panel-left/ellipsis/bookmark/download/clock/settings/house/list`：本 UI 没有独立的复制、安全状态、侧栏、更多菜单、书签/下载/历史/设置/主页/列表功能。现有 Share 按钮实际执行“复制链接”，因此使用 share.svg，不创建 copy 假按钮。
+- SVG 不变为 PNG 源文件；运行时用 `QSvgRenderer` 渲染后通过 `QPainter` SourceIn 着色，生成 normal `#858B93`、hover `#5F6873`、disabled `#B9BEC5` 的 QIcon pixmap（内存/图标缓存，不落盘 PNG）。Lucide 的 path/circle/rect + stroke-linecap/linejoin 在 QtSvg 5.15 下全部正常，实际截图无缺失图标。
+- 删除了旧的 `chromeGlyph()` 手工 QPainter 工具栏图标；tab 关闭 X 仍是既有 tab 交互绘制，不属于 toolbar icon。
+
+### 状态与交互
+- Back/Forward 仍由真实 history 列表驱动，disabled 时 QIcon 使用 lighter gray；`navigation_probe` PASS。
+- Reload/Stop 仍由真实 PageLoader/`loadstart/loadprogress/loaddone` IPC 驱动；慢页截图显示 square stop，点击后刷新图标恢复；无 timer 伪造。地址框底部 2px 进度线保留（真实进度）。
+- 地址编辑/Enter：用真实 Win32 Unicode `SendInput` 输入后按 Enter，服务器收到 `/address.html`，窗口标题变为 `Address Enter - KHtmlLite`；焦点边框动态从灰变蓝。
+- tab 新建/关闭：点击右侧 + 出现第二个 tab（`cn.bing.com`），点击第二 tab 关闭 X 恢复单 tab；原有 tab 行为未被改坏。
+- resize：客户区（默认 1805×927）缩到 1478×844，地址框仍为 50% 宽、中心 x≈739、与 toolbar/按钮不重叠；SVG 图标/圆角无拉伸。
+- 原生标题栏：全窗截图中 title text/icon 仍隐藏，native min/max/close 保留；`hideNativeCaptionText()/hideNativeCaptionIcon()` 的启动/延迟 refine 路径已恢复。
+- Portable：重新复制最终 `khtml_browser.exe`/`khtml_renderer.exe` 到 `release/KHtmlLite-portable`，`portable_smoke` **PASS**，anchor `(11,87)`。
+
+### 验证与限制
+- Release 构建通过（Qt5Svg + qrc 资源编译）；实际运行截图见 `docs/assets/native_title_hidden.png`（全窗）和 `docs/assets/safari_unified_toolbar.png`（客户区）。
+- `navigation_probe` PASS、`input_coord_probe` PASS、`portable_smoke` PASS；地址 edit/Enter、focus ring、Reload/Stop、tab +/close、resize 均实测。
+- 本轮没有重跑 46 分钟 `run_regression.ps1`；`tombstone_probe` 已把恢复点击坐标更新到下方 tab strip `(170,64)`，但本轮未再跑完整个墓碑流程。
+- 下载阶段 PowerShell `Invoke-WebRequest` 曾因 SSL/连接失败；随后用官方 raw URL 经 `curl.exe` 重试成功，文件均为 HTTP 200 且 XML 可解析，license 已保留。未使用替代库或手工重绘。
+- Git 提交/推送状态以本轮 final report 为准；若 GitHub 连接仍失败，保持本地提交并明确 ahead 状态。
 
 ## 6. 正在/马上要做的
 A. ~~拆那 1.1s~~ **已完成**（字体枚举缓存 + 图标懒加载，构造 1.1s→~0.35s，TTFF 2.0→1.1s）。

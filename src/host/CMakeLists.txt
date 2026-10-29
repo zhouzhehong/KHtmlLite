@@ -23,7 +23,7 @@ set(KHTML_LIB "${KHTML_BUILD_DIR}/lib/libKF5KHtml.dll.a" CACHE FILEPATH
 set(QUICKJS_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/../quickjs" CACHE PATH
     "Path to QuickJS headers (quickjs.h, quickjs-atom.h)")
 
-find_package(Qt5 REQUIRED COMPONENTS Widgets Gui Network)
+find_package(Qt5 REQUIRED COMPONENTS Widgets Gui Network Svg)
 find_package(ECM REQUIRED NO_MODULE)
 set(CMAKE_MODULE_PATH ${ECM_MODULE_PATH})
 find_package(KF5 REQUIRED COMPONENTS
@@ -66,14 +66,17 @@ set(KHTML_HOST_COMPILE_OPTS
     -UQT_NO_URL_CAST_FROM_STRING -UQT_NO_NARROWING_CONVERSIONS_IN_CONNECT)
 
 # --- Browser shell ------------------------------------------------------------
+qt5_add_resources(KHTML_BROWSER_RESOURCES resources/icons.qrc)
 add_executable(khtml_browser WIN32
     khtml_browser.cpp
     pageloader.cpp
     resourcemanager.cpp
+    ${KHTML_BROWSER_RESOURCES}
 )
 target_include_directories(khtml_browser PRIVATE ${KHTML_HOST_INCLUDES})
 # pdh: GPU Engine utilization counters; dxgi: VRAM budgets/usage via Adapter3.
-target_link_libraries(khtml_browser PRIVATE ${KHTML_HOST_LIBS} pdh dxgi dxguid)
+# Svg: QSvgRenderer for the toolbar's real SVG files.
+target_link_libraries(khtml_browser PRIVATE ${KHTML_HOST_LIBS} Qt5::Svg pdh dxgi dxguid)
 target_compile_options(khtml_browser PRIVATE ${KHTML_HOST_COMPILE_OPTS})
 
 # --- Renderer process (out-of-process, one per tab) --------------------------

@@ -215,7 +215,7 @@ def main():
         # tab strip is integrated after back/forward; its left title area
         # starts around x=114 physical and the close hot zone is at the right.
         resumed = False
-        for (x, y) in ((170, 43), (190, 43), (170, 40), (170, 47)):
+        for (x, y) in ((170, 64), (190, 64), (170, 60), (170, 70)):
             real_click(hwnd, x, y)
             time.sleep(3)
             tr2 = trace_text()

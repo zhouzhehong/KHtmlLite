@@ -41,8 +41,8 @@ LINKS = {
     "missing": link_point(3), "slow": link_point(4), "js": link_point(5),
     "notfound": link_point(6),
 }
-BACK_BTN = (34, 43)
-FORWARD_BTN = (68, 43)
+BACK_BTN = (34, 24)
+FORWARD_BTN = (68, 24)
 
 
 class Handler(http.server.BaseHTTPRequestHandler):

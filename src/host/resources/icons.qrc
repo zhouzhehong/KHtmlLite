@@ -1,0 +1,13 @@
+<!DOCTYPE RCC>
+<RCC version="1.0">
+  <qresource prefix="/icons">
+    <file alias="chevron-left.svg">icons/chevron-left.svg</file>
+    <file alias="chevron-right.svg">icons/chevron-right.svg</file>
+    <file alias="refresh-cw.svg">icons/refresh-cw.svg</file>
+    <file alias="square.svg">icons/square.svg</file>
+    <file alias="search.svg">icons/search.svg</file>
+    <file alias="share.svg">icons/share.svg</file>
+    <file alias="plus.svg">icons/plus.svg</file>
+    <file alias="address-field-frame.svg">icons/address-field-frame.svg</file>
+  </qresource>
+</RCC>
