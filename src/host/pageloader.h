@@ -27,6 +27,10 @@ public:
     // requested URL when no redirect occurred). On error, localFileUrl is empty
     // and errorString is non-empty.
     void load(const QUrl &url);
+    // Abort the current navigation and all outstanding network replies.  Used
+    // by the real address-bar stop button; unlike load() this does not start
+    // another request or synthesize an error page.
+    void cancel();
 
     // Charset declared by the main response's Content-Type (empty when the
     // server sent none).  The renderer uses it to decode legacy-encoded pages
@@ -63,6 +67,10 @@ public:
     QString installBase(const QString &html) const;
 
 Q_SIGNALS:
+    // Real navigation progress, not a timer: 0 at load start, then based on
+    // completed main/sub-resource work, 100 after finalization.  Used by the
+    // browser address-field line and stop/reload icon.
+    void progress(int percent);
     void finished(const QUrl &localFileUrl, const QUrl &finalUrl, const QString &error);
     // Emitted at most once per navigation, after ALL sub-resources (critical
     // or not) have landed on disk and rewriteAndSave() has produced the final

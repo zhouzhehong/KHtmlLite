@@ -640,6 +640,7 @@ void PageLoader::load(const QUrl &url)
     m_finished = false;
     m_rewritten = false;
     m_timeout->start(15000);
+    emit progress(0);
 
     QNetworkRequest req(url);
     req.setRawHeader("User-Agent",
@@ -905,6 +906,14 @@ void PageLoader::onResourceFinished()
         return;
     }
     if (res.isCss || res.isJs) --m_criticalPending;
+    // Real resource-completion progress for the chrome; this is based on
+    // actual pending downloads, never a timer.
+    {
+        const int total = qMax(1, m_resources.size());
+        const int remaining = m_pendingMap.size();
+        const int done = qBound(0, total - remaining, total);
+        emit progress(qBound(0, 10 + (85 * done) / total, 95));
+    }
 
     if (r->error() == QNetworkReply::NoError) {
         const QByteArray data = r->readAll();
@@ -1434,6 +1443,7 @@ void PageLoader::deliverInitialDocument()
         const int g = m_navGeneration;
         QTimer::singleShot(0, this, [this, g]() { finalizeSubresources(g); });
     }
+    emit progress(10);
 }
 
 // Called as subresources finish.  Bookkeeping (cache write of the resource)
@@ -1468,6 +1478,7 @@ void PageLoader::finalizeSubresources(int gen)
     rewriteAndSave();
     PERF_MARK("rewrite_save_final_done");
     m_timeout->stop();
+    emit progress(100);
     // If the initial (pre-download) document was already handed to the
     // renderer, tell it the final cached copy is ready so it can re-feed.
     // Skip the re-feed when the final HTML is byte-identical AND the page had
@@ -1501,6 +1512,24 @@ void PageLoader::onTimeout()
     finalizeSubresources();
 }
 
+void PageLoader::cancel()
+{
+    ++m_navGeneration;
+    m_timeout->stop();
+    m_finished = true;
+    if (m_mainReply) {
+        m_mainReply->abort();
+        m_mainReply = nullptr;
+    }
+    const QList<QNetworkReply *> replies = m_pendingMap.keys();
+    for (QNetworkReply *r : replies)
+        r->abort();
+    m_pendingMap.clear();
+    m_pending = 0;
+    m_criticalPending = 0;
+    emit progress(100);
+}
+
 void PageLoader::fail(const QString &msg)
 {
     if (m_failed) return;
@@ -1512,5 +1541,6 @@ void PageLoader::fail(const QString &msg)
     const QList<QNetworkReply *> replies = m_pendingMap.keys();
     for (QNetworkReply *r : replies)
         r->abort();
+    emit progress(100);
     emit finished(QUrl(), m_original, msg);
 }

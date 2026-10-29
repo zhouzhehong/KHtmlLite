@@ -31,6 +31,7 @@
 #include <kparts/part.h>
 #include <kparts/browserextension.h>
 #include <kparts/openurlarguments.h>
+#include <KIO/Job>
 
 #include "pageloader.h"
 #include "perflog.h"
@@ -392,6 +393,35 @@ public:
         STARTUP_MARK("KHTMLPart created");
         m_view->widget()->setEnabled(true);
         m_view->widget()->setFocusPolicy(Qt::StrongFocus);
+
+        // Real loading state for the browser toolbar (no synthetic timer):
+        // PageLoader reports actual main/sub-resource progress; KHTML's
+        // started() marks the engine beginning to parse the fed document.
+        connect(m_view, &KParts::ReadOnlyPart::started, this,
+                [this](KIO::Job *) {
+            m_loadActive = true;
+            m_loadCompleted = false;
+            m_loadPercent = 0;
+            sendMessage(QStringLiteral("loadstart"), QStringLiteral("0"));
+        });
+        // PageLoader owns the actual network/subresource work that feeds
+        // KHTML.  Its progress is therefore the browser's real progress line;
+        // it reaches 100 only after the final cached document is rewritten.
+        connect(m_loader, &PageLoader::progress, this, [this](int percent) {
+            percent = qBound(0, percent, 100);
+            if (percent == 0) {
+                m_loadActive = true;
+                m_loadCompleted = false;
+                sendMessage(QStringLiteral("loadstart"), QStringLiteral("0"));
+            }
+            m_loadPercent = percent;
+            sendMessage(QStringLiteral("loadprogress"), QString::number(percent));
+            if (percent >= 100) {
+                m_loadActive = false;
+                m_loadCompleted = true;
+                sendMessage(QStringLiteral("loaddone"), QStringLiteral("100"));
+            }
+        });
         // Instant wheel scrolling: disable KHTML's engine-side smooth-scroll
         // animation (default SSMWhenEfficient animates every wheel notch over
         // ~128 ms in 16 ms steps).  In the dual-process compositing pipeline
@@ -688,6 +718,9 @@ public:
                     && sendMessage(QStringLiteral("title"), m_nativeTitle)) {
                 m_lastSentTitle = m_nativeTitle;
             }
+            // Do not mark the navigation complete here: this completed()
+            // belongs to the initial feed, before PageLoader has necessarily
+            // finished its subresources.  PageLoader::progress(100) owns done.
             sendState();
         });
         // Periodic state report so the browser always has fresh scroll/zoom
@@ -1564,6 +1597,15 @@ private slots:
                 && sendMessage(QStringLiteral("title"), m_nativeTitle)) {
             m_lastSentTitle = m_nativeTitle;
         }
+        // Catch-up: a pre-warmed/about page can start and finish before the
+        // browser connects.  Send the current real load state on the channel.
+        if (m_loadCompleted) {
+            sendMessage(QStringLiteral("loaddone"), QStringLiteral("100"));
+        } else if (m_loadActive) {
+            sendMessage(QStringLiteral("loadstart"), QStringLiteral("0"));
+            sendMessage(QStringLiteral("loadprogress"),
+                        QString::number(m_loadPercent));
+        }
         m_frameTimer->start();
     }
 
@@ -1596,6 +1638,10 @@ private slots:
                     // New document: never composite it onto the old page's
                     // pixels (see dropFrameBase()).
                     dropFrameBase();
+                    m_loadActive = true;
+                    m_loadCompleted = false;
+                    m_loadPercent = 0;
+                    sendMessage(QStringLiteral("loadstart"), QStringLiteral("0"));
                     const QString sc = u.scheme().toLower();
                     if (sc == QLatin1String("about")) { PERF_MARK("khtmlpart_load_start"); loadBlankPage(); }
                     // file:// also routes through the loader (QFile read +
@@ -1629,8 +1675,21 @@ private slots:
             } else if (cmd == QLatin1String("reload")) {
                 if (m_pendingUrl.isValid()) {
                     dropFrameBase();   // new document, see dropFrameBase()
+                    m_loadActive = true;
+                    m_loadCompleted = false;
+                    m_loadPercent = 0;
+                    sendMessage(QStringLiteral("loadstart"), QStringLiteral("0"));
                     m_loader->load(m_pendingUrl);
                 }
+            } else if (cmd == QLatin1String("stop")) {
+                // User pressed the address-bar stop icon.  Stop the engine job
+                // and report completion through the same real-state channel.
+                m_loadActive = false;
+                m_loadCompleted = true;
+                m_loadPercent = 100;
+                if (m_view) m_view->closeUrl();
+                if (m_loader) m_loader->cancel();
+                sendMessage(QStringLiteral("loaddone"), QStringLiteral("100"));
             } else if (cmd == QLatin1String("restore")) {
                 // Tombstone restore: store scroll/zoom, apply after page completes.
                 m_pendingRestoreX = obj.value(QStringLiteral("x")).toInt();
@@ -1726,6 +1785,9 @@ private:
     RendererView *m_view = nullptr;
     PageLoader *m_loader = nullptr;
     QTimer *m_stateTimer = nullptr;
+    bool m_loadActive = false;
+    bool m_loadCompleted = false;
+    int m_loadPercent = 0;
     QTimer *m_animProbe = nullptr;
     QTimer *m_animTick = nullptr;
     QUrl m_pendingUrl;

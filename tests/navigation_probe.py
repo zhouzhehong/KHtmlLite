@@ -41,8 +41,8 @@ LINKS = {
     "missing": link_point(3), "slow": link_point(4), "js": link_point(5),
     "notfound": link_point(6),
 }
-BACK_BTN = (34, 66)
-FORWARD_BTN = (68, 66)
+BACK_BTN = (34, 43)
+FORWARD_BTN = (68, 43)
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -219,6 +219,13 @@ def main():
         s = Session("/a.html")
         try:
             s.wait("A|ready", 10)
+            # Title can arrive one frame before the link surface is paintable;
+            # gate the C click on a non-white frame so the second-session probe
+            # is not a startup race (observed intermittently after cold starts).
+            for _ in range(12):
+                if non_white(s.shot(shot)):
+                    break
+                time.sleep(0.25)
             click(s.hwnd, *LINKS["c"])
             check("second page C loads", s.wait("C|ready"))
         finally:

@@ -612,6 +612,18 @@ public:
         }
     }
 
+    // Stop the current page load; the renderer reports loaddone when closeUrl
+    // has completed.  Used by the address-field stop icon during real loading.
+    void stop()
+    {
+        if (m_socket && m_socket->isOpen()) {
+            QJsonObject obj;
+            obj[QStringLiteral("cmd")] = QStringLiteral("stop");
+            m_socket->write(QJsonDocument(obj).toJson(QJsonDocument::Compact) + "\n");
+            m_socket->flush();
+        }
+    }
+
     // Background-tab frame throttling: hidden tabs tell their renderer to
     // stop the 60 Hz frame timer; damage accumulates there and one full
     // frame is rendered when the tab becomes visible again (WebKit: hidden
@@ -882,6 +894,9 @@ Q_SIGNALS:
     void crashed();
     void ready();          // window embedded, ready to show
     void firstFrame();     // first composited page frame (recovery hand-off)
+    void loadStarted();
+    void loadProgress(int percent);
+    void loadFinished();
     void openNewTab(const QUrl &url);
     void stateChanged(int scrollX, int scrollY, int zoom);
     // The page surface was resized: the renderer viewport has to follow.
@@ -988,6 +1003,12 @@ private slots:
             } else if (type == QLatin1String("title")) {
                 m_title = data;
                 emit titleChanged(m_title);
+            } else if (type == QLatin1String("loadstart")) {
+                emit loadStarted();
+            } else if (type == QLatin1String("loadprogress")) {
+                emit loadProgress(qBound(0, data.toInt(), 100));
+            } else if (type == QLatin1String("loaddone")) {
+                emit loadFinished();
             } else if (type == QLatin1String("url")) {
                 const QUrl u(data);
                 if (u.isValid()) {
@@ -1254,6 +1275,8 @@ struct TabPage {
     QWidget *recoveryWidget = nullptr;  // "恢复中" placeholder during automatic/manual restart
     QWidget *tombstoneWidget = nullptr;  // shown while suspended (owns snapshot view)
     bool cacheCleanupRetried = false;  // second crash already cleared regenerable HTTP/page cache
+    bool loading = false;
+    int loadProgress = 0;
     QUrl current;
     QList<QUrl> back;
     QList<QUrl> fwd;
@@ -1375,8 +1398,14 @@ protected:
     QSize tabSizeHint(int index) const override
     {
         QSize s = QTabBar::tabSizeHint(index);
-        s.setHeight(26);
-        s.setWidth(qBound(144, s.width() + 10, 220));
+        s.setHeight(22);
+        // Integrated tab strip is only 220 logical wide.  Dividing the
+        // available strip among the open tabs keeps the FIRST tab visible
+        // (and clickable) when a second tab is selected; the old fixed 144
+        // minimum forced QTabBar to scroll it out of view.
+        const int avail = width() > 0 ? width() : 220;
+        const int n = qMax(1, count());
+        s.setWidth(qBound(96, avail / n, 220));
         return s;
     }
 
@@ -1388,18 +1417,17 @@ protected:
             const bool sel = (i == currentIndex());
             const bool hov = (i == m_hover);
             QRectF r = QRectF(tabRect(i)).adjusted(2.0, 2.0, -2.0, -2.0);
-            // Classic Safari: the selected tab is white and visually joins the
-            // toolbar; inactive tabs are flat neutral, not pill-shaped.
-            const QColor fill = sel ? QColor(0xFF, 0xFF, 0xFF)
-                                    : (hov ? QColor(0xE9, 0xE9, 0xE9) : QColor(0xED, 0xED, 0xED));
-            p.setPen(QPen(sel ? QColor(0, 0, 0, 48) : QColor(0, 0, 0, 22), 1.0));
+            // Selected tab joins the warm toolbar; inactive tabs stay flat.
+            const QColor fill = sel ? QColor(0xFB, 0xF7, 0xF8)
+                                    : (hov ? QColor(0xE9, 0xDF, 0xE2) : QColor(0xED, 0xE4, 0xE7));
+            p.setPen(QPen(sel ? QColor(0, 0, 0, 42) : QColor(0, 0, 0, 16), 1.0));
             p.setBrush(fill);
             p.drawRoundedRect(r.adjusted(0.5, 0.5, -0.5, sel ? 1.0 : -0.5), 4, 4);
 
             QFont f = font();
             f.setPixelSize(11);
             p.setFont(f);
-            p.setPen(sel ? QColor(45, 45, 45) : QColor(105, 105, 105));
+            p.setPen(sel ? QColor(58, 52, 56) : QColor(112, 105, 109));
             const int closeW = (sel || hov) ? 18 : 7;
             QRectF textR = r.adjusted(9, 0, -closeW, 0);
             p.drawText(textR, Qt::AlignVCenter | Qt::AlignLeft,
@@ -1410,7 +1438,7 @@ protected:
 
             if (sel || hov) {
                 const QPointF c(r.right() - 12, r.center().y());
-                p.setPen(QPen(QColor(110, 114, 116), 1.4, Qt::SolidLine, Qt::RoundCap));
+                p.setPen(QPen(QColor(122, 114, 118), 1.4, Qt::SolidLine, Qt::RoundCap));
                 p.drawLine(c + QPointF(-3.0, -3.0), c + QPointF(3.0, 3.0));
                 p.drawLine(c + QPointF(3.0, -3.0), c + QPointF(-3.0, 3.0));
             }
@@ -1498,6 +1526,46 @@ private:
     int m_hover = -1;
     qint64 m_lastCaptionClick = 0;
     QPoint m_lastCaptionPos;
+};
+
+class AddressEdit : public QLineEdit
+{
+public:
+    explicit AddressEdit(QWidget *parent = nullptr) : QLineEdit(parent) {}
+
+    // -1 hides the line; 0..100 is the real KHTML loading progress.
+    void setLoadProgress(int progress)
+    {
+        progress = qBound(0, progress, 100);
+        if (m_loadProgress == progress) return;
+        m_loadProgress = progress;
+        update();
+    }
+    void clearLoadProgress()
+    {
+        if (m_loadProgress < 0) return;
+        m_loadProgress = -1;
+        update();
+    }
+
+protected:
+    void paintEvent(QPaintEvent *event) override
+    {
+        QLineEdit::paintEvent(event);
+        if (m_loadProgress < 0) return;
+        QPainter p(this);
+        p.setRenderHint(QPainter::Antialiasing, true);
+        qreal w = (width() - 2.0) * m_loadProgress / 100.0;
+        // A 2px leading segment makes the real "started, 0%" state visible;
+        // it is not a synthetic animation.
+        if (w < 2.0) w = 2.0;
+        p.setPen(Qt::NoPen);
+        p.setBrush(QColor(0x0A, 0x84, 0xFF));
+        p.drawRoundedRect(QRectF(1.0, height() - 3.0, w, 2.0), 1.0, 1.0);
+    }
+
+private:
+    int m_loadProgress = -1;
 };
 
 class KHtmlLiteWindow : public QMainWindow
@@ -1823,16 +1891,16 @@ public:
     }
 
     enum ChromeGlyph { GlyphBack, GlyphForward, GlyphReload, GlyphShare,
-                       GlyphSidebar, GlyphPlus, GlyphSearch };
+                       GlyphSidebar, GlyphPlus, GlyphSearch, GlyphStop };
 
-    static QIcon chromeGlyph(ChromeGlyph g, const QColor &col = QColor(70, 74, 76))
+    static QIcon chromeGlyph(ChromeGlyph g, const QColor &col = QColor(84, 79, 83))
     {
         QPixmap pm(36, 36);
         pm.fill(Qt::transparent);
         QPainter p(&pm);
         p.setRenderHint(QPainter::Antialiasing);
         p.scale(2.0, 2.0);
-        p.setPen(QPen(col, 1.6, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        p.setPen(QPen(col, 1.5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
         switch (g) {
         case GlyphBack:
             p.drawPolyline(QPolygonF() << QPointF(11.5, 4.5) << QPointF(5.5, 9)
@@ -1864,6 +1932,11 @@ public:
         case GlyphSearch:
             p.drawEllipse(QPointF(8.0, 8.0), 3.6, 3.6);
             p.drawLine(QPointF(10.7, 10.7), QPointF(13.5, 13.5));
+            break;
+        case GlyphStop:
+            p.drawEllipse(QPointF(9.0, 9.0), 6.1, 6.1);
+            p.drawLine(QPointF(6.8, 6.8), QPointF(11.2, 11.2));
+            p.drawLine(QPointF(11.2, 6.8), QPointF(6.8, 11.2));
             break;
         }
         return QIcon(pm);
@@ -1909,27 +1982,26 @@ public:
 
     static const QString &safariStyleSheet()
     {
-        // Classic Safari-inspired shell: square outer edges, light neutral
-        // chrome, one restrained white address field, monochrome line icons.
-        // No Liquid Glass / Safari 15 translucency and no macOS traffic lights.
+        // Safari-15-style client chrome from the supplied reference: warm
+        // light toolbar, restrained light-gray centered address field, thin
+        // monochrome glyphs.  The native Windows frame/caption remains outside.
         static const QString qss = QStringLiteral(
-            "QWidget#central { background: #f3f3f3; }"
-            "QWidget#tabStrip { background: #f2f2f2; border-bottom: 1px solid #d6d6d6; }"
-            "QWidget#toolbar { background: #fafafa; border-bottom: 1px solid #d6d6d6; }"
+            "QWidget#central { background: #F3ECEF; }"
+            "QWidget#toolbar { background: #F3ECEF; border-bottom: 1px solid #DCD2D5; }"
             "QStackedWidget#pageStack { background: #ffffff; border: none; }"
             "QPushButton#toolBtn { border: none; background: transparent;"
             "  border-radius: 4px; padding: 0; }"
-            "QPushButton#toolBtn:hover { background: #e5e5e5; }"
-            "QPushButton#toolBtn:pressed { background: #dcdcdc; }"
+            "QPushButton#toolBtn:hover { background: #E7DEE1; }"
+            "QPushButton#toolBtn:pressed { background: #D8CED2; }"
             "QPushButton#toolBtn:disabled { background: transparent; }"
             "QToolButton#glyphBtn { border: none; background: transparent;"
             "  border-radius: 4px; padding: 0; }"
-            "QToolButton#glyphBtn:hover { background: #e5e5e5; }"
-            "QToolButton#glyphBtn:pressed { background: #dcdcdc; }"
-            "QLineEdit#address { background: #ffffff; border: 1px solid #c9c9c9;"
-            "  border-radius: 5px; padding: 1px 9px; color: #202020;"
-            "  font-size: 12px; margin: 0 6px; selection-background-color: #b9d7f7; }"
-            "QLineEdit#address:focus { border: 1px solid #4a90e2; background: #ffffff; }"
+            "QToolButton#glyphBtn:hover { background: #E7DEE1; }"
+            "QToolButton#glyphBtn:pressed { background: #D8CED2; }"
+            "#address { background: #E6E0E2; border: 1px solid #D5CDD0;"
+            "  border-radius: 7px; padding: 1px 30px 1px 28px; color: #302C2F;"
+            "  font-size: 12px; margin: 0; selection-background-color: #B9D7F7; }"
+            "#address:focus { border: 1px solid #BFB4B8; background: #E6E0E2; }"
             "QPushButton#crashRetry { background: #ffffff; border: 1px solid #c5c5c5;"
             "  border-radius: 4px; padding: 5px 18px; color: #333; }"
             "QPushButton#crashRetry:hover { background: #f2f2f2; }"
@@ -1939,65 +2011,84 @@ public:
 
     void buildChrome()
     {
-        // Classic Safari-inspired client chrome under the native Windows 11
-        // title bar: 30 logical tab strip + 28 logical toolbar = 58 logical
-        // (87 physical at dpr=1.5), keeping the page origin at (11,87).
+        // One unified 58 logical top row (87 physical at dpr=1.5): tabs and
+        // navigation/address/actions share the same toolbar row, matching the
+        // reference's single top bar while keeping the historical page origin.
         QWidget *central = new QWidget(this);
         central->setObjectName(QStringLiteral("central"));
         QVBoxLayout *root = new QVBoxLayout(central);
         root->setContentsMargins(7, 0, 7, 4);
         root->setSpacing(0);
 
-        DragStrip *strip = new DragStrip(central);
-        strip->setObjectName(QStringLiteral("tabStrip"));
-        strip->setFixedHeight(30);
-        m_tabStrip = strip;
-        QHBoxLayout *ts = new QHBoxLayout(strip);
-        ts->setContentsMargins(8, 2, 8, 2);
-        ts->setSpacing(6);
+        DragStrip *header = new DragStrip(central);
+        header->setObjectName(QStringLiteral("toolbar"));
+        header->setFixedHeight(58);
+        m_tabStrip = header;
+        QHBoxLayout *tb = new QHBoxLayout(header);
+        tb->setContentsMargins(8, 0, 8, 0);
+        tb->setSpacing(0);
 
-        SafariTabBar *bar = new SafariTabBar(strip);
+        // Back/forward stay at the same historical left edge; the integrated
+        // 220-logical tab strip follows them in the same 58-logical row.  All
+        // controls are vertically centered around the historical toolbar
+        // center, so the page origin remains (11,87).
+        m_back = mkToolButton(header, GlyphBack);
+        m_fwd = mkToolButton(header, GlyphForward);
+        tb->addWidget(m_back, 0, Qt::AlignVCenter);
+        tb->addSpacing(5);
+        tb->addWidget(m_fwd, 0, Qt::AlignVCenter);
+        tb->addSpacing(8);
+
+        SafariTabBar *bar = new SafariTabBar(header);
         bar->setObjectName(QStringLiteral("safariTabs"));
+        bar->setFixedWidth(220);
+        bar->setFixedHeight(26);
+        bar->setElideMode(Qt::ElideRight);
         bar->onCloseTab = [this](int idx) { closeTab(idx); };
         m_tabBar = bar;
-        ts->addWidget(bar, 1);
+        tb->addWidget(bar, 0, Qt::AlignVCenter);
 
-        m_newTabBtn = mkGlyphButton(strip, GlyphPlus);
-        m_newTabBtn->setToolTip(QStringLiteral("新标签页"));
-        ts->addWidget(m_newTabBtn);
-        // The minimize/maximize/close buttons are supplied by the native
-        // Windows 11 caption above this client area.
-        root->addWidget(strip);
+        tb->addStretch(1);
 
-        DragStrip *nav = new DragStrip(central);
-        nav->setObjectName(QStringLiteral("toolbar"));
-        nav->setFixedHeight(28);
-        QHBoxLayout *tb = new QHBoxLayout(nav);
-        tb->setContentsMargins(8, 2, 8, 2);
-        tb->setSpacing(6);
-        m_back = mkToolButton(nav, GlyphBack);
-        m_fwd = mkToolButton(nav, GlyphForward);
-        tb->addWidget(m_back);
-        tb->addWidget(m_fwd);
-        m_addr = new QLineEdit(nav);
+        m_addr = new AddressEdit(header);
         m_addr->setObjectName(QStringLiteral("address"));
         m_addr->setPlaceholderText(QStringLiteral("搜索或输入网站名称"));
         m_addr->setClearButtonEnabled(false);
-        m_addr->setMinimumHeight(24);
-        m_addr->addAction(chromeGlyph(GlyphSearch, QColor(120, 122, 124)),
+        m_addr->setFixedHeight(28);
+        m_addr->addAction(chromeGlyph(GlyphSearch, QColor(128, 121, 125)),
                           QLineEdit::LeadingPosition);
-        tb->addWidget(m_addr, 1);
-        m_reload = mkToolButton(nav, GlyphReload);
-        tb->addWidget(m_reload);
-        m_shareBtn = new QPushButton(nav);
-        m_shareBtn->setObjectName(QStringLiteral("toolBtn"));
-        m_shareBtn->setIcon(chromeGlyph(GlyphShare));
-        m_shareBtn->setIconSize(QSize(16, 16));
-        m_shareBtn->setFixedSize(24, 24);
-        m_shareBtn->setFlat(true);
+        m_reloadAction = m_addr->addAction(chromeGlyph(GlyphReload),
+                                           QLineEdit::TrailingPosition);
+        m_reloadAction->setToolTip(QStringLiteral("重新加载"));
+        tb->addWidget(m_addr, 0, Qt::AlignVCenter);
+
+        tb->addStretch(1);
+
+        // Invisible balance equal to the tab-strip's extra left width keeps
+        // the address field centered in the client, not merely centered in the
+        // remaining gap.  (Left fixed = back/fwd+tab=281; right fixed=54.)
+        QWidget *balance = new QWidget(header);
+        balance->setFixedWidth(227);
+        tb->addWidget(balance);
+
+        // Right logical group: actual shell functions only.  Share copies the
+        // current URL and + creates a new tab.  Sidebar/tab-overview have no
+        // implemented action in this codebase, so they are not added.
+        QWidget *rightGroup = new QWidget(header);
+        rightGroup->setObjectName(QStringLiteral("navRight"));
+        QHBoxLayout *rg = new QHBoxLayout(rightGroup);
+        rg->setContentsMargins(0, 0, 0, 0);
+        rg->setSpacing(5);
+        m_shareBtn = mkToolButton(rightGroup, GlyphShare);
         m_shareBtn->setToolTip(QStringLiteral("复制链接"));
-        tb->addWidget(m_shareBtn);
-        root->addWidget(nav);
+        m_newTabBtn = mkGlyphButton(rightGroup, GlyphPlus);
+        m_newTabBtn->setFixedSize(24, 24);
+        m_newTabBtn->setIconSize(QSize(16, 16));
+        m_newTabBtn->setToolTip(QStringLiteral("新标签页"));
+        rg->addWidget(m_shareBtn);
+        rg->addWidget(m_newTabBtn);
+        tb->addWidget(rightGroup, 0, Qt::AlignVCenter);
+        root->addWidget(header);
 
         m_stack = new QStackedWidget(central);
         m_stack->setObjectName(QStringLiteral("pageStack"));
@@ -2005,6 +2096,7 @@ public:
 
         setCentralWidget(central);
         setStyleSheet(safariStyleSheet());
+        updateAddressMetrics();
 
         connect(m_shareBtn, &QPushButton::clicked, this, [this] {
             QApplication::clipboard()->setText(m_addr->text());
@@ -2013,11 +2105,21 @@ public:
                 [this] { addTab(QUrl(QStringLiteral("https://cn.bing.com"))); });
         connect(m_back, &QPushButton::clicked, this, &KHtmlLiteWindow::goBack);
         connect(m_fwd, &QPushButton::clicked, this, &KHtmlLiteWindow::goForward);
-        connect(m_reload, &QPushButton::clicked, this, [this] {
+        connect(m_reloadAction, &QAction::triggered, this, [this] {
             TabPage *pg = currentPage();
-            if (pg && pg->crashWidget) retryCrashedTab(pg);
-            else if (pg && pg->render && pg->render->isRunning()) pg->render->reload();
-            else if (pg && pg->suspended) resumeTab(pg);
+            if (!pg) return;
+            if (pg->loading && pg->render && pg->render->isRunning()) {
+                pg->render->stop();
+            } else if (pg->crashWidget) {
+                retryCrashedTab(pg);
+            } else if (pg->render && pg->render->isRunning()) {
+                pg->loading = true;
+                pg->loadProgress = 0;
+                pg->render->reload();
+                updateLoadIndicator();
+            } else if (pg->suspended) {
+                resumeTab(pg);
+            }
         });
         connect(m_addr, &QLineEdit::returnPressed, this, &KHtmlLiteWindow::onAddressEntered);
         connect(m_tabBar, &QTabBar::currentChanged, this, [this](int idx) {
@@ -2285,6 +2387,21 @@ public:
         connect(pg->render, &RenderTab::firstFrame, this, [this, pg]() {
             finishRecovery(pg);
         });
+        connect(pg->render, &RenderTab::loadStarted, this, [this, pg]() {
+            pg->loading = true;
+            pg->loadProgress = 0;
+            if (pg == currentPage()) updateLoadIndicator();
+        });
+        connect(pg->render, &RenderTab::loadProgress, this, [this, pg](int percent) {
+            pg->loading = true;
+            pg->loadProgress = qMax(pg->loadProgress, qBound(0, percent, 100));
+            if (pg == currentPage()) updateLoadIndicator();
+        });
+        connect(pg->render, &RenderTab::loadFinished, this, [this, pg]() {
+            pg->loading = false;
+            pg->loadProgress = 100;
+            if (pg == currentPage()) updateLoadIndicator();
+        });
         connect(pg->render, &RenderTab::titleChanged, this, [this, pg](const QString &t) {
             fprintf(stderr, "[tomb] titleChanged title=%s cur=%d\n",
                     t.toUtf8().constData(), pg == currentPage());
@@ -2323,6 +2440,7 @@ public:
         connect(pg->render, &RenderTab::crashed, this, [this, pg]() {
             const int idx = m_pages.indexOf(pg);
             if (idx < 0) return;
+            pg->loading = false;
             // Capture before detaching the renderer; also the tab may be in the
             // background, so preserve selection exactly as it was.
             const bool wasCurrent = (currentPage() == pg);
@@ -2360,8 +2478,10 @@ public:
                           title.isEmpty() ? QStringLiteral("已崩溃") : title);
             blockPageTabSignals(false);
             setPageTabTitle(idx, QStringLiteral("已崩溃"));
+            pg->loading = false;
             if (wasCurrent) {
                 selectPageTab(idx);
+                updateLoadIndicator();
                 setWindowTitle(QStringLiteral("已崩溃 - KHtmlLite"));
             } else {
                 syncChrome();
@@ -2378,6 +2498,9 @@ public:
                 [pg](int x, int y, int zoom) {
                     pg->scrollX = x; pg->scrollY = y; pg->zoom = zoom;
                 });
+        pg->loading = true;
+        pg->loadProgress = 0;
+        if (pg == currentPage()) updateLoadIndicator();
         pg->render->start(url, 800, 560, pg->jsDisabled);
     }
 
@@ -2420,6 +2543,7 @@ public:
 protected:
     void resizeEvent(QResizeEvent *event) override {
         QMainWindow::resizeEvent(event);
+        updateAddressMetrics();
         if (m_liveResize) {
             // Live-resize in progress: do not ship intermediate pixel sizes to
             // the renderer. PageSurface scales its last frame for visual
@@ -2508,11 +2632,14 @@ protected:
         pg->navPushed = pushHistory;
         pg->current = url;
         pg->lastActive = QDateTime::currentMSecsSinceEpoch();
+        pg->loading = true;
+        pg->loadProgress = 0;
         if (pg->suspended) { resumeTab(pg); return; }
         if (pg->render && pg->render->isRunning()) pg->render->navigate(url);
         else { startRenderer(pg, url); }
         m_addr->setText(url.toString());
         updateNavButtons();
+        if (pg == currentPage()) updateLoadIndicator();
     }
 
     void goBack() {
@@ -2537,11 +2664,34 @@ protected:
         m_fwd->setEnabled(pg && !pg->fwd.isEmpty());
     }
 
+    void updateAddressMetrics() {
+        if (!m_addr) return;
+        // Reference: address width / window width = 497 / 1218 = 40.8%.
+        // Keep a sane minimum at the narrow-window limit; the two equal side
+        // groups + equal stretches keep the field centered in the client.
+        const int target = qRound(width() * 0.408);
+        m_addr->setFixedWidth(qBound(360, target, 760));
+    }
+
+    void updateLoadIndicator() {
+        TabPage *pg = currentPage();
+        const bool loading = pg && pg->loading;
+        if (m_addr)
+            loading ? m_addr->setLoadProgress(pg->loadProgress)
+                    : m_addr->clearLoadProgress();
+        if (m_reloadAction) {
+            m_reloadAction->setIcon(chromeGlyph(loading ? GlyphStop : GlyphReload));
+            m_reloadAction->setToolTip(loading ? QStringLiteral("停止加载")
+                                               : QStringLiteral("重新加载"));
+        }
+    }
+
     void syncChrome() {
         TabPage *pg = currentPage();
         if (!pg) return;
         m_addr->setText(pg->current.isValid() ? pg->current.toString() : QString());
         updateNavButtons();
+        updateLoadIndicator();
         const QString t = pg->render ? pg->render->title() : QString();
         setWindowTitle(t.isEmpty() ? QStringLiteral("KHtmlLite")
                                    : QStringLiteral("%1 - KHtmlLite").arg(t));
@@ -2571,6 +2721,8 @@ protected:
     // ---- Tombstone / memory budget (Safari-style) ----
     void suspendTab(TabPage *pg) {
         if (!pg || pg->suspended) return;
+        pg->loading = false;
+        if (pg == currentPage()) updateLoadIndicator();
         fprintf(stderr, "[tomb] suspendTab idx=%d\n", m_pages.indexOf(pg));
         pg->savedTitle = pageTabTitle(m_pages.indexOf(pg));
         if (pg->savedTitle.isEmpty()) pg->savedTitle = pg->current.host();
@@ -2998,8 +3150,9 @@ protected:
     bool m_captionColorSampled = false;
     HICON m_transparentCaptionIcon = nullptr;
     QList<TabPage *> m_pages;
-    QLineEdit *m_addr = nullptr;
-    QPushButton *m_back = nullptr, *m_fwd = nullptr, *m_reload = nullptr;
+    AddressEdit *m_addr = nullptr;
+    QAction *m_reloadAction = nullptr;
+    QPushButton *m_back = nullptr, *m_fwd = nullptr;
 };
 
 int main(int argc, char **argv)

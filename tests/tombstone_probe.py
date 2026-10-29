@@ -105,6 +105,22 @@ def click(hwnd, x, y):
     USER32.PostMessageW(hwnd, 0x0202, 0, lparam)    # WM_LBUTTONUP
 
 
+def real_click(hwnd, x, y):
+    """OS-level click with cursor move: tab widgets need a real hover/button
+    transition just like a user click; posted WM_LBUTTON* alone selects tabs
+    only up to the old shell's event path.  Client coords -> screen coords."""
+    force_foreground(hwnd)
+    cp = ctypes.create_string_buffer(8)
+    USER32.ClientToScreen(hwnd, cp)
+    ox = ctypes.c_int.from_buffer(cp, 0).value
+    oy = ctypes.c_int.from_buffer(cp, 4).value
+    USER32.SetCursorPos(ox + x, oy + y)
+    time.sleep(0.15)
+    USER32.mouse_event(0x0002, 0, 0, 0, 0)   # LEFTDOWN
+    time.sleep(0.05)
+    USER32.mouse_event(0x0004, 0, 0, 0, 0)   # LEFTUP
+
+
 def renderer_pids():
     txt = subprocess.check_output(
         ["tasklist", "/FI", "IMAGENAME eq khtml_renderer.exe", "/FO", "CSV"],
@@ -195,13 +211,12 @@ def main():
         alive_renderers = len(renderer_pids())
         print(f"renderers alive after tombstone: {alive_renderers}")
 
-        # Resume: click the tombstoned tab in the classic-Safari tab strip.
-        # New shell: tabs start at x~15 logical (22 physical), min width 144
-        # logical; the close hot zone is at the tab's right edge.  Click the
-        # left/title part and also retry a few nearby points for robustness.
+        # Resume: click the tombstoned tab in the unified toolbar row.  The
+        # tab strip is integrated after back/forward; its left title area
+        # starts around x=114 physical and the close hot zone is at the right.
         resumed = False
-        for (x, y) in ((80, 22), (100, 22), (120, 22), (170, 22), (170, 20)):
-            click(hwnd, x, y)
+        for (x, y) in ((170, 43), (190, 43), (170, 40), (170, 47)):
+            real_click(hwnd, x, y)
             time.sleep(3)
             tr2 = trace_text()
             resumed = "resumeTab idx=0" in tr2

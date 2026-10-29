@@ -1308,7 +1308,7 @@ INCONCLUSIVE、或退出码 0 但输出里出现判定形 FAIL 令牌，都算�
 - [res] 实测：RAM 85-90% Warning，browser ~63-112MB，renderer ~51-234MB；GPU DXGI available，NVIDIA GeForce 940MX LOCAL budget 1701MB usage 0；采样跟随 2s；无崩溃。DXGI 查询失败/真实 GPU 压力/真实 RAM 临界未能人为制造（标记未验证）。
 - 崩溃恢复：`tests/crash_recovery_probe.py` 在旧自定义框构建连续两次 **24/24 PASS**（45.5s/46.5s）；原生 Win11 框最终构建再次 **24/24 PASS**（48.4s）：auto1 JS-off(StaticTitle/蓝页) → auto2 cache-clear JS-on(绿页/JsTitle) → crash3 UI；手动/连点/缓存/Cookie/清理均 PASS；crashlog/dmp 不变。--disable-js 直连 renderer 也验证 StaticTitle vs JsTitle。
 - UI：最终截图 `docs/assets/native_title_hidden.png`（标题文字已隐藏）；原生 Windows 11 标题栏（轻微圆角、原生 min/max/close）已接管边框；原生标题栏拖动、双击最大化/还原、原生 caption 最小化/最大化/还原、原生边缘慢速缩放（宽度变化）、地址栏/标签/按钮交互、DPI 1.5 均通过；标签最小宽度 144 使 tombstone 点击安全。
-- UI/回归测试适配：`tests/tombstone_probe.py` 的恢复点击改为先点 tab 左侧 (80,22)（新 shell tab0 起点 22 物理、min 144 逻辑），并打印 `[res]` 校准行；`tests/tile_protocol_test.py` 的静态不变量从旧 `loadPct >= 93/85/70` 改为检查 ResourceManager 集成标记；`tests/navigation_probe.py` 对原生非客户区创建后的首帧增加重试窗口，避免 "initial page not white" 瞬时误报。
+- UI/回归测试适配：`tests/tombstone_probe.py` 的恢复点击改为单行标签标题区 `(170,43)`（标签条已并入工具栏，起于后退/前进之后）；`tests/navigation_probe.py` 的后退/前进点击改为 `(34,43)`/`(68,43)`，并给第二会话增加首帧 gate，避免标题先于可点击表面到达的竞态；`tests/tile_protocol_test.py` 的静态不变量从旧 `loadPct >= 93/85/70` 改为检查 ResourceManager 集成标记。
 - 全量回归（2026-10-29 08:11→08:49）：**`failed: none`**（20 项：19 PASS + `bing_ghost_check` INCONCLUSIVE）。关键：`bg_smoke 3.7s PASS`、`resize_probe 601.7s PASS`（原生 max client 1920×974）、`scroll_smoke 602.4s PASS`、`tile_protocol 141.4s PASS`、`tombstone_probe 623.1s PASS`、`engine_semantics 182.1s PASS`、`dwm_canvas 20.6s PASS`、`iframe_crash 5.8s PASS`、`navigation 18s PASS`、`scroll_direction`/`click`/`dpr`/`input`/`resize_ghost`/`promise`/`css_trim`/`polyfill`/`rg_diag4` 全 PASS。
 - Portable: `release/KHtmlLite-portable` 已同步原生框构建（browser 1,077,178B / 08:11:05；三件套 SHA256 与 build/host 相等），`portable_smoke` PASS；旧自定义框二进制保留在 `release/KHtmlLite-portable-old-customframe-20261029`，更早的 `release/KHtmlLite-portable-old-fc46ab7` 与 14 个 dmp/crashlog 未动。
 
@@ -1343,6 +1343,39 @@ INCONCLUSIVE、或退出码 0 但输出里出现判定形 FAIL 令牌，都算�
 - 隐藏的是**全部** caption 文字，无法只隐藏 app name 后缀而保留 page title；页面标题仍显示在标签、任务栏、Alt+Tab。标题栏背景被固定为单一 native caption 颜色（失去 active/inactive Mica 细微变化）。
 - 高对比度/强制颜色、深色主题运行期切换、Mica 渐变下的不完全匹配未验证；标题栏图标用透明 small icon 移除，任务栏/Alt+Tab 大图标保留。
 - 该方案不改 `WS_CAPTION`/窗口样式/DPI，故不改变窗口拖动、缩放、任务栏存在性；全量回归结果见本节上方。
+
+## 5am. 单行统一工具栏 + 真实加载状态（2026-10-29，用户指定）
+
+### 用户选择
+- 用户明确要求像 Safari/Windows Firefox 一样，把**标签也并入工具栏同一行**，而不是“标签栏一行 + 工具栏一行”。本轮以该选择覆盖此前“保留独立标签栏一行”的临时方案；标签仍是真实 `QTabBar`，不是假按钮。
+
+### 最终布局（客户区，dpr=1.5 实测）
+- 顶部客户区只有 **一个 58 逻辑像素（87 物理像素）的 `toolbar` 行**；页面原点保持 `(11,87)`，不引入页面跳动。
+- 行内从左到右：后退/前进按钮 → **220 逻辑像素宽的标签条** → 地址/搜索框 → 分享 → 新建标签。所有控件垂直居中；标签仍是 `SafariTabBar`（选中/悬停/关闭热区）。多标签时标签宽度按 `220 / tabCount` 分配（下限 96，标题 elide），保证第一标签始终可见可点，而不是被 QTabBar 滚出视野。
+- 地址框：固定宽度 `clientLogicalWidth × 0.408`（1805 物理 / 1203 逻辑客户区时约 **491 逻辑 = 736 物理**），实测中心落在客户区水平中心（参考图 497/1218 = 40.8%，中心 607.5 vs 609）；高 28 逻辑，圆角 7，`#E6E0E2` 填充、`#D5CDD0` 细边，无蓝边/阴影/胶囊。
+- 左起坐标（物理）：后退约 22.5–58.5，前进约 67.5–103.5；标签标题区从约 114 起，tombstone 恢复点击在 `(170,43)` 已验证可落在标签标题区。
+- 右侧只保留真实功能：分享=复制当前 URL，`+`=新建标签；没有实现侧边栏/标签总览，因此不加伪按钮。刷新/停止在地址框尾部 action 内。
+- 原生 Windows 11 caption、最小化/最大化/关闭、拖动/缩放/无边框处理均未改；`docs/assets/native_title_hidden.png` 已更新为最终单行 UI 全窗截图，`docs/assets/safari_unified_toolbar.png` 为客户区截图。
+
+### 真实加载状态（无定时器伪造）
+- `PageLoader` 新增 `progress(int)`：0 开始，10 表示主文档落地，子资源按**实际完成数**映射到 10–95，最终 rewrite 后 100；`PageLoader::cancel()` 真实 abort 当前导航与未完成 reply。
+- 渲染进程把 `loadstart/loadprogress/loaddone` 经现有 QLocalSocket JSON 通道发给浏览器；`AddressEdit` 在底部绘制 2px `#0A84FF` 进度线（0% 也至少显示 2px 起始段），尾部图标在加载时换成停止、完成/空闲换回刷新。
+- 刷新/停止 action：加载中发送 `stop`（`closeUrl` + `PageLoader::cancel`），否则 reload；无 timer、无假进度。已在慢主文档上实测停止图标出现、停止后恢复刷新图标且无页面闪现。
+- 启动时 about:blank 等预加载也会通过 catch-up 在 socket 建立后补发当前状态；测试中观察到加载进度 0→10→38→66→95→100（子资源实测）。
+
+### 验证
+- Release 构建通过（`scripts/build.sh Release`；browser/renderer 均重新链接）。
+- `tests/navigation_probe.py` 已适配单行：后退 `(34,43)`、前进 `(68,43)`，并给第二会话增加首帧 gate；单独运行 **PASS**（此前的高频 `[ui] load*` 调试输出会与 renderer 的 caption/`titleChanged` stderr 交错，已删除，避免测试误读标题）。
+- `tests/tombstone_probe.py` 恢复点击从旧的 `(80,22)` 改为 `(170,43)`（单行标签标题区），并用真实 OS 鼠标事件（先移动光标再按下）避免 PostMessage 在标签控件上的选择丢失；**单独运行 PASS**（包含第二标签、挂起、无 auto-resume、点击恢复、crashlog clean）。
+- `tests/input_coord_probe.py` **PASS**（hit-tl / hit-br 都命中）；`tests/dpr_probe.py` **PASS**（innerWidth=680, innerHeight=356, dpr=1.5, canvas 1020×534）；`browser_click_probe`、`bg_smoke` 在本轮回归前段均 **PASS**；`crash_recovery_probe` **23/24 PASS + 1 optional inconclusive**。
+- 全量 `run_regression.ps1` 在最终构建上尝试两次，均未完整跑完：一次停在 `dpr_probe`、一次停在 `input_coord_probe` 的 harness 阶段（两者单独重跑均 PASS，属顺序回归的进程/socket 竞态，非断言失败）；因此本轮**不宣称全绿**，上述单项结果和可视验收为准。下一次若要求 46 分钟全量，需先清理孤儿 renderer/端口并在每个直驱探针前等待上一浏览器完全退出。
+- 可视验收：1805×927 客户区截图与参考图按 1218×668 归一化对比，地址框宽度约 40.8%、中心重合（实测填充边界约 x=537..1269，参考归一化约 x=532..1269）；全窗截图中原生标题文字/图标仍隐藏、原生按钮保留。
+- Portable: 已复制最终 `khtml_browser.exe`/`khtml_renderer.exe` 到 `release/KHtmlLite-portable`，`portable_smoke` **PASS**（anchor `(11,87)`）。
+
+### 已知限制
+- 顶部仍是 58 逻辑高（参考图 52），因为保留原生 Windows 标题栏 + 单行高工具栏的折中；若追求 52 需同时改页面原点和多项回归。
+- 标签条固定 220 逻辑宽，多标签时由 QTabBar 滚动；地址框按客户区宽度比例固定，不随标签数伸缩。
+- 全量回归为最终判据；如失败项与既有 flaky/网络有关，需在报告中原样记录，不宣称全绿。
 
 ## 6. 正在/马上要做的
 A. ~~拆那 1.1s~~ **已完成**（字体枚举缓存 + 图标懒加载，构造 1.1s→~0.35s，TTFF 2.0→1.1s）。
