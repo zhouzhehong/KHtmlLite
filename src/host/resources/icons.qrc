@@ -10,4 +10,13 @@
     <file alias="plus.svg">icons/plus.svg</file>
     <file alias="address-field-frame.svg">icons/address-field-frame.svg</file>
   </qresource>
+  <qresource prefix="/fonts">
+    <file alias="GoogleSansFlex-Regular.ttf">fonts/GoogleSansFlex-Regular.ttf</file>
+    <file alias="GoogleSansFlex-Medium.ttf">fonts/GoogleSansFlex-Medium.ttf</file>
+    <file alias="NotoSansSC-Regular.ttf">fonts/NotoSansSC-Regular.ttf</file>
+    <file alias="NotoSansSC-Medium.ttf">fonts/NotoSansSC-Medium.ttf</file>
+    <file alias="OFL-GoogleSansFlex.txt">fonts/OFL-GoogleSansFlex.txt</file>
+    <file alias="OFL-NotoSansSC.txt">fonts/OFL-NotoSansSC.txt</file>
+    <file alias="FONT_SOURCES.md">fonts/FONT_SOURCES.md</file>
+  </qresource>
 </RCC>

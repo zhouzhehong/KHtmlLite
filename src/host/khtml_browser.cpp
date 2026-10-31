@@ -24,6 +24,9 @@
 #include <QSvgRenderer>
 #include <QGraphicsDropShadowEffect>
 #include <QFocusEvent>
+#include <QEvent>
+#include <QVariantAnimation>
+#include <QEasingCurve>
 #include <QPolygonF>
 #include <functional>
 #include <QStackedWidget>
@@ -44,6 +47,16 @@
 #include <QStyle>
 #include <QApplication>
 #include <QScreen>
+#include <QFont>
+#include <QFontDatabase>
+#include <QFontInfo>
+#include <QFontMetrics>
+#include <QRawFont>
+#include <QTextLayout>
+#include <QTextLine>
+#include <QGlyphRun>
+#include <QPainterPath>
+#include <QRegion>
 #include <QRegularExpression>
 #include <QProcess>
 #include <QLocalSocket>
@@ -1377,11 +1390,103 @@ protected:
     }
 };
 
+// Owned top-level toolbar that covers the left/centre of the native caption
+// band.  The real DWM caption buttons stay uncovered to its right.  It is
+// deliberately not a child in the client layout: a Qt child cannot paint over
+// the non-client caption.  The native frame, resize borders and caption hit
+// testing therefore remain untouched.
+class CaptionToolbarOverlay : public QWidget
+{
+public:
+    explicit CaptionToolbarOverlay(QWidget *owner)
+        : QWidget(nullptr, Qt::Window | Qt::FramelessWindowHint
+                         | Qt::NoDropShadowWindowHint),
+          m_owner(owner)
+    {
+        if (owner)
+            connect(owner, &QObject::destroyed, this, &QWidget::deleteLater);
+        setAttribute(Qt::WA_ShowWithoutActivating, true);
+        setAttribute(Qt::WA_NativeWindow, true);
+        setAutoFillBackground(true);
+        setMouseTracking(true);
+    }
+
+protected:
+
+protected:
+    void mousePressEvent(QMouseEvent *e) override
+    {
+        if (e->button() == Qt::LeftButton) {
+            m_pressPos = e->pos();
+            m_pressed = true;
+            e->accept();
+            return;
+        }
+        QWidget::mousePressEvent(e);
+    }
+
+    void mouseMoveEvent(QMouseEvent *e) override
+    {
+        if (m_pressed && (e->buttons() & Qt::LeftButton)
+                && (e->pos() - m_pressPos).manhattanLength()
+                       >= QApplication::startDragDistance()) {
+            m_pressed = false;
+            startOwnerMove();
+            e->accept();
+            return;
+        }
+        QWidget::mouseMoveEvent(e);
+    }
+
+    void mouseReleaseEvent(QMouseEvent *e) override
+    {
+        m_pressed = false;
+        QWidget::mouseReleaseEvent(e);
+    }
+
+    void mouseDoubleClickEvent(QMouseEvent *e) override
+    {
+        if (e->button() == Qt::LeftButton && m_owner) {
+            HWND hwnd = reinterpret_cast<HWND>(m_owner->winId());
+            POINT pt;
+            if (hwnd && GetCursorPos(&pt)) {
+                ReleaseCapture();
+                SendMessageW(hwnd, WM_NCLBUTTONDBLCLK, HTCAPTION,
+                             MAKELPARAM((WORD)pt.x, (WORD)pt.y));
+            }
+            e->accept();
+            return;
+        }
+        QWidget::mouseDoubleClickEvent(e);
+    }
+
+private:
+    void startOwnerMove()
+    {
+        HWND hwnd = m_owner ? reinterpret_cast<HWND>(m_owner->winId()) : nullptr;
+        POINT pt;
+        if (!hwnd || !GetCursorPos(&pt))
+            return;
+        ReleaseCapture();
+        SendMessageW(hwnd, WM_NCLBUTTONDOWN, HTCAPTION,
+                     MAKELPARAM((WORD)pt.x, (WORD)pt.y));
+    }
+
+    QWidget *m_owner = nullptr;
+    QPoint m_pressPos;
+    bool m_pressed = false;
+};
+
 // Safari-style tab bar: rounded tabs in WhiteSur-Monterey colours
 // (#f5f5f5 inactive / #f0f0f0 hover / #e8e8e8 selected, 8 px radius,
 // 32 px tab height in the reference; 22 logical px here to keep the page
 // content origin at the historical (11, 87) physical px).  Draws its own
 // close "x" on the active/hovered tab; no Qt default close buttons.
+// Client chrome metrics.  The native Win11 caption remains above; the
+// toolbar is immediately below it and the tab strip is below the toolbar.
+static constexpr int kToolbarHeight = 32;
+static constexpr int kTabStripHeight = 26;
+
 class SafariTabBar : public QTabBar
 {
 public:
@@ -1389,12 +1494,21 @@ public:
     {
         setMouseTracking(true);
         setElideMode(Qt::ElideRight);
-        setUsesScrollButtons(true);
+        setUsesScrollButtons(false);
         setDrawBase(false);
         setExpanding(false);
         setMovable(true);
         setTabsClosable(false);
         setContextMenuPolicy(Qt::CustomContextMenu);
+
+        m_widthAnim = new QVariantAnimation(this);
+        m_widthAnim->setDuration(140);
+        m_widthAnim->setEasingCurve(QEasingCurve::OutCubic);
+        connect(m_widthAnim, &QVariantAnimation::valueChanged, this,
+                [this](const QVariant &v) {
+            m_effectiveCount = v.toDouble();
+            update();
+        });
     }
 
     std::function<void(int)> onCloseTab;
@@ -1403,48 +1517,89 @@ protected:
     QSize tabSizeHint(int index) const override
     {
         QSize s = QTabBar::tabSizeHint(index);
-        s.setHeight(22);
-        // Integrated tab strip is only 220 logical wide.  Dividing the
-        // available strip among the open tabs keeps the FIRST tab visible
-        // (and clickable) when a second tab is selected; the old fixed 144
-        // minimum forced QTabBar to scroll it out of view.
-        const int avail = width() > 0 ? width() : 220;
-        const int n = qMax(1, count());
-        s.setWidth(qBound(96, avail / n, 180));
+        s.setHeight(kTabStripHeight);
+        // Equal rectangular cells: the strip width is divided exactly among
+        // current tabs.  The paint path uses the same rounded boundaries so
+        // adjacent cells tile the strip without gaps or overlap.
+        s.setWidth(qMax(1, width() / qMax(1, count())));
         return s;
+    }
+
+    QSize minimumSizeHint() const override
+    {
+        // Equal-width tabs are derived from the current strip width; QTabBar's
+        // default minimum would feed that width back into the layout and
+        // prevent a one-tab window from shrinking.
+        return QSize(1, kTabStripHeight);
+    }
+
+    void tabInserted(int index) override
+    {
+        QTabBar::tabInserted(index);
+        animateCountChange();
+    }
+
+    void tabRemoved(int index) override
+    {
+        QTabBar::tabRemoved(index);
+        animateCountChange();
+    }
+
+    QRectF cellRect(int index) const
+    {
+        const int n = count();
+        if (n <= 0 || index < 0 || index >= n) return QRectF();
+        const qreal eff = qMax<qreal>(1.0, m_effectiveCount);
+        const int w = width();
+        int x0 = qRound(index * w / eff);
+        int x1 = qRound((index + 1) * w / eff);
+        if (x1 <= 0 || x0 >= w) return QRectF();
+        x0 = qBound(0, x0, w);
+        x1 = qBound(0, x1, w);
+        return QRectF(x0, 0, qMax(1, x1 - x0), height());
     }
 
     void paintEvent(QPaintEvent *) override
     {
         QPainter p(this);
-        p.setRenderHint(QPainter::Antialiasing, true);
         for (int i = 0; i < count(); ++i) {
+            const QRectF cell = cellRect(i);
+            if (cell.isEmpty()) continue;
             const bool sel = (i == currentIndex());
             const bool hov = (i == m_hover);
-            QRectF r = QRectF(tabRect(i)).adjusted(2.0, 2.0, -2.0, -2.0);
-            // Compact rounded Safari-like tabs; selected is only subtly
-            // brighter than inactive, not a Liquid-Glass pill.
-            const QColor fill = sel ? QColor(0xFF, 0xFF, 0xFF)
-                                    : (hov ? QColor(0xE4, 0xE8, 0xEC) : QColor(0xEC, 0xEF, 0xF2));
-            p.setPen(QPen(sel ? QColor(0, 0, 0, 38) : QColor(0, 0, 0, 12), 1.0));
-            p.setBrush(fill);
-            p.drawRoundedRect(r.adjusted(0.5, 0.5, -0.5, -0.5), 4, 4);
+            // Flat rectangular cells with square corners; no capsules.
+            const QColor fill = sel ? QColor(0xF7, 0xF8, 0xFA)
+                                    : (hov ? QColor(0xEF, 0xF2, 0xF5)
+                                           : QColor(0xE8, 0xEB, 0xEF));
+            p.fillRect(cell, fill);
+            p.setPen(QPen(QColor(0, 0, 0, 24), 1.0));
+            p.drawLine(QPointF(cell.right() - 0.5, 2.0),
+                       QPointF(cell.right() - 0.5, cell.bottom() - 2.0));
 
             QFont f = font();
             f.setPixelSize(11);
+            f.setWeight(sel ? QFont::Medium : QFont::Normal);
             p.setFont(f);
-            p.setPen(sel ? QColor(0x30, 0x34, 0x3A) : QColor(0x6D, 0x74, 0x7D));
-            const int closeW = (sel || hov) ? 18 : 7;
-            QRectF textR = r.adjusted(9, 0, -closeW, 0);
-            p.drawText(textR, Qt::AlignVCenter | Qt::AlignLeft,
-                       fontMetrics().elidedText(tabText(i).startsWith(QLatin1Char('&'))
-                                                 ? tabText(i).mid(1) : tabText(i),
-                                                 Qt::ElideRight,
-                                                int(textR.width())));
+            p.setPen(sel ? QColor(0x30, 0x34, 0x3A) : QColor(0x68, 0x70, 0x79));
+            const int closeReserve = (sel || hov) ? 24 : 12;
+            QRectF textR = cell.adjusted(closeReserve, 0, -closeReserve, 0);
+            if (textR.width() > 1.0) {
+                QString title = tabText(i);
+                // QTabBar treats '&' as a mnemonic marker.  Preserve an
+                // explicitly doubled literal ampersand, but do not paint a
+                // stray mnemonic leading into the visible title.
+                title.replace(QStringLiteral("&&"), QString(QChar(0x1F)));
+                title.remove(QLatin1Char('&'));
+                title.replace(QChar(0x1F), QLatin1Char('&'));
+                p.drawText(textR, Qt::AlignCenter,
+                           fontMetrics().elidedText(title, Qt::ElideRight,
+                                                     int(textR.width())));
+            }
 
-            if (sel || hov) {
-                const QPointF c(r.right() - 12, r.center().y());
-                p.setPen(QPen(QColor(0x7A, 0x81, 0x8A), 1.4, Qt::SolidLine, Qt::RoundCap));
+            if ((sel || hov) && cell.width() > 32.0) {
+                const QPointF c(cell.right() - 12.0, cell.center().y());
+                p.setPen(QPen(QColor(0x7A, 0x81, 0x8A), 1.4,
+                              Qt::SolidLine, Qt::RoundCap));
                 p.drawLine(c + QPointF(-3.0, -3.0), c + QPointF(3.0, 3.0));
                 p.drawLine(c + QPointF(3.0, -3.0), c + QPointF(-3.0, 3.0));
             }
@@ -1473,22 +1628,16 @@ protected:
         const int idx = tabAt(e->pos());
         if (idx >= 0 && e->button() == Qt::LeftButton) {
             m_lastCaptionClick = 0;
-            const QRect r = tabRect(idx);
-            const QRect closeRect(r.right() - 20, r.center().y() - 7, 16, 14);
+            const QRectF r = cellRect(idx);
+            const QRect closeRect(qRound(r.right()) - 20,
+                                  qRound(r.center().y()) - 7, 16, 14);
             if (closeRect.contains(e->pos())) {
-                if (onCloseTab) {
-                    onCloseTab(idx);
-                }
+                if (onCloseTab) onCloseTab(idx);
                 e->accept();
                 return;
             }
         }
         if (idx < 0 && e->button() == Qt::LeftButton) {
-            // Bug 2: the blank title-strip area is part of this stretch-filled
-            // QTabBar, not of the parent DragStrip.  Handle the caption here
-            // (this was the no-drag root cause).  A manual double-click check
-            // is needed because the first press starts the system move loop,
-            // which can swallow Qt's normal double-click event.
             const qint64 now = QDateTime::currentMSecsSinceEpoch();
             const bool dbl = m_lastCaptionClick > 0
                     && now - m_lastCaptionClick <= QApplication::doubleClickInterval()
@@ -1516,7 +1665,6 @@ protected:
     void mouseDoubleClickEvent(QMouseEvent *e) override
     {
         if (e->button() == Qt::LeftButton && tabAt(e->pos()) < 0) {
-            // Also honor Qt's double-click event when the platform delivers it.
             m_lastCaptionClick = 0;
             if (QMainWindow *mw = qobject_cast<QMainWindow *>(window())) {
                 if (mw->isMaximized()) mw->showNormal();
@@ -1529,6 +1677,33 @@ protected:
     }
 
 private:
+    void animateCountChange()
+    {
+        const int n = count();
+        if (n <= 0) {
+            m_widthAnim->stop();
+            m_effectiveCount = 0;
+            update();
+            return;
+        }
+        if (m_effectiveCount <= 0.0) {
+            m_widthAnim->stop();
+            m_effectiveCount = n;
+            update();
+            return;
+        }
+        if (qFuzzyCompare(m_effectiveCount, qreal(n))) {
+            m_widthAnim->stop();
+            return;
+        }
+        m_widthAnim->stop();
+        m_widthAnim->setStartValue(m_effectiveCount);
+        m_widthAnim->setEndValue(qreal(n));
+        m_widthAnim->start();
+    }
+
+    QVariantAnimation *m_widthAnim = nullptr;
+    qreal m_effectiveCount = 0.0;
     int m_hover = -1;
     qint64 m_lastCaptionClick = 0;
     QPoint m_lastCaptionPos;
@@ -1544,7 +1719,12 @@ public:
         m_shadow->setOffset(0, 2);
         m_shadow->setColor(Qt::transparent);
         setGraphicsEffect(m_shadow);
+        QPalette pal = palette();
+        pal.setColor(QPalette::PlaceholderText, QColor(0x9A, 0x9F, 0xA6));
+        setPalette(pal);
     }
+
+    std::function<void(bool)> onFocusChanged;
 
     // -1 hides the line; 0..100 is the real KHTML loading progress.
     void setLoadProgress(int progress)
@@ -1567,6 +1747,7 @@ protected:
         QLineEdit::focusInEvent(event);
         m_shadow->setBlurRadius(10);
         m_shadow->setColor(QColor(80, 140, 200, 45));
+        if (onFocusChanged) onFocusChanged(true);
     }
 
     void focusOutEvent(QFocusEvent *event) override
@@ -1574,6 +1755,7 @@ protected:
         QLineEdit::focusOutEvent(event);
         m_shadow->setBlurRadius(0);
         m_shadow->setColor(Qt::transparent);
+        if (onFocusChanged) onFocusChanged(false);
     }
 
     void paintEvent(QPaintEvent *event) override
@@ -1596,10 +1778,7 @@ private:
     QGraphicsDropShadowEffect *m_shadow = nullptr;
 };
 
-// Client chrome metrics.  The native Win11 caption remains above; the
-// toolbar is immediately below it and the tab strip is below the toolbar.
-static constexpr int kToolbarHeight = 32;
-static constexpr int kTabStripHeight = 26;
+// Client chrome metrics are declared above SafariTabBar.
 static constexpr int kSvgIconPx = 64;
 
 static QPixmap tintedSvgPixmap(const QString &resource, const QColor &color)
@@ -1641,6 +1820,101 @@ static QPushButton *svgToolButton(QWidget *parent, const QString &resource,
     b->setFlat(true);
     b->setToolTip(tooltip);
     return b;
+}
+
+// Physical bounds of the native caption-button group.  Query DWM first so
+// the overlay reserves exactly the current DPI/maximized button strip.  Fall
+// back to WM_GETTITLEBARINFOEX if DWM cannot report it.
+static bool captionButtonBounds(HWND hwnd, RECT &out)
+{
+    out = RECT{0, 0, 0, 0};
+    HMODULE dwm = LoadLibraryW(L"dwmapi.dll");
+    if (dwm) {
+        typedef HRESULT (WINAPI *GetAttrFn)(HWND, DWORD, PVOID, DWORD);
+        GetAttrFn getAttr = reinterpret_cast<GetAttrFn>(
+            GetProcAddress(dwm, "DwmGetWindowAttribute"));
+        if (getAttr) {
+            RECT r{0, 0, 0, 0};
+            if (SUCCEEDED(getAttr(hwnd, DWMWA_CAPTION_BUTTON_BOUNDS,
+                                  &r, sizeof(r)))
+                    && r.right > r.left && r.bottom > r.top) {
+                // DWM documents this as window-relative space.  The overlay
+                // is positioned in screen space, so normalize it here.
+                RECT wr{};
+                if (GetWindowRect(hwnd, &wr)) {
+                    r.left += wr.left;
+                    r.top += wr.top;
+                    r.right += wr.left;
+                    r.bottom += wr.top;
+                }
+                out = r;
+                FreeLibrary(dwm);
+                return true;
+            }
+        }
+        FreeLibrary(dwm);
+    }
+
+    TITLEBARINFOEX info = {};
+    info.cbSize = sizeof(info);
+    SendMessageW(hwnd, WM_GETTITLEBARINFOEX, 0,
+                 reinterpret_cast<LPARAM>(&info));
+    bool any = false;
+    for (int i = 1; i < 6; ++i) {
+        const RECT &r = info.rgrect[i];
+        if (r.right <= r.left || r.bottom <= r.top)
+            continue;
+        if (!any) {
+            out = r;
+            any = true;
+        } else {
+            out.left = qMin(out.left, r.left);
+            out.top = qMin(out.top, r.top);
+            out.right = qMax(out.right, r.right);
+            out.bottom = qMax(out.bottom, r.bottom);
+        }
+    }
+    return any;
+}
+
+// Ask DWM to give the owned caption overlay the same rounded/frameless
+// treatment as the native window.  Without this, the square top-left corner
+// of the overlay visibly cuts across the main window's rounded corner.
+static void applyOverlayDwmShape(HWND hwnd)
+{
+    HMODULE dwm = LoadLibraryW(L"dwmapi.dll");
+    if (!dwm)
+        return;
+    typedef HRESULT (WINAPI *SetAttrFn)(HWND, DWORD, LPCVOID, DWORD);
+    SetAttrFn setAttr = reinterpret_cast<SetAttrFn>(
+        GetProcAddress(dwm, "DwmSetWindowAttribute"));
+    if (setAttr) {
+        const DWORD cornerRound = 2; // DWMWCP_ROUND
+        setAttr(hwnd, 33 /* DWMWA_WINDOW_CORNER_PREFERENCE */,
+                &cornerRound, sizeof(cornerRound));
+        const COLORREF noBorder = 0xFFFFFFFE; // DWMWA_COLOR_NONE
+        setAttr(hwnd, 34 /* DWMWA_BORDER_COLOR */,
+                &noBorder, sizeof(noBorder));
+    }
+    FreeLibrary(dwm);
+}
+
+// The overlay is a separate top-level window.  Its top-left square corner
+// must be clipped to the same radius as the owner's DWM frame, otherwise it
+// paints a 90-degree shoulder over the rounded native corner.
+static void applyOverlayCornerMask(QWidget *w)
+{
+    if (!w || w->width() <= 1 || w->height() <= 1)
+        return;
+    const qreal radius = 8.0;
+    QPainterPath path;
+    path.moveTo(0.0, radius);
+    path.quadTo(0.0, 0.0, radius, 0.0);
+    path.lineTo(w->width(), 0.0);
+    path.lineTo(w->width(), w->height());
+    path.lineTo(0.0, w->height());
+    path.closeSubpath();
+    w->setMask(QRegion(path.toFillPolygon().toPolygon()));
 }
 
 class KHtmlLiteWindow : public QMainWindow
@@ -1685,6 +1959,10 @@ public:
             resize(1200, 800);
         }
         STARTUP_MARK("chrome build begin");
+        m_captionOverlaySyncTimer = new QTimer(this);
+        m_captionOverlaySyncTimer->setSingleShot(true);
+        connect(m_captionOverlaySyncTimer, &QTimer::timeout,
+                this, &KHtmlLiteWindow::syncCaptionOverlay);
         buildChrome();
         STARTUP_MARK("chrome built");
         // No status bar: its only content was the memory/CPU/GPU readout,
@@ -1732,21 +2010,9 @@ public:
         addTab(start.isEmpty() ? QUrl(QStringLiteral("https://cn.bing.com")) : start);
         STARTUP_MARK("first tab added");
         syncChrome();
-        // Restore the native Win11 caption path: the toolbar is in the client
-        // immediately below the real title bar.  Apply the caption-text colour
-        // before show() so the title never flashes; refine after the real
-        // DWM/Mica background is foreground-sampleable.
-        hideNativeCaptionText();
-        hideNativeCaptionIcon();
-        QTimer::singleShot(500, this, [this]() {
-            if (!m_captionTextHidden) hideNativeCaptionText();
-            refineNativeCaptionText();
-            hideNativeCaptionIcon();
-        });
-        QTimer::singleShot(1000, this, [this]() {
-            refineNativeCaptionText();
-            hideNativeCaptionIcon();
-        });
+        // The owned caption overlay covers the native caption title/icon area;
+        // leave the DWM caption untouched so the real caption buttons keep
+        // their native painting and hit testing.
     }
 
     // Clear the engine's page-cache mirror on demand.  Settings UIs should call
@@ -1983,9 +2249,11 @@ public:
             "QToolButton#glyphBtn:hover { background: #E5E9ED; }"
             "QToolButton#glyphBtn:pressed { background: #D9E0E6; }"
             "#address { background: #F4F5F7; border: 1px solid #D9DDE3;"
-            "  border-radius: 8px; padding: 1px 12px 1px 28px; color: #2F3237;"
-            "  font-size: 12px; margin: 0; selection-background-color: #B9D7F7; }"
-            "#address:focus { border: 1px solid #7FB3DD; background: #F4F5F7; }"
+            "  border-radius: 8px; padding: 1px 12px 1px 12px; color: #2F3237;"
+            "  font-size: 12px; font-weight: 400; margin: 0;"
+            "  selection-background-color: #B9D7F7; }"
+            "#address:focus { border: 1px solid #7FB3DD; background: #F4F5F7;"
+            "  font-weight: 500; }"
             "QPushButton#crashRetry { background: #ffffff; border: 1px solid #c5c5c5;"
             "  border-radius: 4px; padding: 5px 18px; color: #333; }"
             "QPushButton#crashRetry:hover { background: #f2f2f2; }"
@@ -1995,79 +2263,22 @@ public:
 
     void buildChrome()
     {
-        // Native Win11 caption stays outside.  Client order is mandatory:
-        // toolbar first, horizontal tab strip below, web content below that.
-        // 32 + 26 logical = 58 logical = 87 physical page origin, unchanged.
+        // The tab strip is the first client row.  The browser toolbar lives
+        // in the owned caption-band overlay above it; the native frame,
+        // caption buttons and resize borders remain native.
         QWidget *central = new QWidget(this);
         central->setObjectName(QStringLiteral("central"));
         QVBoxLayout *root = new QVBoxLayout(central);
         root->setContentsMargins(7, 0, 7, 4);
         root->setSpacing(0);
 
-        DragStrip *nav = new DragStrip(central);
-        nav->setObjectName(QStringLiteral("toolbar"));
-        nav->setFixedHeight(kToolbarHeight);
-        QHBoxLayout *tb = new QHBoxLayout(nav);
-        tb->setContentsMargins(8, 2, 8, 2);
-        tb->setSpacing(0);
-
-        // Left group is fixed to the right group's width so the address field
-        // is centered in the client, not merely in the leftover gap.
-        QWidget *leftGroup = new QWidget(nav);
-        leftGroup->setFixedWidth(82);
-        QHBoxLayout *lg = new QHBoxLayout(leftGroup);
-        lg->setContentsMargins(0, 0, 0, 0);
-        lg->setSpacing(5);
-        m_back = svgToolButton(leftGroup, QStringLiteral(":/icons/chevron-left.svg"),
-                               QStringLiteral("后退"));
-        m_fwd = svgToolButton(leftGroup, QStringLiteral(":/icons/chevron-right.svg"),
-                              QStringLiteral("前进"));
-        lg->addWidget(m_back);
-        lg->addWidget(m_fwd);
-        lg->addStretch(1);
-        tb->addWidget(leftGroup, 0, Qt::AlignVCenter);
-        tb->addStretch(1);
-
-        m_addr = new AddressEdit(nav);
-        m_addr->setObjectName(QStringLiteral("address"));
-        m_addr->setPlaceholderText(QStringLiteral("搜索或输入网站名称"));
-        m_addr->setClearButtonEnabled(false);
-        m_addr->setFixedHeight(28);
-        m_addr->addAction(svgToolbarIcon(QStringLiteral(":/icons/search.svg")),
-                          QLineEdit::LeadingPosition);
-        tb->addWidget(m_addr, 0, Qt::AlignVCenter);
-        tb->addStretch(1);
-
-        QWidget *rightGroup = new QWidget(nav);
-        rightGroup->setFixedWidth(82);
-        QHBoxLayout *rg = new QHBoxLayout(rightGroup);
-        rg->setContentsMargins(0, 0, 0, 0);
-        rg->setSpacing(5);
-        m_reloadBtn = svgToolButton(rightGroup, QStringLiteral(":/icons/refresh-cw.svg"),
-                                    QStringLiteral("重新加载"));
-        m_shareBtn = svgToolButton(rightGroup, QStringLiteral(":/icons/share.svg"),
-                                   QStringLiteral("复制链接"));
-        m_newTabBtn = new QToolButton(rightGroup);
-        m_newTabBtn->setObjectName(QStringLiteral("glyphBtn"));
-        m_newTabBtn->setIcon(svgToolbarIcon(QStringLiteral(":/icons/plus.svg")));
-        m_newTabBtn->setIconSize(QSize(16, 16));
-        m_newTabBtn->setFixedSize(24, 24);
-        m_newTabBtn->setAutoRaise(true);
-        m_newTabBtn->setCursor(Qt::ArrowCursor);
-        m_newTabBtn->setToolTip(QStringLiteral("新标签页"));
-        rg->addWidget(m_reloadBtn);
-        rg->addWidget(m_shareBtn);
-        rg->addWidget(m_newTabBtn);
-        tb->addWidget(rightGroup, 0, Qt::AlignVCenter);
-        root->addWidget(nav);
-
         DragStrip *strip = new DragStrip(central);
         strip->setObjectName(QStringLiteral("tabStrip"));
         strip->setFixedHeight(kTabStripHeight);
         m_tabStrip = strip;
         QHBoxLayout *ts = new QHBoxLayout(strip);
-        ts->setContentsMargins(10, 2, 10, 2);
-        ts->setSpacing(6);
+        ts->setContentsMargins(0, 0, 0, 0);
+        ts->setSpacing(0);
 
         SafariTabBar *bar = new SafariTabBar(strip);
         bar->setObjectName(QStringLiteral("safariTabs"));
@@ -2082,7 +2293,66 @@ public:
         root->addWidget(m_stack, 1);
 
         setCentralWidget(central);
+
+        // Owned top-level overlay: covers the left/centre of the native
+        // caption only, leaving the DWM minimize/maximize/close controls and
+        // every resize border uncovered.
+        m_captionOverlay = new CaptionToolbarOverlay(this);
+        m_captionOverlay->setObjectName(QStringLiteral("toolbar"));
+        QHBoxLayout *tb = new QHBoxLayout(m_captionOverlay);
+        tb->setContentsMargins(8, 1, 8, 1);
+        tb->setSpacing(0);
+
+        QWidget *controls = new QWidget(m_captionOverlay);
+        controls->setFixedWidth(140);
+        QHBoxLayout *cg = new QHBoxLayout(controls);
+        cg->setContentsMargins(0, 0, 0, 0);
+        cg->setSpacing(5);
+        m_back = svgToolButton(controls, QStringLiteral(":/icons/chevron-left.svg"),
+                               QStringLiteral("后退"));
+        m_fwd = svgToolButton(controls, QStringLiteral(":/icons/chevron-right.svg"),
+                              QStringLiteral("前进"));
+        m_reloadBtn = svgToolButton(controls, QStringLiteral(":/icons/refresh-cw.svg"),
+                                    QStringLiteral("重新加载"));
+        m_shareBtn = svgToolButton(controls, QStringLiteral(":/icons/share.svg"),
+                                   QStringLiteral("复制链接"));
+        m_newTabBtn = new QToolButton(controls);
+        m_newTabBtn->setObjectName(QStringLiteral("glyphBtn"));
+        m_newTabBtn->setIcon(svgToolbarIcon(QStringLiteral(":/icons/plus.svg")));
+        m_newTabBtn->setIconSize(QSize(16, 16));
+        m_newTabBtn->setFixedSize(24, 24);
+        m_newTabBtn->setAutoRaise(true);
+        m_newTabBtn->setCursor(Qt::ArrowCursor);
+        m_newTabBtn->setToolTip(QStringLiteral("新标签页"));
+        cg->addWidget(m_back);
+        cg->addWidget(m_fwd);
+        cg->addWidget(m_reloadBtn);
+        cg->addWidget(m_shareBtn);
+        cg->addWidget(m_newTabBtn);
+        tb->addWidget(controls, 0, Qt::AlignVCenter);
+
+        tb->addStretch(1);
+        m_addr = new AddressEdit(m_captionOverlay);
+        m_addr->setObjectName(QStringLiteral("address"));
+        m_addr->setPlaceholderText(QStringLiteral("搜索或输入网站名称"));
+        m_addr->setClearButtonEnabled(false);
+        m_addr->setFixedHeight(26);
+        m_addr->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+        m_addr->setMinimumWidth(120);
+        m_addr->setMaximumWidth(900);
+        m_searchAction = m_addr->addAction(
+            svgToolbarIcon(QStringLiteral(":/icons/search.svg")),
+            QLineEdit::LeadingPosition);
+        m_searchAction->setVisible(false);
+        m_addr->onFocusChanged = [this](bool focused) {
+            if (m_searchAction)
+                m_searchAction->setVisible(focused);
+        };
+        tb->addWidget(m_addr, 20, Qt::AlignVCenter);
+        tb->addStretch(1);
+
         setStyleSheet(safariStyleSheet());
+        m_captionOverlay->setStyleSheet(safariStyleSheet());
         updateAddressMetrics();
 
         connect(m_shareBtn, &QPushButton::clicked, this, [this] {
@@ -2527,10 +2797,113 @@ public:
         pg->render->resize(s.width(), s.height());
     }
 
+    // Position the owned toolbar inside the native caption band.  DWM reports
+    // the physical caption-button group; the overlay stops before it so the
+    // real buttons and the resize borders remain native hit-test territory.
+    void syncCaptionOverlay()
+    {
+        if (!m_captionOverlay)
+            return;
+        HWND hwnd = reinterpret_cast<HWND>(winId());
+        if (!hwnd || !isVisible() || isMinimized() || IsIconic(hwnd)
+                || isFullScreen()) {
+            if (m_captionOverlay->isVisible())
+                m_captionOverlay->hide();
+            return;
+        }
+
+        RECT wr{};
+        if (!GetWindowRect(hwnd, &wr))
+            return;
+        POINT client{0, 0};
+        if (!ClientToScreen(hwnd, &client))
+            return;
+
+        RECT buttons{};
+        const bool hasButtons = captionButtonBounds(hwnd, buttons);
+        const qreal dpr = devicePixelRatioF();
+        const int gap = qMax(1, qRound(dpr));
+        const int left = client.x;
+        // Leave the visible top resize border to the native frame.
+        const int top = wr.top + 1;
+        const int right = hasButtons ? buttons.left - gap
+                                     : wr.right - qRound(3 * 46 * dpr);
+        const int bottom = client.y;
+        if (right - left < 160 || bottom - top < 20) {
+            m_captionOverlay->hide();
+            return;
+        }
+
+        HWND ov = reinterpret_cast<HWND>(m_captionOverlay->winId());
+        if (!ov)
+            return;
+
+        // Owned tool window: no taskbar/Alt+Tab entry, no topmost z-order.
+        LONG_PTR ex = GetWindowLongPtrW(ov, GWL_EXSTYLE);
+        LONG_PTR wanted = (ex | WS_EX_TOOLWINDOW) & ~WS_EX_APPWINDOW;
+        if (wanted != ex)
+            SetWindowLongPtrW(ov, GWL_EXSTYLE, wanted);
+        if (GetWindow(ov, GW_OWNER) != hwnd)
+            SetWindowLongPtrW(ov, GWLP_HWNDPARENT,
+                              reinterpret_cast<LONG_PTR>(hwnd));
+
+        const bool wasVisible = m_captionOverlay->isVisible();
+        if (!wasVisible) {
+            m_captionOverlay->show();
+            ShowWindow(ov, SW_SHOWNOACTIVATE);
+            // A newly shown owned window can become the foreground window
+            // even with WA_ShowWithoutActivating; keep the real native
+            // caption active on the owner so its buttons are painted normally.
+            if (GetForegroundWindow() == ov) {
+                SetForegroundWindow(hwnd);
+                SendMessageW(hwnd, WM_NCACTIVATE, TRUE, 0);
+            }
+        }
+        // Use Qt logical coordinates for the top-level geometry.  Mixing raw
+        // physical SetWindowPos with Qt's logical layout leaves painted
+        // controls and hit-testing on different scales at non-100% DPI.
+        const QPoint clientLogical = mapToGlobal(QPoint(0, 0));
+        const QRect logicalGeom(
+            clientLogical + QPoint(qRound((left - client.x) / dpr),
+                                   qRound((top - client.y) / dpr)),
+            QSize(qMax(1, qRound((right - left) / dpr)),
+                  qMax(1, qRound((bottom - top) / dpr))));
+        m_captionOverlay->setGeometry(logicalGeom);
+        applyOverlayCornerMask(m_captionOverlay);
+
+        ex = GetWindowLongPtrW(ov, GWL_EXSTYLE);
+        wanted = (ex | WS_EX_TOOLWINDOW) & ~WS_EX_APPWINDOW;
+        if (wanted != ex)
+            SetWindowLongPtrW(ov, GWL_EXSTYLE, wanted);
+        applyOverlayDwmShape(ov);
+
+        // Keep the owned toolbar above its owner.  A topmost owner (or a
+        // normal activation) can otherwise raise the native caption over the
+        // overlay and make the toolbar appear to disappear.
+        const bool ownerTopmost =
+            (GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0;
+        if (ownerTopmost) {
+            SetWindowPos(ov, HWND_TOPMOST, 0, 0, 0, 0,
+                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE
+                             | SWP_NOOWNERZORDER);
+        } else if (GetForegroundWindow() == hwnd) {
+            SetWindowPos(ov, HWND_TOP, 0, 0, 0, 0,
+                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE
+                             | SWP_NOOWNERZORDER);
+        }
+    }
+
+    void scheduleCaptionOverlaySync()
+    {
+        if (m_captionOverlaySyncTimer)
+            m_captionOverlaySyncTimer->start(0);
+    }
+
 protected:
     void resizeEvent(QResizeEvent *event) override {
         QMainWindow::resizeEvent(event);
         updateAddressMetrics();
+        scheduleCaptionOverlaySync();
         if (m_liveResize) {
             // Live-resize in progress: do not ship intermediate pixel sizes to
             // the renderer. PageSurface scales its last frame for visual
@@ -2545,12 +2918,41 @@ protected:
 
     void moveEvent(QMoveEvent *event) override {
         QMainWindow::moveEvent(event);
+        scheduleCaptionOverlaySync();
         // Software-frame architecture: the browser owns the only visible
         // surface.  No renderer window to reposition, so dragging is purely
         // a local window move — the renderer process is never touched.
     }
 
+    void showEvent(QShowEvent *event) override {
+        QMainWindow::showEvent(event);
+        if (QWindow *wh = windowHandle()) {
+            if (!m_captionScreenHooked) {
+                connect(wh, &QWindow::screenChanged, this,
+                        [this](QScreen *) { scheduleCaptionOverlaySync(); });
+                m_captionScreenHooked = true;
+            }
+        }
+        scheduleCaptionOverlaySync();
+    }
+
+    void hideEvent(QHideEvent *event) override {
+        if (m_captionOverlay)
+            m_captionOverlay->hide();
+        QMainWindow::hideEvent(event);
+    }
+
+    void changeEvent(QEvent *event) override {
+        QMainWindow::changeEvent(event);
+        if (event->type() == QEvent::WindowStateChange
+                || event->type() == QEvent::ScreenChangeInternal
+                || event->type() == QEvent::ActivationChange)
+            scheduleCaptionOverlaySync();
+    }
+
     void closeEvent(QCloseEvent *event) override {
+        if (m_captionOverlay)
+            m_captionOverlay->close();
         // Non-blocking shutdown: kill every renderer and close immediately.
         // Renderer processes are terminated asynchronously; the OS reclaims
         // any that are still alive when this process exits. A busy-wait loop
@@ -2577,6 +2979,14 @@ protected:
                 break;
             case WM_EXITSIZEMOVE:
                 endLiveResize();
+                break;
+            case WM_WINDOWPOSCHANGED:
+            case WM_SIZE:
+            case WM_MOVE:
+            case WM_DPICHANGED:
+            case WM_DISPLAYCHANGE:
+            case WM_SETTINGCHANGE:
+                scheduleCaptionOverlaySync();
                 break;
             default:
                 break;
@@ -2653,10 +3063,48 @@ protected:
 
     void updateAddressMetrics() {
         if (!m_addr) return;
-        // Mandated responsive range: 45-55% of available client width.  50%
-        // gives a stable centered field at every window size.
-        const int target = qRound(width() * 0.50);
-        m_addr->setFixedWidth(qBound(320, target, 1000));
+        // The five command buttons consume 140 logical px.  The field uses a
+        // 58:21:21 stretch ratio inside the remaining toolbar space, with a
+        // practical minimum that does not become the window's minimum width.
+        const int remaining = qMax(200, width() - 30 - 140);
+        m_addr->setMinimumWidth(qMin(120, remaining));
+        m_addr->setMaximumWidth(900);
+    }
+
+    void startReloadSpin()
+    {
+        if (!m_reloadSpinTimer) {
+            m_reloadSpinTimer = new QTimer(this);
+            m_reloadSpinTimer->setInterval(33);
+            connect(m_reloadSpinTimer, &QTimer::timeout,
+                    this, &KHtmlLiteWindow::tickReloadSpin);
+        }
+        if (!m_reloadSpinTimer->isActive())
+            m_reloadSpinTimer->start();
+    }
+
+    void stopReloadSpin()
+    {
+        if (m_reloadSpinTimer)
+            m_reloadSpinTimer->stop();
+        m_reloadSpinAngle = 0;
+    }
+
+    void tickReloadSpin()
+    {
+        if (!m_reloadBtn)
+            return;
+        m_reloadSpinAngle = (m_reloadSpinAngle + 12) % 360;
+        const QPixmap base = tintedSvgPixmap(
+            QStringLiteral(":/icons/refresh-cw.svg"),
+            QColor(0x85, 0x8B, 0x93));
+        if (base.isNull())
+            return;
+        QTransform transform;
+        transform.rotate(m_reloadSpinAngle);
+        const QPixmap rotated = base.transformed(transform,
+                                                 Qt::SmoothTransformation);
+        m_reloadBtn->setIcon(QIcon(rotated));
     }
 
     void updateLoadIndicator() {
@@ -2666,11 +3114,15 @@ protected:
             loading ? m_addr->setLoadProgress(pg->loadProgress)
                     : m_addr->clearLoadProgress();
         if (m_reloadBtn) {
-            m_reloadBtn->setIcon(svgToolbarIcon(loading
-                    ? QStringLiteral(":/icons/square.svg")
-                    : QStringLiteral(":/icons/refresh-cw.svg")));
             m_reloadBtn->setToolTip(loading ? QStringLiteral("停止加载")
                                             : QStringLiteral("重新加载"));
+            if (loading) {
+                startReloadSpin();
+            } else {
+                stopReloadSpin();
+                m_reloadBtn->setIcon(svgToolbarIcon(
+                    QStringLiteral(":/icons/refresh-cw.svg")));
+            }
         }
     }
 
@@ -3112,6 +3564,9 @@ protected:
 
     QTimer *m_memTimer = nullptr;
     QTimer *m_resizeTimer = nullptr;
+    QTimer *m_captionOverlaySyncTimer = nullptr;
+    CaptionToolbarOverlay *m_captionOverlay = nullptr;
+    bool m_captionScreenHooked = false;
     bool m_liveResize = false;
     bool m_purgingCache = false;
     // Load-adaptive tombstone state: kernel low-memory event handle (see
@@ -3139,9 +3594,127 @@ protected:
     HICON m_transparentCaptionIcon = nullptr;
     QList<TabPage *> m_pages;
     AddressEdit *m_addr = nullptr;
+    QAction *m_searchAction = nullptr;
+    QTimer *m_reloadSpinTimer = nullptr;
+    int m_reloadSpinAngle = 0;
     QPushButton *m_reloadBtn = nullptr;
     QPushButton *m_back = nullptr, *m_fwd = nullptr;
 };
+
+static void installUiFonts()
+{
+    struct Face {
+        const char *path;
+        int id = -1;
+        QStringList families;
+    };
+    Face googleRegular{":/fonts/GoogleSansFlex-Regular.ttf"};
+    Face googleMedium{":/fonts/GoogleSansFlex-Medium.ttf"};
+    Face notoRegular{":/fonts/NotoSansSC-Regular.ttf"};
+    Face notoMedium{":/fonts/NotoSansSC-Medium.ttf"};
+    for (Face *f : {&googleRegular, &googleMedium, &notoRegular, &notoMedium}) {
+        f->id = QFontDatabase::addApplicationFont(QString::fromLatin1(f->path));
+        if (f->id >= 0)
+            f->families = QFontDatabase::applicationFontFamilies(f->id);
+    }
+
+    if (googleRegular.families.isEmpty() || notoRegular.families.isEmpty()) {
+        fprintf(stderr, "[font] ERROR: required UI fonts failed to load "
+                        "(google=%d noto=%d)\n",
+                googleRegular.id, notoRegular.id);
+        return;
+    }
+
+    const QString googleFamily = googleRegular.families.first();
+    const QString notoFamily = notoRegular.families.first();
+    QFont appFont;
+    appFont.setFamilies({googleFamily, notoFamily});
+    // Small browser chrome; the static Google Sans Flex instances were cut at
+    // opsz=14 so toolbar/address/tab glyphs use an appropriate optical size.
+    appFont.setPixelSize(12);
+    appFont.setWeight(QFont::Normal);
+    appFont.setStyleStrategy(QFont::PreferAntialias);
+    QApplication::setFont(appFont);
+
+    const QFontInfo info(appFont);
+    QFont googleOnly(googleFamily);
+    QFont notoOnly(notoFamily);
+    QFont mediumFont = appFont;
+    mediumFont.setWeight(QFont::Medium);
+    const QFontInfo mediumInfo(mediumFont);
+    const QRawFont rawRegular = QRawFont::fromFont(appFont);
+    const QRawFont rawMedium = QRawFont::fromFont(mediumFont);
+    const QRawFont rawGoogle = QRawFont::fromFont(googleOnly);
+    const QRawFont rawNoto = QRawFont::fromFont(notoOnly);
+    QFontDatabase fontDb;
+    const QStringList googleStyles = fontDb.styles(googleFamily);
+    QStringList fallbackFamilies;
+    QTextLayout layout(QStringLiteral("中文"), appFont);
+    layout.beginLayout();
+    QTextLine line = layout.createLine();
+    if (line.isValid()) {
+        line.setLineWidth(10000);
+        const QList<QGlyphRun> runs = line.glyphRuns();
+        for (const QGlyphRun &run : runs) {
+            const QString family = run.rawFont().familyName();
+            if (!family.isEmpty() && !fallbackFamilies.contains(family))
+                fallbackFamilies.append(family);
+        }
+    }
+    layout.endLayout();
+    QStringList mediumFallbackFamilies;
+    QTextLayout mediumLayout(QStringLiteral("中文"), mediumFont);
+    mediumLayout.beginLayout();
+    QTextLine mediumLine = mediumLayout.createLine();
+    if (mediumLine.isValid()) {
+        mediumLine.setLineWidth(10000);
+        const QList<QGlyphRun> runs = mediumLine.glyphRuns();
+        for (const QGlyphRun &run : runs) {
+            const QString family = run.rawFont().familyName();
+            if (!family.isEmpty() && !mediumFallbackFamilies.contains(family))
+                mediumFallbackFamilies.append(family);
+        }
+    }
+    mediumLayout.endLayout();
+
+    fprintf(stderr,
+            "[font] primary=%s requested=%s weight=%d pixelSize=%d "
+            "medium=%s/%s/%d chineseFallback=%s requestedFallback=%s "
+            "googleChineseGlyph=%d notoChineseGlyph=%d opticalSize=14 "
+            "weights=400/500\n",
+            info.family().toUtf8().constData(),
+            googleFamily.toUtf8().constData(), info.weight(),
+            info.pixelSize(),
+            mediumInfo.family().toUtf8().constData(),
+            mediumInfo.styleName().toUtf8().constData(),
+            mediumInfo.weight(),
+            fallbackFamilies.isEmpty() ? "(none)"
+                                       : fallbackFamilies.join(QStringLiteral(",")).toUtf8().constData(),
+            notoFamily.toUtf8().constData(),
+            rawGoogle.supportsCharacter(QChar(0x4E2D)) ? 1 : 0,
+            rawNoto.supportsCharacter(QChar(0x4E2D)) ? 1 : 0);
+    fprintf(stderr,
+            "[font] faces regular=%s/%s/%d medium=%s/%s/%d "
+            "googleStyles=%s mediumChineseFallback=%s "
+            "licenses=:/fonts/OFL-GoogleSansFlex.txt,"
+            ":/fonts/OFL-NotoSansSC.txt\n",
+            rawRegular.familyName().toUtf8().constData(),
+            rawRegular.styleName().toUtf8().constData(),
+            rawRegular.weight(),
+            rawMedium.familyName().toUtf8().constData(),
+            rawMedium.styleName().toUtf8().constData(),
+            rawMedium.weight(),
+            googleStyles.join(QStringLiteral(",")).toUtf8().constData(),
+            mediumFallbackFamilies.isEmpty()
+                ? "(none)"
+                : mediumFallbackFamilies.join(QStringLiteral(",")).toUtf8().constData());
+    if (!fallbackFamilies.contains(notoFamily)) {
+        fprintf(stderr, "[font] WARNING: Chinese fallback resolved as %s, "
+                        "not %s\n",
+                fallbackFamilies.join(QStringLiteral(",")).toUtf8().constData(),
+                notoFamily.toUtf8().constData());
+    }
+}
 
 int main(int argc, char **argv)
 {
@@ -3169,6 +3742,7 @@ int main(int argc, char **argv)
     app.setApplicationName(QStringLiteral("KHtmlLite"));
     app.setOrganizationName(QStringLiteral("KHtmlLite"));
     STARTUP_MARK("QApplication ready");
+    installUiFonts();
     const QString caPath = QCoreApplication::applicationDirPath()
                            + QStringLiteral("/ssl-ca-bundle.crt");
     if (QFile::exists(caPath))
